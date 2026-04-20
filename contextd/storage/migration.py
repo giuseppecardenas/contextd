@@ -15,6 +15,20 @@ from typing import Any
 
 @dataclass
 class Migration:
+    """One forward-only schema change.
+
+    ``up(store, migration_id)`` must be **idempotent**: if it partially
+    succeeds and then fails (e.g., table 2 of 3 raises), the runner halts
+    without recording the migration as applied, and the next ``apply()``
+    call will re-run ``up`` from the top. Every statement inside ``up``
+    must therefore be safe to re-execute — use ``CREATE TABLE IF NOT
+    EXISTS``, ``CREATE INDEX IF NOT EXISTS``, and treat ``ALTER TABLE
+    ... ADD COLUMN`` with care (neither Memgraph nor Kuzu support
+    ``IF NOT EXISTS`` on ADD COLUMN, so a partial failure there blocks
+    retries; prefer a CREATE-then-REPLACE pattern or split into multiple
+    migrations).
+    """
+
     id: int
     name: str
     up: Callable[[Any, int], None]

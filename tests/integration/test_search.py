@@ -60,6 +60,11 @@ def _rebuild_fts_index_if_needed(backend: GraphStore) -> None:
 
     This helper drops and recreates the Kuzu FTS index post-seeding. It is
     a no-op on Memgraph.
+
+    Single-seed assumption: call this exactly once, after the final seed
+    insert. A test that re-seeds later must call it again (otherwise only
+    the pre-rebuild rows are visible to Kuzu FTS — Memgraph would still
+    surface the late rows, silently diverging behaviour across backends).
     """
     if backend.capabilities.name != "kuzu":
         return
