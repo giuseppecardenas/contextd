@@ -12,6 +12,7 @@ import re
 from dataclasses import dataclass
 
 from markdown_it import MarkdownIt
+from markdown_it.token import Token
 
 
 @dataclass
@@ -27,16 +28,45 @@ class ParsedSection:
 _NON_ALNUM = re.compile(r"[^\w\s-]")
 _WHITESPACE = re.compile(r"\s+")
 
+# Token types whose .content contributes display text.
+_TEXT_TOKEN_TYPES = {"text", "code_inline"}
+
+
+def _extract_title(inline: Token) -> str:
+    """Return rendered display text from an inline heading token.
+
+    Walks inline.children and collects .content from token types that
+    carry display text (``text``, ``code_inline``).  Wrapping tokens
+    like ``link_open``/``link_close``, ``em_open``, ``strong_open``,
+    etc., are skipped — their enclosed ``text`` children are captured
+    naturally by the walk.  Falls back to ``inline.content`` (the raw
+    Markdown source) only when ``children`` is None or empty.
+    """
+    children = inline.children
+    if children:
+        parts = [tok.content for tok in children if tok.type in _TEXT_TOKEN_TYPES]
+        if parts:
+            return "".join(parts).strip()
+    # Fallback: no children or none contributed text — use raw content.
+    return inline.content.strip()
+
 
 def _github_anchor(title: str) -> str:
     lowered = title.lower()
     stripped = _NON_ALNUM.sub("", lowered)
     dashed = _WHITESPACE.sub("-", stripped).strip("-")
-    return dashed
+    # Defect fix: punctuation-only headings produce an empty anchor;
+    # fall back to "section" so PKs remain non-empty.  Anchor dedup
+    # in parse() handles the resulting collision.
+    return dashed if dashed else "section"
 
 
 class HeadingParser:
     def __init__(self, min_level: int, max_level: int) -> None:
+        if not (1 <= min_level <= max_level <= 6):
+            raise ValueError(
+                "min_level and max_level must satisfy 1 <= min_level <= max_level <= 6"
+            )
         self._min = min_level
         self._max = max_level
         self._md = MarkdownIt()
@@ -54,7 +84,7 @@ class HeadingParser:
                 level = int(tok.tag[1])
                 if self._min <= level <= self._max:
                     inline = tokens[i + 1]
-                    title = inline.content.strip()
+                    title = _extract_title(inline)
                     assert tok.map is not None
                     heads.append((level, title, tok.map[0]))
                 i += 3  # heading_open, inline, heading_close
@@ -64,6 +94,9 @@ class HeadingParser:
         sections: list[ParsedSection] = []
         stack: list[ParsedSection] = []  # ancestors
         sibling_ordinals: dict[str | None, int] = {}
+
+        # Track seen anchors for GitHub-style dedup (foo, foo-1, foo-2 …).
+        seen_anchors: dict[str, int] = {}
 
         for idx, (level, title, line) in enumerate(heads):
             # Trim stack to ancestors of strictly shallower level.
@@ -81,7 +114,17 @@ class HeadingParser:
                     next_line_bound = heads[k][2]
                     break
             body = "".join(lines[line:next_line_bound])
-            anchor = _github_anchor(title)
+
+            # Compute unique anchor — deduplicate GitHub-style.
+            raw_anchor = _github_anchor(title)
+            if raw_anchor not in seen_anchors:
+                anchor = raw_anchor
+                seen_anchors[raw_anchor] = 1
+            else:
+                count = seen_anchors[raw_anchor]
+                anchor = f"{raw_anchor}-{count}"
+                seen_anchors[raw_anchor] = count + 1
+
             section = ParsedSection(
                 title=title,
                 level=level,
