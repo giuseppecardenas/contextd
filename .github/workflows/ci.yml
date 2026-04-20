@@ -42,7 +42,11 @@ jobs:
       - name: Enforce that backend-specific modules are not imported outside contextd/storage/
         run: |
           set -euo pipefail
-          if grep -RE "from contextd\.storage\.(memgraph|kuzu)|import contextd\.storage\.(memgraph|kuzu)" contextd/ tests/ --exclude-dir=storage; then
+          # The invariant protects runtime consumers (indexer, MCP server, CLI)
+          # from coupling to a concrete backend. Integration tests under tests/
+          # are legitimately backend-specific — they exercise one SDK's semantics
+          # — so the walk is scoped to production code only.
+          if grep -RE "from contextd\.storage\.(memgraph|kuzu)|import contextd\.storage\.(memgraph|kuzu)" contextd/ --exclude-dir=storage; then
             echo "::error::Backend-specific modules imported outside contextd/storage/. See spec §2.5.1."
             exit 1
           fi

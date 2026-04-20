@@ -21,6 +21,8 @@ The project is mid-build against a detailed milestone plan. The plan drives buil
 
 **Test suite:** 41 unit + 10 integration = 51/51 green. `ruff check`, `ruff format --check`, `mypy --strict` all clean. Integration suite runs Memgraph via Docker (memgraph:latest v3.x) + Kuzu embedded in `tmp_path`.
 
+**Local CI discipline:** the four local gates (ruff check / ruff format --check / mypy --strict / pytest) do not cover every GitHub Actions job. Before pushing, also run the abstraction-invariant grep locally — the exact command is in `.github/workflows/ci.yml` under the `abstraction-invariant` job. A prior-session M3 push went out with the abstraction-invariant job red for 3 commits because the local check was skipped.
+
 **Memgraph / Docker:** Docker Desktop WSL2 integration is now enabled. Use `memgraph:latest` (v3.9), NOT `memgraph-platform:latest` (pinned at v2.14 — predates vector-index support).
 
 ## Session-Start Required Reads
