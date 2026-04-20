@@ -130,11 +130,17 @@ class MemgraphBackend(GraphStore):
         k: int,
         threshold: float | None = None,
     ) -> list[dict[str, Any]]:
-        filter_clause = f"WHERE score >= {threshold}" if threshold is not None else ""
+        # Memgraph requires the filter to follow a WITH re-projection rather
+        # than dangling after YIELD — a bare `YIELD ... WHERE` parses as
+        # `YIELD` in the preceding CALL and tokenizes WHERE as the start of
+        # the next clause (which must be WITH/MATCH/...).
+        filter_clause = (
+            f"WITH node, score WHERE score >= {threshold} " if threshold is not None else ""
+        )
         cypher = (
             f"CALL vector_search.search('{label}_{property_name}_idx', $k, $q) "
             "YIELD node, similarity AS score "
-            f"{filter_clause} "
+            f"{filter_clause}"
             "RETURN node, score "
             "ORDER BY score DESC"
         )
@@ -147,11 +153,17 @@ class MemgraphBackend(GraphStore):
         query: str,
         k: int,
     ) -> list[dict[str, Any]]:
+        # Memgraph exposes two search procedures: `text_search.search` takes a
+        # Lucene expression (e.g. `data.summary:migration`) and `search_all`
+        # scans every indexed property. search_all is the right fit here — the
+        # caller provides a plain keyword and expects a BM25-style match across
+        # the configured index.
+        # The procedure yields `node` only (no score); callers ordering by
+        # relevance should use the Lucene-prefixed `search` form directly.
         cypher = (
-            f"CALL text_search.search('{label}_{property_name}_ft', $q) "
-            "YIELD node, score "
-            "RETURN node, score "
-            "ORDER BY score DESC "
+            f"CALL text_search.search_all('{label}_{property_name}_ft', $q) "
+            "YIELD node "
+            "RETURN node "
             f"LIMIT {k}"
         )
         return self.exec_read(cypher, {"q": query})

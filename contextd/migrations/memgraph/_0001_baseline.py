@@ -39,9 +39,11 @@ _DDL = [
     ON :Section(embedding)
     WITH CONFIG { "dimension": 1024, "metric": "cos", "capacity": 1000000 }
     """,
-    # Full-text index.
-    "CREATE INDEX ON :File(summary)",
-    "CREATE INDEX ON :Artifact(description)",
+    # Full-text (Lucene-backed) indexes. `CREATE INDEX` would only create a
+    # B-tree label-property index, which does not register with the
+    # text_search procedure namespace; a TEXT INDEX is required.
+    "CREATE TEXT INDEX File_summary_ft ON :File",
+    "CREATE TEXT INDEX Artifact_description_ft ON :Artifact",
 ]
 
 

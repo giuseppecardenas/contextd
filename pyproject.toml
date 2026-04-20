@@ -86,7 +86,13 @@ disallow_any_unimported = false
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-filterwarnings = ["error"]
+filterwarnings = [
+    "error",
+    # gqlalchemy raises this whenever it materialises a node whose label is
+    # not mapped to a Python ORM class. We intentionally don't map — the
+    # GraphStore layer returns plain dicts — so this warning is structural.
+    "ignore::gqlalchemy.exceptions.GQLAlchemySubclassNotFoundWarning",
+]
 markers = [
     "integration: tests that require Docker (Memgraph) or other external services",
 ]

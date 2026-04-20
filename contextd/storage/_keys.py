@@ -37,3 +37,19 @@ def primary_key_for(label: str) -> str:
         return PRIMARY_KEY_BY_LABEL[label]
     except KeyError as exc:
         raise ValueError(f"Unknown node label {label!r}; add it to PRIMARY_KEY_BY_LABEL") from exc
+
+
+# Properties that Kuzu rejects via `SET n.<prop> = ...` because a vector index
+# backs the column (the error says "Cannot set property vec in table
+# embeddings..."). These columns can only be assigned at node CREATE time —
+# updating them requires DETACH DELETE + CREATE. Memgraph has no equivalent
+# restriction; these are informational elsewhere.
+IMMUTABLE_AFTER_CREATE_BY_LABEL: Final[dict[str, frozenset[str]]] = {
+    "File": frozenset({"embedding"}),
+    "Section": frozenset({"embedding"}),
+}
+
+
+def immutable_after_create_for(label: str) -> frozenset[str]:
+    """Return the set of properties that cannot be updated via SET for ``label``."""
+    return IMMUTABLE_AFTER_CREATE_BY_LABEL.get(label, frozenset())

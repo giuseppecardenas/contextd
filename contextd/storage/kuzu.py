@@ -14,7 +14,11 @@ from typing import Any
 import kuzu
 
 from contextd.config import KuzuConfig
-from contextd.storage._keys import PRIMARY_KEY_BY_LABEL, primary_key_for
+from contextd.storage._keys import (
+    PRIMARY_KEY_BY_LABEL,
+    immutable_after_create_for,
+    primary_key_for,
+)
 from contextd.storage.base import BackendCapabilities, GraphStore, Origin
 from contextd.storage.migration import Migration, MigrationRunner
 
@@ -76,17 +80,21 @@ class KuzuBackend(GraphStore):
         MigrationRunner(self, typed).apply()
 
     def upsert_node(self, label: str, properties: dict[str, Any]) -> str:
-        # Match on PK only, then SET the remaining properties. Matching on every
-        # property would mean re-upserting with a changed non-PK value (e.g., a
-        # new file hash) creates a second node and trips Kuzu's PK uniqueness
-        # constraint — which is exactly what the indexer's re-index path does.
-        # Kuzu does not support `SET n += $props` (Cypher map-merge); enumerate
-        # individual assignments for every non-PK property instead.
+        # Two-phase upsert. Kuzu has two constraints the ABC contract must
+        # reconcile:
         #
-        # The key must match the table's declared PK (e.g. Section's PK is `id`,
-        # not `path`), so look up by label — inferring from the property dict
-        # via first-hit-in-[path,id,name] picks the wrong one when a Section
-        # carries both `path` and `id`.
+        # 1. MERGE with all properties in the match pattern fails on re-upsert
+        #    with a changed non-PK value (trips the PK uniqueness constraint).
+        # 2. Vector-indexed columns (e.g. File.embedding) cannot be assigned
+        #    via SET after node creation — the error is "Cannot set property
+        #    vec in table embeddings..." and applies even inside MERGE...
+        #    ON CREATE SET. They can only be set at CREATE time.
+        #
+        # Resolution: if the node doesn't yet exist, CREATE with all props
+        # inline; if it does, SET only the mutable (non-PK, non-vector)
+        # properties. The immutable set is label-specific (see _keys.py).
+        # Kuzu does not support `SET n += $props`; individual assignments are
+        # required.
         assert self._conn is not None
         key = primary_key_for(label)
         if key not in properties:
@@ -94,14 +102,23 @@ class KuzuBackend(GraphStore):
                 f"upsert_node({label!r}, ...) missing required primary key "
                 f"{key!r}; properties were {sorted(properties)}"
             )
-        non_pk = {k: v for k, v in properties.items() if k != key}
-        set_clause = ""
-        if non_pk:
-            assignments = ", ".join(f"n.{k} = ${k}" for k in non_pk)
-            set_clause = f" SET {assignments}"
-        cypher = f"MERGE (n:{label} {{{key}: ${key}}}){set_clause}"
-        self._conn.execute(cypher, properties)
-        return str(properties[key])
+        pk_value = properties[key]
+        existing = self.exec_read(
+            f"MATCH (n:{label} {{{key}: ${key}}}) RETURN n.{key} AS pk LIMIT 1",
+            {key: pk_value},
+        )
+        if not existing:
+            prop_list = ", ".join(f"{k}: ${k}" for k in properties)
+            self._conn.execute(f"CREATE (n:{label} {{{prop_list}}})", properties)
+            return str(pk_value)
+
+        immutable = immutable_after_create_for(label)
+        mutable = {k: v for k, v in properties.items() if k != key and k not in immutable}
+        if mutable:
+            assignments = ", ".join(f"n.{k} = ${k}" for k in mutable)
+            params = {key: pk_value, **mutable}
+            self._conn.execute(f"MATCH (n:{label} {{{key}: ${key}}}) SET {assignments}", params)
+        return str(pk_value)
 
     def upsert_edge(
         self,
@@ -194,12 +211,16 @@ class KuzuBackend(GraphStore):
         k: int,
         threshold: float | None = None,
     ) -> list[dict[str, Any]]:
+        # Kuzu's QUERY_VECTOR_INDEX takes (table, index, query, k).
+        # `k` is literal because Kuzu infers Python ints as INT8 and rejects
+        # the bind against the expected INT64 parameter type.
         cypher = (
-            f"CALL QUERY_VECTOR_INDEX('{label}_{property_name}_idx', $q, $k) "
+            f"CALL QUERY_VECTOR_INDEX('{label}', '{label}_{property_name}_idx', "
+            f"$q, {int(k)}) "
             "RETURN node, distance "
             "ORDER BY distance ASC"
         )
-        rows = self.exec_read(cypher, {"k": k, "q": query})
+        rows = self.exec_read(cypher, {"q": query})
         if threshold is not None:
             rows = [r for r in rows if r["distance"] <= (1 - threshold)]
         return rows

@@ -1,6 +1,12 @@
+from pathlib import Path
+
 import pytest
 
+from contextd.config import KuzuConfig
+from contextd.migrations.kuzu import ALL_MIGRATIONS as KUZU_MIGRATIONS
+from contextd.migrations.memgraph import ALL_MIGRATIONS as MEMGRAPH_MIGRATIONS
 from contextd.storage.base import GraphStore
+from contextd.storage.kuzu import KuzuBackend
 
 pytestmark = pytest.mark.integration
 
@@ -107,6 +113,54 @@ def test_upsert_edge_persists_non_origin_properties(backend: GraphStore) -> None
     assert len(rows) == 1
     assert rows[0]["origin"] == "inferred"
     assert rows[0]["confidence"] == 0.87
+
+
+def test_migrations_are_idempotent(backend: GraphStore) -> None:
+    """Re-running apply_migrations after a successful first apply must be a
+    no-op: Meta.applied stays equal to the set of ids and no migration's
+    up() re-runs (DDL re-runs would typically error on 'already exists').
+
+    The backend fixture has already run ALL_MIGRATIONS once; this test calls
+    apply_migrations a second time with the same list.
+    """
+    migrations = MEMGRAPH_MIGRATIONS if backend.capabilities.name == "memgraph" else KUZU_MIGRATIONS
+
+    # Capture the applied set before the second apply.
+    before = backend.exec_read("MATCH (m:Meta {schema_version: 0}) RETURN m.applied AS applied")
+    applied_before = before[0]["applied"] if before else []
+
+    backend.apply_migrations(migrations)
+
+    after = backend.exec_read("MATCH (m:Meta {schema_version: 0}) RETURN m.applied AS applied")
+    applied_after = after[0]["applied"] if after else []
+
+    assert applied_before == applied_after
+    # Every declared migration must appear exactly once in the applied list.
+    expected_ids = {m.id for m in migrations}
+    assert set(applied_after) == expected_ids
+    assert len(applied_after) == len(expected_ids)
+
+
+def test_read_only_kuzu_skips_meta_bootstrap(tmp_path: Path) -> None:
+    """A read-only KuzuBackend must not try to create the Meta table. This is
+    the MCP-server connection mode: indexer holds the writer, MCP opens
+    read-only readers.
+    """
+    db_path = str(tmp_path / "graph")
+
+    # Prime the DB with a writer first so the file + schema exist.
+    writer = KuzuBackend(KuzuConfig(db_path=db_path))
+    writer.connect()
+    writer.apply_migrations(KUZU_MIGRATIONS)
+    writer.close()
+
+    reader = KuzuBackend(KuzuConfig(db_path=db_path), read_only=True)
+    reader.connect()
+    try:
+        rows = reader.exec_read("MATCH (m:Meta {schema_version: 0}) RETURN m.applied AS applied")
+        assert rows[0]["applied"] == list({m.id for m in KUZU_MIGRATIONS})
+    finally:
+        reader.close()
 
 
 def test_delete_edges_requires_filter(backend: GraphStore) -> None:
