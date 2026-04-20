@@ -67,7 +67,7 @@ class MemgraphBackend(GraphStore):
         self,
         src_id: str,
         dst_id: str,
-        label: str,
+        edge_type: str,
         origin: Origin,
         properties: dict[str, Any] | None = None,
         *,
@@ -86,7 +86,8 @@ class MemgraphBackend(GraphStore):
         where_parts = [w for w in (src_where, dst_where) if w]
         where_clause = f"WHERE {' AND '.join(where_parts)} " if where_parts else ""
         cypher = (
-            f"MATCH {src_pat}, {dst_pat} {where_clause}MERGE (a)-[r:{label}]->(b) SET r += $props"
+            f"MATCH {src_pat}, {dst_pat} {where_clause}"
+            f"MERGE (a)-[r:{edge_type}]->(b) SET r += $props"
         )
         self._client.execute(cypher, {**src_params, **dst_params, "props": props})
 
@@ -95,12 +96,12 @@ class MemgraphBackend(GraphStore):
         src_id: str,
         *,
         origin: Origin | None = None,
-        label: str | None = None,
+        edge_type: str | None = None,
         src_label: str | None = None,
     ) -> None:
-        if origin is None and label is None:
+        if origin is None and edge_type is None:
             raise ValueError(
-                "delete_edges requires at least one of origin or label — "
+                "delete_edges requires at least one of origin or edge_type — "
                 "an unfiltered delete would wipe structural and manual edges."
             )
         assert self._client is not None
@@ -112,9 +113,9 @@ class MemgraphBackend(GraphStore):
         if origin is not None:
             where_parts.append("r.origin = $origin")
             params["origin"] = origin
-        label_fragment = f":{label}" if label else ""
+        edge_fragment = f":{edge_type}" if edge_type else ""
         where_clause = f"WHERE {' AND '.join(where_parts)} " if where_parts else ""
-        cypher = f"MATCH {src_pat}-[r{label_fragment}]->() {where_clause}DELETE r"
+        cypher = f"MATCH {src_pat}-[r{edge_fragment}]->() {where_clause}DELETE r"
         self._client.execute(cypher, params)
 
     def exec_read(self, cypher: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:

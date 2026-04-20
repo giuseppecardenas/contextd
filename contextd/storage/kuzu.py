@@ -138,7 +138,7 @@ class KuzuBackend(GraphStore):
         self,
         src_id: str,
         dst_id: str,
-        label: str,
+        edge_type: str,
         origin: Origin,
         properties: dict[str, Any] | None = None,
         *,
@@ -170,7 +170,7 @@ class KuzuBackend(GraphStore):
         cypher = (
             f"MATCH (a:{src_label} {{{src_key}: $src}}), "
             f"(b:{dst_label} {{{dst_key}: $dst}}) "
-            f"MERGE (a)-[r:{label}]->(b) "
+            f"MERGE (a)-[r:{edge_type}]->(b) "
             f"SET {assignments}"
         )
         try:
@@ -179,7 +179,7 @@ class KuzuBackend(GraphStore):
             msg = str(exc)
             if "Cannot find property" in msg and "for r" in msg:
                 raise ValueError(
-                    f"KuzuBackend.upsert_edge: REL table {label!r} does not declare "
+                    f"KuzuBackend.upsert_edge: REL table {edge_type!r} does not declare "
                     f"every property in {sorted(props)}. Add the missing column via a "
                     f"migration (CREATE REL TABLE ... or ALTER TABLE). "
                     f"Kuzu message: {msg}"
@@ -191,12 +191,12 @@ class KuzuBackend(GraphStore):
         src_id: str,
         *,
         origin: Origin | None = None,
-        label: str | None = None,
+        edge_type: str | None = None,
         src_label: str | None = None,
     ) -> None:
-        if origin is None and label is None:
+        if origin is None and edge_type is None:
             raise ValueError(
-                "delete_edges requires at least one of origin or label — "
+                "delete_edges requires at least one of origin or edge_type — "
                 "an unfiltered delete would wipe structural and manual edges."
             )
         if src_label is None:
@@ -212,9 +212,9 @@ class KuzuBackend(GraphStore):
             conditions.append("r.origin = $origin")
             params["origin"] = origin
         where_clause = f"WHERE {' AND '.join(conditions)} " if conditions else ""
-        label_fragment = f":{label}" if label else ""
+        edge_fragment = f":{edge_type}" if edge_type else ""
         cypher = (
-            f"MATCH (a:{src_label} {{{key}: $src}})-[r{label_fragment}]->() {where_clause}DELETE r"
+            f"MATCH (a:{src_label} {{{key}: $src}})-[r{edge_fragment}]->() {where_clause}DELETE r"
         )
         self._conn.execute(cypher, params)
 

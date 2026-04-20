@@ -164,10 +164,11 @@ def test_read_only_kuzu_skips_meta_bootstrap(tmp_path: Path) -> None:
 
 
 def test_delete_edges_requires_filter(backend: GraphStore) -> None:
-    """delete_edges with no origin and no label must refuse — it would wipe
-    every outgoing edge including structural and manual ones, violating the
-    design invariant that wipe-and-replace operates only on origin='inferred'.
+    """delete_edges with no origin and no edge_type must refuse — it would
+    wipe every outgoing edge including structural and manual ones, violating
+    the design invariant that wipe-and-replace operates only on
+    origin='inferred'.
     """
     backend.upsert_node("File", {"path": "a.md", "hash": "h1", "corpus": "c"})
-    with pytest.raises(ValueError, match="origin or label"):
+    with pytest.raises(ValueError, match="origin or edge_type"):
         backend.delete_edges("a.md", src_label="File")

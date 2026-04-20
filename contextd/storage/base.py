@@ -62,7 +62,7 @@ class GraphStore(ABC):
         self,
         src_id: str,
         dst_id: str,
-        label: str,
+        edge_type: str,
         origin: Origin,
         properties: dict[str, Any] | None = None,
         *,
@@ -71,10 +71,13 @@ class GraphStore(ABC):
     ) -> None:
         """Create or update an edge.
 
-        ``src_label`` / ``dst_label`` are required on schema-first backends
-        (Kuzu) and ignored on schema-free backends (Memgraph). When omitted
-        on Kuzu, the backend raises because REL tables declare fixed
-        FROM/TO label pairs and a lookup without labels is ambiguous.
+        ``edge_type`` is the relationship type (REFERENCES, CONTAINS, …).
+        ``src_label`` / ``dst_label`` are the endpoint *node* labels; they
+        are required on schema-first backends (Kuzu) and advisory on
+        schema-free backends (Memgraph, which uses them to narrow the
+        MATCH). When omitted on Kuzu, the backend raises because REL tables
+        declare fixed FROM/TO label pairs and a lookup without labels is
+        ambiguous.
         """
 
     @abstractmethod
@@ -83,13 +86,13 @@ class GraphStore(ABC):
         src_id: str,
         *,
         origin: Origin | None = None,
-        label: str | None = None,
+        edge_type: str | None = None,
         src_label: str | None = None,
     ) -> None:
         """Delete outgoing edges from ``src_id``, filtered by origin and/or type.
 
         Implementations MUST raise ``ValueError`` when both ``origin`` and
-        ``label`` are None — a caller that omits both would wipe every
+        ``edge_type`` are None — a caller that omits both would wipe every
         outgoing edge regardless of provenance, which violates the design
         invariant that wipe-and-replace on re-index operates only on
         ``origin="inferred"``. Callers must opt in explicitly.
