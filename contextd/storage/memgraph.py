@@ -165,13 +165,12 @@ class MemgraphBackend(GraphStore):
         # Lucene expression (e.g. `data.summary:migration`) and `search_all`
         # scans every indexed property. search_all is the right fit here — the
         # caller provides a plain keyword and expects a BM25-style match across
-        # the configured index.
-        # The procedure yields `node` only (no score); callers ordering by
-        # relevance should use the Lucene-prefixed `search` form directly.
+        # the configured index. Both procedures YIELD node + score.
         cypher = (
             f"CALL text_search.search_all('{label}_{property_name}_ft', $q) "
-            "YIELD node "
-            "RETURN node "
+            "YIELD node, score "
+            "RETURN node, score "
+            "ORDER BY score DESC "
             f"LIMIT {k}"
         )
         return self.exec_read(cypher, {"q": query})

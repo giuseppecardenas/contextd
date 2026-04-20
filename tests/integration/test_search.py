@@ -139,6 +139,10 @@ def test_full_text_search_matches_content_word(backend: GraphStore) -> None:
     # Both a.md and c.md mention "migration"; b.md does not.
     hit_paths = {_node_prop(row["node"], "path") for row in hits}
     assert hit_paths == {"a.md", "c.md"}
+    # Every hit must carry a numeric score — ranked output is the point of FTS.
+    for row in hits:
+        assert isinstance(row["score"], int | float)
+        assert row["score"] > 0.0
 
     empty = backend.full_text_search(label="File", property_name="summary", query="quantum", k=5)
     assert empty == []
