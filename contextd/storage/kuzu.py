@@ -7,7 +7,6 @@ matches Kuzu's Python SDK surface (Database + Connection objects).
 
 from __future__ import annotations
 
-import math
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -15,8 +14,13 @@ from typing import Any
 import kuzu
 
 from contextd.config import KuzuConfig
+from contextd.storage._identifiers import (
+    validate_identifier,
+    validate_property_keys,
+    validate_search_k,
+    validate_threshold,
+)
 from contextd.storage._keys import (
-    PRIMARY_KEY_BY_LABEL,
     immutable_after_create_for,
     primary_key_for,
 )
@@ -108,14 +112,24 @@ class KuzuBackend(GraphStore):
         # because Kuzu is single-writer (see capabilities.concurrent_writers
         # == 1 — declared in _CAPABILITIES above). A hypothetical multi-writer
         # backend reusing this path would race between the existence check
-        # and the CREATE; explicit locking would be required there.
+        # and the CREATE; explicit locking would be required there. The
+        # assertion below is the runtime guardrail for that assumption.
         assert self._conn is not None
+        assert self.capabilities.concurrent_writers == 1, (
+            "KuzuBackend.upsert_node two-phase check-then-CREATE is only safe "
+            "on single-writer backends; capabilities.concurrent_writers must be 1."
+        )
+        validate_identifier(label, kind="label")
         key = primary_key_for(label)
         if key not in properties:
             raise ValueError(
                 f"upsert_node({label!r}, ...) missing required primary key "
                 f"{key!r}; properties were {sorted(properties)}"
             )
+        # Kuzu f-strings property names into CREATE/SET assignments (no native
+        # `SET n += $props` support), so every caller-supplied key must be a
+        # safe Cypher identifier. Values still bind via $params.
+        validate_property_keys(properties, context=f"upsert_node(label={label!r})")
         pk_value = properties[key]
         existing = self.exec_read(
             f"MATCH (n:{label} {{{key}: ${key}}}) RETURN n.{key} AS pk LIMIT 1",
@@ -154,12 +168,17 @@ class KuzuBackend(GraphStore):
                 f"got src_label={src_label!r}, dst_label={dst_label!r}"
             )
         assert self._conn is not None
+        validate_identifier(src_label, kind="src_label")
+        validate_identifier(dst_label, kind="dst_label")
+        validate_identifier(edge_type, kind="edge_type")
         props = {**(properties or {}), "origin": origin}
+        validate_property_keys(props, context=f"upsert_edge(edge_type={edge_type!r})")
         # Kuzu rejects WHERE clauses that reference properties the label does
         # not declare, so select the one primary-key property per endpoint
-        # label rather than OR-ing over path/id/name.
-        src_key = PRIMARY_KEY_BY_LABEL.get(src_label, "id")
-        dst_key = PRIMARY_KEY_BY_LABEL.get(dst_label, "id")
+        # label rather than OR-ing over path/id/name. primary_key_for raises
+        # on unknown labels — silent fallback to "id" would mis-match nodes.
+        src_key = primary_key_for(src_label)
+        dst_key = primary_key_for(dst_label)
         # Kuzu has no `SET r += $props`; enumerate one assignment per property
         # so non-origin properties (e.g. confidence) round-trip. The REL table
         # must declare every property column — undeclared columns surface as
@@ -176,6 +195,12 @@ class KuzuBackend(GraphStore):
         try:
             self._conn.execute(cypher, {"src": src_id, "dst": dst_id, **props})
         except RuntimeError as exc:
+            # Kuzu's Python SDK raises a generic RuntimeError with a string
+            # message rather than typed error codes, so the substring-match is
+            # the best available signal. This is brittle across Kuzu versions:
+            # if the message wording changes, the fallback `raise` path below
+            # will surface the bare binder error instead of the wrapped
+            # ValueError. Update the substrings in lock-step with SDK upgrades.
             msg = str(exc)
             if "Cannot find property" in msg and "for r" in msg:
                 raise ValueError(
@@ -205,7 +230,10 @@ class KuzuBackend(GraphStore):
                 "do not share a common set of key properties."
             )
         assert self._conn is not None
-        key = PRIMARY_KEY_BY_LABEL.get(src_label, "id")
+        validate_identifier(src_label, kind="src_label")
+        if edge_type is not None:
+            validate_identifier(edge_type, kind="edge_type")
+        key = primary_key_for(src_label)
         conditions: list[str] = []
         params: dict[str, Any] = {"src": src_id}
         if origin is not None:
@@ -252,17 +280,19 @@ class KuzuBackend(GraphStore):
         # similarity-threshold >= t filter becomes a distance <= (1 - t) filter.
         # A callers that passes arbitrary-norm vectors through a Kuzu backend
         # gets unexpected ranking; the invariant is documented but not enforced.
-        if threshold is not None and not math.isfinite(threshold):
-            raise ValueError(f"threshold must be finite; got {threshold!r}")
+        validate_identifier(label, kind="label")
+        validate_identifier(property_name, kind="property_name")
+        validate_search_k(k)
+        validated_threshold = validate_threshold(threshold)
         cypher = (
             f"CALL QUERY_VECTOR_INDEX('{label}', '{label}_{property_name}_idx', "
-            f"$q, {int(k)}) "
+            f"$q, {k}) "
             "RETURN node, distance "
             "ORDER BY distance ASC"
         )
         rows = self.exec_read(cypher, {"q": query})
-        if threshold is not None:
-            distance_cap = 1.0 - threshold
+        if validated_threshold is not None:
+            distance_cap = 1.0 - validated_threshold
             rows = [r for r in rows if r["distance"] <= distance_cap]
         return rows
 
@@ -273,6 +303,9 @@ class KuzuBackend(GraphStore):
         query: str,
         k: int,
     ) -> list[dict[str, Any]]:
+        validate_identifier(label, kind="label")
+        validate_identifier(property_name, kind="property_name")
+        validate_search_k(k)
         cypher = (
             f"CALL QUERY_FTS_INDEX('{label}', '{label}_{property_name}_ft', $q) "
             "RETURN node, score "

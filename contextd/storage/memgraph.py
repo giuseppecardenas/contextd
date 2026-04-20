@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
-import math
 from collections.abc import Sequence
 from typing import Any
 
 from gqlalchemy import Memgraph, Node, Relationship
 
 from contextd.config import MemgraphConfig
-from contextd.storage._keys import PRIMARY_KEY_BY_LABEL, primary_key_for
+from contextd.storage._identifiers import (
+    validate_identifier,
+    validate_search_k,
+    validate_threshold,
+)
+from contextd.storage._keys import primary_key_for
 from contextd.storage.base import BackendCapabilities, GraphStore, Origin
 from contextd.storage.migration import Migration, MigrationRunner
 
@@ -49,12 +53,16 @@ class MemgraphBackend(GraphStore):
 
     def upsert_node(self, label: str, properties: dict[str, Any]) -> str:
         assert self._client is not None
+        validate_identifier(label, kind="label")
         key = primary_key_for(label)
         if key not in properties:
             raise ValueError(
                 f"upsert_node({label!r}, ...) missing required primary key "
                 f"{key!r}; properties were {sorted(properties)}"
             )
+        # Property values flow via $props (parameter bind), so key names inside
+        # the dict don't need identifier-shape validation here — Memgraph's
+        # SET n += $props treats keys as lookup strings, not Cypher tokens.
         cypher = f"MERGE (n:{label} {{{key}: $key_value}}) SET n += $props RETURN n.{key} AS id"
         rows = list(
             self._client.execute_and_fetch(
@@ -80,6 +88,7 @@ class MemgraphBackend(GraphStore):
         # against path/id/name — works but risks mis-binding when different
         # labels share a key value (File{path:"X"} vs Pattern{name:"X"}).
         assert self._client is not None
+        validate_identifier(edge_type, kind="edge_type")
         props = {**(properties or {}), "origin": origin}
         src_pat, src_where, src_params = _endpoint_match("a", "src", src_id, src_label)
         dst_pat, dst_where, dst_params = _endpoint_match("b", "dst", dst_id, dst_label)
@@ -105,6 +114,8 @@ class MemgraphBackend(GraphStore):
                 "an unfiltered delete would wipe structural and manual edges."
             )
         assert self._client is not None
+        if edge_type is not None:
+            validate_identifier(edge_type, kind="edge_type")
         src_pat, src_where, src_params = _endpoint_match("a", "src", src_id, src_label)
         params: dict[str, Any] = dict(src_params)
         where_parts: list[str] = []
@@ -141,14 +152,16 @@ class MemgraphBackend(GraphStore):
         # than dangling after YIELD — a bare `YIELD ... WHERE` parses as
         # `YIELD` in the preceding CALL and tokenizes WHERE as the start of
         # the next clause (which must be WITH/MATCH/...).
+        validate_identifier(label, kind="label")
+        validate_identifier(property_name, kind="property_name")
+        validate_search_k(k)
         params: dict[str, Any] = {"k": k, "q": query}
-        if threshold is None:
+        validated_threshold = validate_threshold(threshold)
+        if validated_threshold is None:
             filter_clause = ""
         else:
-            if not math.isfinite(threshold):
-                raise ValueError(f"threshold must be finite; got {threshold!r}")
             filter_clause = "WITH node, score WHERE score >= $threshold "
-            params["threshold"] = threshold
+            params["threshold"] = validated_threshold
         cypher = (
             f"CALL vector_search.search('{label}_{property_name}_idx', $k, $q) "
             "YIELD node, similarity AS score "
@@ -170,6 +183,9 @@ class MemgraphBackend(GraphStore):
         # scans every indexed property. search_all is the right fit here — the
         # caller provides a plain keyword and expects a BM25-style match across
         # the configured index. Both procedures YIELD node + score.
+        validate_identifier(label, kind="label")
+        validate_identifier(property_name, kind="property_name")
+        validate_search_k(k)
         cypher = (
             f"CALL text_search.search_all('{label}_{property_name}_ft', $q) "
             "YIELD node, score "
@@ -202,22 +218,20 @@ def _endpoint_match(
     """Build a MATCH-pattern fragment + optional WHERE clause + params for an
     edge endpoint. Returned as ``(pattern, where, params)``.
 
-    When ``label`` is provided and known to the PK map, inline the declared
-    PK in the pattern — unambiguous on the Memgraph side (constraints make
-    the PK unique per label) and efficient (uses the PK index). When the
-    label is unknown or absent, fall back to OR-matching against
-    ``path``/``id``/``name``: a wider net, but it risks mis-binding when
-    different labels share a key value (e.g. ``File{path:"X"}`` and
-    ``Pattern{name:"X"}``), so callers should pass ``*_label`` kwargs when
-    they know the endpoint's type.
+    When ``label`` is provided, it must be a known label — ``primary_key_for``
+    raises on typos so callers fail fast rather than getting a silent OR-match
+    that returns the empty set. When ``label`` is ``None``, we fall back to
+    OR-matching against ``path``/``id``/``name``; this is a wider net that
+    risks mis-binding when different labels share a key value (e.g.
+    ``File{path:"X"}`` and ``Pattern{name:"X"}``), so callers should pass
+    ``*_label`` kwargs when they know the endpoint's type.
     """
     if label is not None:
-        pk = PRIMARY_KEY_BY_LABEL.get(label)
-        if pk is not None:
-            pk_param = f"{param_base}_{pk}"
-            return f"({var}:{label} {{{pk}: ${pk_param}}})", "", {pk_param: value}
-    prefix = f"({var}:{label})" if label else f"({var})"
+        validate_identifier(label, kind="label")
+        pk = primary_key_for(label)
+        pk_param = f"{param_base}_{pk}"
+        return f"({var}:{label} {{{pk}: ${pk_param}}})", "", {pk_param: value}
     where = (
         f"({var}.path = ${param_base} OR {var}.id = ${param_base} OR {var}.name = ${param_base})"
     )
-    return prefix, where, {param_base: value}
+    return f"({var})", where, {param_base: value}

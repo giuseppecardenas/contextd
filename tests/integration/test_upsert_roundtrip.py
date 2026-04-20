@@ -260,3 +260,105 @@ def test_kuzu_reupsert_with_changed_embedding_discards_new_vector(backend: Graph
     assert rows[0]["hash"] == "h2"  # hash was updated (mutable property)
     # Embedding retained the original value — SET is not attempted.
     assert rows[0]["embedding"][:3] == original[:3]
+
+
+def test_upsert_node_rejects_unsafe_label(backend: GraphStore) -> None:
+    """Cross-backend: label must be an identifier-shaped string. The defence
+    matters on Kuzu where the label is f-strung into CREATE; on Memgraph the
+    same string lands in a MERGE pattern. Both reject at the same boundary."""
+    with pytest.raises(ValueError, match=r"label must match"):
+        backend.upsert_node("File); DROP TABLE File; //", {"path": "a.md"})
+
+
+def test_upsert_node_rejects_unknown_label(backend: GraphStore) -> None:
+    """An identifier-shaped but ontology-unknown label must raise via
+    primary_key_for — a typo should not silently route to a different PK."""
+    with pytest.raises(ValueError, match=r"Unknown node label"):
+        backend.upsert_node("Fiel", {"path": "a.md"})
+
+
+def test_upsert_edge_rejects_unsafe_edge_type(backend: GraphStore) -> None:
+    backend.upsert_node("File", {"path": "a.md", "hash": "h1", "corpus": "c"})
+    backend.upsert_node("File", {"path": "b.md", "hash": "h2", "corpus": "c"})
+    with pytest.raises(ValueError, match=r"edge_type must match"):
+        backend.upsert_edge(
+            "a.md",
+            "b.md",
+            "REF}) DETACH DELETE a, b //",
+            origin="structural",
+            src_label="File",
+            dst_label="File",
+        )
+
+
+def test_kuzu_upsert_node_rejects_unsafe_property_key(backend: GraphStore) -> None:
+    """Kuzu f-strings property keys into CREATE; a key that breaks Cypher
+    quoting must fail at the Python boundary, not as a Kuzu binder error.
+    Memgraph parameterises via SET n += $props so it doesn't raise here —
+    the check is Kuzu-specific."""
+    if backend.capabilities.name != "kuzu":
+        pytest.skip("Memgraph parameterises property keys; no interpolation surface.")
+    with pytest.raises(ValueError, match=r"property key"):
+        backend.upsert_node("File", {"path": "a.md", "x'; DROP TABLE File; //": 1})
+
+
+def test_delete_edges_rejects_unsafe_edge_type(backend: GraphStore) -> None:
+    backend.upsert_node("File", {"path": "a.md", "hash": "h1", "corpus": "c"})
+    with pytest.raises(ValueError, match=r"edge_type must match"):
+        backend.delete_edges(
+            "a.md",
+            edge_type="REF]->() DETACH DELETE a //",
+            src_label="File",
+        )
+
+
+def test_vector_search_rejects_unsafe_identifiers(backend: GraphStore) -> None:
+    """Label and property_name are f-strung into the procedure call on both
+    backends (Kuzu: QUERY_VECTOR_INDEX; Memgraph: vector_search.search)."""
+    with pytest.raises(ValueError, match=r"label must match"):
+        backend.vector_search(
+            label="File') YIELD node, score RETURN node //",
+            property_name="embedding",
+            query=[0.0] * 1024,
+            k=3,
+        )
+    with pytest.raises(ValueError, match=r"property_name must match"):
+        backend.vector_search(
+            label="File",
+            property_name="embedding') //",
+            query=[0.0] * 1024,
+            k=3,
+        )
+
+
+def test_vector_search_rejects_bad_k(backend: GraphStore) -> None:
+    with pytest.raises(ValueError, match=r"non-bool int"):
+        backend.vector_search(
+            label="File",
+            property_name="embedding",
+            query=[0.0] * 1024,
+            k=True,  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValueError, match=r">= 1"):
+        backend.vector_search(label="File", property_name="embedding", query=[0.0] * 1024, k=0)
+
+
+def test_vector_search_rejects_out_of_range_threshold(backend: GraphStore) -> None:
+    with pytest.raises(ValueError, match=r"\[0, 1\]"):
+        backend.vector_search(
+            label="File",
+            property_name="embedding",
+            query=[0.0] * 1024,
+            k=3,
+            threshold=1.5,
+        )
+
+
+def test_full_text_search_rejects_unsafe_identifiers(backend: GraphStore) -> None:
+    with pytest.raises(ValueError, match=r"label must match"):
+        backend.full_text_search(
+            label="File') CALL drop() //",
+            property_name="summary",
+            query="x",
+            k=3,
+        )
