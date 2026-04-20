@@ -8,25 +8,11 @@ works end-to-end before M5 starts writing real embeddings.
 
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
 
 from contextd.storage.base import GraphStore
 
 pytestmark = pytest.mark.integration
-
-
-def _node_prop(node: Any, prop: str) -> Any:
-    """Read a property off a `node` result cell.
-
-    The backends return different shapes for node cells: Kuzu yields a dict,
-    Memgraph (via gqlalchemy) yields a `Node` model object. This helper
-    hides that until/unless the ABC grows a normaliser.
-    """
-    if isinstance(node, dict):
-        return node[prop]
-    return getattr(node, prop)
 
 
 _DIM = 1024  # matches both backends' baseline migration
@@ -98,7 +84,7 @@ def test_vector_search_orders_by_similarity(seeded_backend: GraphStore) -> None:
     results = seeded_backend.vector_search(
         label="File", property_name="embedding", query=query, k=3
     )
-    paths = [_node_prop(r["node"], "path") for r in results]
+    paths = [r["node"]["path"] for r in results]
     assert paths[0] == "a.md"
     # "c.md" is at 45° from the query → closer than orthogonal "b.md".
     assert paths.index("c.md") < paths.index("b.md")
@@ -122,7 +108,7 @@ def test_vector_search_threshold_filters(seeded_backend: GraphStore) -> None:
         k=3,
         threshold=0.5,
     )
-    paths = {_node_prop(r["node"], "path") for r in results}
+    paths = {r["node"]["path"] for r in results}
     assert paths == {"a.md", "c.md"}
 
 
@@ -137,7 +123,7 @@ def test_full_text_search_matches_content_word(backend: GraphStore) -> None:
 
     hits = backend.full_text_search(label="File", property_name="summary", query="migration", k=5)
     # Both a.md and c.md mention "migration"; b.md does not.
-    hit_paths = {_node_prop(row["node"], "path") for row in hits}
+    hit_paths = {row["node"]["path"] for row in hits}
     assert hit_paths == {"a.md", "c.md"}
     # Every hit must carry a numeric score — ranked output is the point of FTS.
     for row in hits:

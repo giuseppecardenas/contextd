@@ -6,7 +6,7 @@ import math
 from collections.abc import Sequence
 from typing import Any
 
-from gqlalchemy import Memgraph
+from gqlalchemy import Memgraph, Node, Relationship
 
 from contextd.config import MemgraphConfig
 from contextd.storage._keys import PRIMARY_KEY_BY_LABEL, primary_key_for
@@ -119,7 +119,10 @@ class MemgraphBackend(GraphStore):
 
     def exec_read(self, cypher: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         assert self._client is not None
-        return list(self._client.execute_and_fetch(cypher, params or {}))
+        return [
+            {k: _normalise_cell(v) for k, v in row.items()}
+            for row in self._client.execute_and_fetch(cypher, params or {})
+        ]
 
     def exec_write(self, cypher: str, params: dict[str, Any] | None = None) -> None:
         assert self._client is not None
@@ -174,6 +177,22 @@ class MemgraphBackend(GraphStore):
             f"LIMIT {k}"
         )
         return self.exec_read(cypher, {"q": query})
+
+
+def _normalise_cell(value: Any) -> Any:
+    """Convert gqlalchemy Node / Relationship instances to plain dicts.
+
+    Kuzu's exec_read returns plain dicts for node/relationship cells already;
+    Memgraph's underlying gqlalchemy ORM yields ``Node`` / ``Relationship``
+    pydantic models. Callers writing ``row["node"]["path"]`` should get the
+    same shape on both backends. We return ``dict(value)`` which exposes the
+    node's properties plus `_labels` / `_id` metadata (shape is not fully
+    unified with Kuzu — `_id` is an int on Memgraph vs. a dict on Kuzu —
+    but `node["path"]` works everywhere).
+    """
+    if isinstance(value, Node | Relationship):
+        return dict(value)
+    return value
 
 
 def _endpoint_match(
