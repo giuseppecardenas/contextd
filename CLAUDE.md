@@ -8,7 +8,18 @@ Contextd is a locally-hosted GraphRAG knowledge layer. It indexes markdown, code
 
 ## Current Phase: Active Implementation
 
-The project is mid-build against a detailed milestone plan. As of 2026-04-20, M0 (repo scaffold) is complete (commit `e752200`, CI green on GitHub), and M1 (config + ontology foundations) is 4/5 done with local commits only. The plan drives build order deterministically — do not skip or reorder milestones.
+The project is mid-build against a detailed milestone plan. The plan drives build order deterministically — do not skip or reorder milestones.
+
+**As of 2026-04-20 (HEAD `38a7bb2`, all pushed to origin/main):**
+
+- **M0** (repo scaffold) — complete (`e752200`). CI green.
+- **M1** (config + ontology foundations) — complete 5/5. Closing commit `6551a71`.
+- **M2** (external AI providers) — complete 5/5. `InferenceProvider`/`EmbeddingProvider` ABCs, `GeminiProvider` with retry + BLOCK_NONE safety + usage accounting, `VoyageProvider` with batched embedding + retry, factory with env-var-driven keys, append-only `CostLog`. Closing commit `f1cecb3`.
+- **M3** (storage backends) — partial. Task 3.1 done (`38a7bb2`: factory + forward-only `MigrationRunner`). **Task 3.2 (Memgraph backend) blocked.** Tasks 3.3, 3.4 pending.
+
+**Cursor:** Task 3.2 (Memgraph backend), blocked — see Known Limitations for blockers and the spec-delta candidates the plan needs before resuming.
+
+**Test suite:** 41/41 unit tests green; `ruff check`, `ruff format --check`, `mypy --strict` all clean.
 
 ## Session-Start Required Reads
 
@@ -109,10 +120,26 @@ This contract exists because a prior-session subagent silently relaxed a negativ
 
 ## Known Limitations / Deferred Items
 
-- **Task 1.3 code-quality review flagged two non-blocking items** to address before M3/M5 backends cache `Ontology`:
+### Active blockers (M3 — Memgraph backend)
+
+**Task 3.2 cannot proceed in this environment without plan revisions and Docker.**
+
+1. **Spec-delta — `testcontainers.memgraph` does not exist.** The plan's test imports `from testcontainers.memgraph import MemgraphContainer`, but `testcontainers-python 4.14.2` does not ship a Memgraph container helper (it has `neo4j`, `clickhouse`, etc., but not Memgraph). The plan must switch to a generic `DockerContainer("memgraph/memgraph-platform:latest")` wrapper, or the project needs a community/custom plugin.
+2. **Environmental — Docker unavailable in this WSL2 distro.** `docker` resolves to `/mnt/c/Program Files/Docker/Docker/resources/bin/docker` but the command fails with "could not be found in this WSL 2 distro" — Docker Desktop's WSL integration is off. Until it's enabled, Memgraph integration tests cannot run locally. CI may still run them if the GitHub Actions runner has Docker.
+3. **Spec-delta — factory deferred imports fail `mypy --strict`.** `contextd/storage/factory.py` imports `contextd.storage.{memgraph,kuzu}` which don't exist until Tasks 3.2/3.3. Task 3.1 landed with targeted `# type: ignore[import-untyped]` / `[no-any-return]` comments (commit `38a7bb2`); **remove these ignores when 3.2/3.3 land.**
+
+**Recommended sequencing once unblocked:** land Task 3.3 (Kuzu — embedded, no Docker) first to unblock M4–M8 local development. Memgraph slots in later when Docker is available.
+
+### Non-blocking — revisit during M2/M3 backend work
+
+- **Task 1.3 code-quality review flagged two items** to address before M3/M5 backends cache `Ontology`:
   - `Ontology`'s mutable fields (`dict`/`set`) are exposed directly; a consumer could mutate `onto.edge_types.add(...)` and silently corrupt validation. Fix: `frozenset` for sets, `types.MappingProxyType` for `node_types`.
   - `validate_node(node_type, properties)` ignores `properties` entirely. Either drop the param (YAGNI) or add real property-key validation.
 - **Task 1.4 `@field_validator("backend")` is dead code** — pydantic v2's `Literal["memgraph", "kuzu"]` check fires first. Harmless but removable.
 - **Test for `Ontology.with_aliases` error path** (raises on unknown target) is not present. Add before M3 integration tests rely on it.
+
+### Spec-delta already applied in-flight
+
+- **Task 2.2** — plan's test used `genai_errors.APIError(code=429, message="quota", ...)` but the real `google-genai` API uses `response_json={"error": {"message": ...}}` (no `message` kwarg). Adapted the test (`577be77`); retry-path semantics unchanged. Plan text still needs updating.
 
 These are tracked in the implementation plan's "Known Limitations" section at the end of M1 closure — revisit when touching those modules during M2/M3.
