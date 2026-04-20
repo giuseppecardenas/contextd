@@ -10,16 +10,16 @@ Contextd is a locally-hosted GraphRAG knowledge layer. It indexes markdown, code
 
 The project is mid-build against a detailed milestone plan. The plan drives build order deterministically — do not skip or reorder milestones.
 
-**As of 2026-04-20 (HEAD `fd6d477`, all pushed to origin/main):**
+**As of 2026-04-20 (HEAD `088069b`, all pushed to origin/main):**
 
 - **M0** (repo scaffold) — complete (`e752200`). CI green.
 - **M1** (config + ontology foundations) — complete 5/5. Closing commit `6551a71`.
 - **M2** (external AI providers) — complete 5/5. `InferenceProvider`/`EmbeddingProvider` ABCs, `GeminiProvider` with retry + BLOCK_NONE safety + usage accounting, `VoyageProvider` with batched embedding + retry, factory with env-var-driven keys, append-only `CostLog`. Closing commit `f1cecb3`.
-- **M3** (storage backends) — complete 4/4. `GraphStore` factory + forward-only `MigrationRunner`, `MemgraphBackend` (Bolt via gqlalchemy) + baseline migration, `KuzuBackend` (embedded v0.11) + baseline migration, parametrized cross-backend integration suite. Closing commit `fd6d477`.
+- **M3** (storage backends) — complete 4/4 with post-closure bug fixes. `GraphStore` factory + forward-only `MigrationRunner`, `MemgraphBackend` (Bolt via gqlalchemy) + baseline migration, `KuzuBackend` (embedded v0.11) + baseline migration, parametrized cross-backend integration suite. Closing commit `fd6d477`; subsequent hardening in `eb28a41`, `cabe6f7`, `7d1c285`, `088069b`, `cab529f` (see spec-delta log below).
 
 **Cursor:** M4 Task 4.1 (file hasher with hash-based change detection).
 
-**Test suite:** 41 unit + 10 integration = 51/51 green. `ruff check`, `ruff format --check`, `mypy --strict` all clean. Integration suite runs Memgraph via Docker (memgraph:latest v3.x) + Kuzu embedded in `tmp_path`.
+**Test suite:** 44 unit + 25 integration = 69 collected, 68 executed (1 skipped for Kuzu distance-vs-similarity threshold semantics). `ruff check`, `ruff format --check`, `mypy --strict` all clean. Integration suite runs Memgraph via Docker (memgraph:latest v3.x) + Kuzu embedded in `tmp_path`.
 
 **Local CI discipline:** the four local gates (ruff check / ruff format --check / mypy --strict / pytest) do not cover every GitHub Actions job. Before pushing, also run the abstraction-invariant grep locally — the exact command is in `.github/workflows/ci.yml` under the `abstraction-invariant` job. A prior-session M3 push went out with the abstraction-invariant job red for 3 commits because the local check was skipped.
 
@@ -150,3 +150,21 @@ This contract exists because a prior-session subagent silently relaxed a negativ
    - Drop `dim := 1024` from `CREATE_VECTOR_INDEX`; dimension is inferred from the column type.
    - Backtick-escape reserved words `start` and `end` in `WorkSession` DDL.
 4. **Task 3.4 (cross-backend tests)** — ABC change: `GraphStore.upsert_edge` and `delete_edges` now take optional `src_label` / `dst_label` kwargs. Memgraph treats them as advisory MATCH-narrowing hints; Kuzu requires them (REL tables have fixed FROM/TO label pairs, and node tables don't share a common key-property shape across labels). Kuzu raises `ValueError` if the labels are omitted. The plan's `test_delete_edges_by_origin` uses `REFERENCES` + `BELONGS_TO` but Kuzu's `BELONGS_TO` is declared `FROM File TO Ticket`, not `File→File` — the test was rewritten to use `REFERENCES` + `CONTAINS (File→Section)` which is valid on both backends.
+
+5. **`delete_edges` contract tightening (`cabe6f7`)** — both backends now raise `ValueError` when both `origin` and `label` are None. An unfiltered wipe would violate the design invariant that wipe-and-replace operates only on `origin="inferred"`; callers must opt in. The ABC docstring prescribes this as required behaviour.
+
+6. **New `contextd/storage/_keys.py` module (`cabe6f7`, `088069b`)** — centralises `PRIMARY_KEY_BY_LABEL` (the label-to-PK-property map mirroring the migration DDL) and `IMMUTABLE_AFTER_CREATE_BY_LABEL` (properties Kuzu rejects via `SET` after node creation — `File.embedding`, `Section.embedding`). Both backends import from here. Drift with the migration DDL is currently caught only by integration tests; a dedicated unit test is in the backlog. Plan does not mention this module.
+
+7. **Kuzu `upsert_node` is two-phase check-then-CREATE-or-SET (`088069b`)** — plan's single `MERGE (n:L {all_props})` shape has two problems on Kuzu: (a) re-upsert with a changed non-PK property trips the PK uniqueness constraint; (b) vector-indexed columns cannot be assigned via `SET` after creation (even in `ON CREATE SET`). Resolution: if the node does not exist, `CREATE` with all props inline; if it does, `SET` only the mutable (non-PK, non-vector-indexed) properties. Correct under Kuzu's single-writer capability; would need a lock if a multi-writer backend reuses this code.
+
+8. **Memgraph FTS migration + backend rewritten (`088069b`)** — plan's `CREATE INDEX ON :File(summary)` creates a B-tree label-property index, which the `text_search` procedure cannot find by name. Changed to `CREATE TEXT INDEX File_summary_ft ON :File` (Lucene-backed). The backend's `full_text_search` switched from `text_search.search(idx, q)` (requires Lucene-expression syntax) to `text_search.search_all(idx, q)` (plain keyword over all indexed properties). search_all does not return a score; the ABC signature is unchanged but the result dict has `node` only, no `score`. M7 callers wanting ranked output must pass a Lucene expression via `exec_read` directly.
+
+9. **Memgraph `vector_search` threshold clause (`088069b`)** — plan's `YIELD ... WHERE ...` form parses the WHERE token outside a valid Cypher position. The backend now re-projects via `WITH node, score WHERE score >= <threshold>` before RETURN. The threshold is currently f-strung into the Cypher; parameterising it is in the backlog (float injection surface + `nan`/`inf` bad-format risk).
+
+10. **Kuzu `vector_search` arity (`088069b`)** — plan's `CALL QUERY_VECTOR_INDEX(idx, $q, $k)` has the wrong arity. Kuzu's signature is `QUERY_VECTOR_INDEX(table, idx, query, k)` — 4 args. Also `k` is inlined as a literal because Python `int` binds as `INT8` and the procedure expects `INT64` (same pattern as `_record_applied`).
+
+11. **Kuzu `upsert_edge` per-property SET + REL-table schema (`7d1c285`)** — plan's `SET r.origin = $origin` silently dropped every other edge property. The backend now enumerates one `SET r.<k> = $<k>` per supplied property. Kuzu REL tables are schema-first, so any property beyond the declared columns surfaces as a binder exception — `REFERENCES` and `BELONGS_TO` gained `confidence DOUBLE` (nullable) to carry the inferred-edge review signal; adding further edge properties requires a migration.
+
+12. **CI `abstraction-invariant` grep narrowed to `contextd/` (`eb28a41`)** — originally `grep ... contextd/ tests/ --exclude-dir=storage`, which caught the plan-prescribed `from contextd.storage.memgraph import ...` in integration test files and failed CI for three consecutive commits on main before being fixed. The invariant's intent is to protect runtime consumers (indexer, MCP, CLI) from coupling to a concrete backend; integration tests are legitimately backend-specific and stay outside the fence.
+
+13. **pytest filterwarnings suppression (`088069b`)** — `gqlalchemy.exceptions.GQLAlchemySubclassNotFoundWarning` is raised whenever gqlalchemy materialises a node whose label has no Python ORM class. `GraphStore` deals in dicts, not ORM models; this warning is structural and harmless. Added to `[tool.pytest.ini_options].filterwarnings` alongside the `"error"` strictness default.
