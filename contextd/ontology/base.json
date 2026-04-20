@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "node_types": {
+    "File":        ["path", "name", "type", "hash", "size", "updated", "embedding", "summary", "key_points", "summary_generated_at", "summary_confidence", "corpus"],
+    "Section":     ["id", "anchor", "title", "level", "path", "corpus", "file_id", "ordinal", "embedding", "summary", "key_points", "entities_mentioned", "summary_generated_at", "summary_confidence"],
+    "Artifact":    ["id", "title", "description", "reusable", "created", "updated", "corpus"],
+    "Ticket":      ["id", "title", "status", "created", "updated", "corpus"],
+    "Pattern":     ["name", "description", "when_to_use", "examples", "corpus"],
+    "Technology":  ["name", "version"],
+    "Client":      ["name"],
+    "Repo":        ["name", "url"],
+    "Service":     ["name", "repo"],
+    "Integration": ["name", "type"],
+    "Risk":        ["description", "severity", "corpus"],
+    "WorkSession": ["id", "start", "end", "focus_area"],
+    "Corpus":      ["name", "root", "registered_at", "content_profile"],
+    "Meta":        ["schema_version", "contextd_version", "backend_name", "initialised_at"]
+  },
+  "edge_types": [
+    "CONTAINS", "PARENT_OF", "NEXT_SIBLING",
+    "BELONGS_TO", "CREATED_BY",
+    "DOCUMENTS", "DOCUMENTED_IN",
+    "APPLIES_TO", "PART_OF",
+    "SIMILAR_TO", "RELATED_TO", "REFERENCES", "SUPERSEDES", "CONTRADICTS",
+    "USES", "MODIFIES", "DEPENDS_ON",
+    "IDENTIFIES_RISK", "RECOMMENDS",
+    "EDITED_DURING", "VERIFIED_ON", "NEEDS_UPDATE"
+  ],
+  "edge_origin_values": ["inferred", "structural", "manual"]
+}
