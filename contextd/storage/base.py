@@ -115,7 +115,20 @@ class GraphStore(ABC):
         query: list[float],
         k: int,
         threshold: float | None = None,
-    ) -> list[dict[str, Any]]: ...
+    ) -> list[dict[str, Any]]:
+        """Return nearest neighbours of ``query`` by cosine similarity.
+
+        ``threshold`` is a cosine-similarity floor in ``[0.0, 1.0]`` (higher is
+        more similar). Implementations MUST raise ``ValueError`` on non-finite
+        inputs. The returned dicts have ``node`` and ``score`` keys on backends
+        that expose similarity, or ``node`` and ``distance`` keys on backends
+        whose index procedure returns distance (Kuzu) — see backend docstrings.
+
+        The similarity↔distance conversion Kuzu performs internally assumes
+        the index was declared with ``metric := 'cosine'`` and that both the
+        stored and query vectors are unit-normalised. Voyage-3 embeddings
+        satisfy both; arbitrary-norm vectors will rank unpredictably on Kuzu.
+        """
 
     @abstractmethod
     def full_text_search(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from typing import Any
 
@@ -134,9 +135,14 @@ class MemgraphBackend(GraphStore):
         # than dangling after YIELD — a bare `YIELD ... WHERE` parses as
         # `YIELD` in the preceding CALL and tokenizes WHERE as the start of
         # the next clause (which must be WITH/MATCH/...).
-        filter_clause = (
-            f"WITH node, score WHERE score >= {threshold} " if threshold is not None else ""
-        )
+        params: dict[str, Any] = {"k": k, "q": query}
+        if threshold is None:
+            filter_clause = ""
+        else:
+            if not math.isfinite(threshold):
+                raise ValueError(f"threshold must be finite; got {threshold!r}")
+            filter_clause = "WITH node, score WHERE score >= $threshold "
+            params["threshold"] = threshold
         cypher = (
             f"CALL vector_search.search('{label}_{property_name}_idx', $k, $q) "
             "YIELD node, similarity AS score "
@@ -144,7 +150,7 @@ class MemgraphBackend(GraphStore):
             "RETURN node, score "
             "ORDER BY score DESC"
         )
-        return self.exec_read(cypher, {"k": k, "q": query})
+        return self.exec_read(cypher, params)
 
     def full_text_search(
         self,

@@ -105,13 +105,15 @@ def test_vector_search_orders_by_similarity(seeded_backend: GraphStore) -> None:
 
 
 def test_vector_search_threshold_filters(seeded_backend: GraphStore) -> None:
-    """threshold=0.5 drops the orthogonal vector (cos=0) and keeps the
-    aligned (cos=1) and 45° (cos≈0.7071) results."""
-    if seeded_backend.capabilities.name == "kuzu":
-        pytest.skip(
-            "Kuzu's vector_search uses distance (lower=better); the current "
-            "threshold semantics apply only to Memgraph's similarity score."
-        )
+    """threshold=0.5 (cosine similarity) drops the orthogonal vector (cos=0)
+    and keeps the aligned (cos=1) and 45° (cos≈0.7071) results.
+
+    The ABC normalises the contract as a similarity floor on [0, 1].
+    Kuzu's vector_search returns distance internally and converts the
+    threshold to a distance cap — this test asserts the conversion is
+    correct when the index uses cosine metric and the vectors are
+    unit-norm (which _basis_vector produces and Voyage-3 guarantees).
+    """
     query = _basis_vector(0)
     results = seeded_backend.vector_search(
         label="File",

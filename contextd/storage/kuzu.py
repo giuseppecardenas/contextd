@@ -7,6 +7,7 @@ matches Kuzu's Python SDK surface (Database + Connection objects).
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -211,9 +212,22 @@ class KuzuBackend(GraphStore):
         k: int,
         threshold: float | None = None,
     ) -> list[dict[str, Any]]:
-        # Kuzu's QUERY_VECTOR_INDEX takes (table, index, query, k).
-        # `k` is literal because Kuzu infers Python ints as INT8 and rejects
-        # the bind against the expected INT64 parameter type.
+        # Kuzu's QUERY_VECTOR_INDEX takes (table, index, query, k) and returns
+        # (node, distance) rather than Memgraph's (node, similarity). `k` is a
+        # literal because Kuzu infers Python ints as INT8 and rejects the bind
+        # against the expected INT64 parameter type.
+        #
+        # The ABC's `threshold` is expressed as cosine similarity (0..1, higher
+        # is better) to match Memgraph's contract. On Kuzu this is converted to
+        # a distance cap. The conversion is only correct when:
+        #   - the index was declared with `metric := 'cosine'` (baseline is), AND
+        #   - query and indexed vectors are unit-normalised (Voyage-3 output is).
+        # Under both conditions, cosine_distance = 1 - cosine_similarity, so the
+        # similarity-threshold >= t filter becomes a distance <= (1 - t) filter.
+        # A callers that passes arbitrary-norm vectors through a Kuzu backend
+        # gets unexpected ranking; the invariant is documented but not enforced.
+        if threshold is not None and not math.isfinite(threshold):
+            raise ValueError(f"threshold must be finite; got {threshold!r}")
         cypher = (
             f"CALL QUERY_VECTOR_INDEX('{label}', '{label}_{property_name}_idx', "
             f"$q, {int(k)}) "
@@ -222,7 +236,8 @@ class KuzuBackend(GraphStore):
         )
         rows = self.exec_read(cypher, {"q": query})
         if threshold is not None:
-            rows = [r for r in rows if r["distance"] <= (1 - threshold)]
+            distance_cap = 1.0 - threshold
+            rows = [r for r in rows if r["distance"] <= distance_cap]
         return rows
 
     def full_text_search(
