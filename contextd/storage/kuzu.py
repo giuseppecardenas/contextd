@@ -62,6 +62,13 @@ class KuzuBackend(GraphStore):
             # Kuzu is schema-first: the MigrationRunner's MATCH (m:Meta) query
             # errors before any migration runs unless the table exists. Bootstrap
             # Meta here so the runner's forward-only logic is backend-portable.
+            #
+            # The column shape MUST stay a subset of (or equal to) whatever a
+            # future Meta-altering migration produces. The runner only reads
+            # `schema_version` and `applied`; those two are load-bearing. The
+            # other columns exist for parity with the Memgraph-derived design
+            # and future migrations. If a migration ever changes Meta's PK,
+            # update this bootstrap in lock-step.
             self._conn.execute(
                 "CREATE NODE TABLE IF NOT EXISTS Meta("
                 "schema_version INT64 PRIMARY KEY, "
@@ -96,6 +103,12 @@ class KuzuBackend(GraphStore):
         # properties. The immutable set is label-specific (see _keys.py).
         # Kuzu does not support `SET n += $props`; individual assignments are
         # required.
+        #
+        # Concurrency: the check-then-write pattern is TOCTOU-safe here only
+        # because Kuzu is single-writer (see capabilities.concurrent_writers
+        # == 1 — declared in _CAPABILITIES above). A hypothetical multi-writer
+        # backend reusing this path would race between the existence check
+        # and the CREATE; explicit locking would be required there.
         assert self._conn is not None
         key = primary_key_for(label)
         if key not in properties:
