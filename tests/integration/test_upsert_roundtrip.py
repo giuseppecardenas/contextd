@@ -82,6 +82,33 @@ def test_delete_edges_by_origin(backend: GraphStore) -> None:
     assert remaining_contains[0]["origin"] == "structural"
 
 
+def test_upsert_edge_persists_non_origin_properties(backend: GraphStore) -> None:
+    """Edge properties beyond `origin` must round-trip on both backends.
+
+    The indexer attaches `confidence` and other scalars to inferred edges;
+    silently dropping them would break provenance for the AI-inferred
+    relationship review path.
+    """
+    backend.upsert_node("File", {"path": "a.md", "hash": "h1", "corpus": "c"})
+    backend.upsert_node("File", {"path": "b.md", "hash": "h2", "corpus": "c"})
+    backend.upsert_edge(
+        "a.md",
+        "b.md",
+        "REFERENCES",
+        origin="inferred",
+        properties={"confidence": 0.87},
+        src_label="File",
+        dst_label="File",
+    )
+    rows = backend.exec_read(
+        "MATCH (a:File {path: 'a.md'})-[r:REFERENCES]->(b:File {path: 'b.md'}) "
+        "RETURN r.origin AS origin, r.confidence AS confidence"
+    )
+    assert len(rows) == 1
+    assert rows[0]["origin"] == "inferred"
+    assert rows[0]["confidence"] == 0.87
+
+
 def test_delete_edges_requires_filter(backend: GraphStore) -> None:
     """delete_edges with no origin and no label must refuse — it would wipe
     every outgoing edge including structural and manual ones, violating the

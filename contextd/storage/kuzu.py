@@ -129,11 +129,16 @@ class KuzuBackend(GraphStore):
         # label rather than OR-ing over path/id/name.
         src_key = PRIMARY_KEY_BY_LABEL.get(src_label, "id")
         dst_key = PRIMARY_KEY_BY_LABEL.get(dst_label, "id")
+        # Kuzu has no `SET r += $props`; enumerate one assignment per property
+        # so non-origin properties (e.g. confidence) round-trip. The REL table
+        # must declare every property column — undeclared columns surface as
+        # a binder exception from Kuzu.
+        assignments = ", ".join(f"r.{k} = ${k}" for k in props)
         cypher = (
             f"MATCH (a:{src_label} {{{src_key}: $src}}), "
             f"(b:{dst_label} {{{dst_key}: $dst}}) "
             f"MERGE (a)-[r:{label}]->(b) "
-            "SET r.origin = $origin"
+            f"SET {assignments}"
         )
         self._conn.execute(cypher, {"src": src_id, "dst": dst_id, **props})
 
