@@ -58,6 +58,7 @@ Issues = "https://github.com/giuseppecardenas/contextd/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["contextd"]
+include = ["contextd/default_config.toml", "contextd/ontology/base.json"]
 
 [tool.ruff]
 line-length = 100

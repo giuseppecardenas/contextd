@@ -1,0 +1,46 @@
+[providers]
+inference = "gemini"
+embedding = "voyage"
+
+[providers.gemini]
+model_summary = "gemini-flash-latest"
+model_inference = "gemini-flash-latest"
+model_translation = "gemini-flash-latest"
+max_retries = 5
+safety_block = "BLOCK_NONE"
+daily_budget = "unlimited"
+
+[providers.voyage]
+model = "voyage-3"
+max_batch_size = 128
+
+[storage]
+backend = "memgraph"
+
+[storage.memgraph]
+host = "127.0.0.1"
+port = 7687
+docker_compose_file = "~/.contextd/docker-compose.yml"
+memory_limit_gb = 1.0
+cpu_limit = 1.0
+
+[storage.kuzu]
+db_path = "~/.contextd/graph/"
+buffer_pool_size_mb = 1024
+max_threads = 4
+
+[inference]
+summary_max_words = 100
+
+[indexer]
+debounce_seconds = 30
+git_lock_check = true
+parallel_embedding_batches = 4
+
+[mcp]
+transport = "stdio"
+
+[logging]
+level = "info"
+format = "json"
+path = "~/.contextd/logs/contextd.log"
