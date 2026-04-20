@@ -114,3 +114,29 @@ def test_invalid_level_bounds_raise() -> None:
         HeadingParser(min_level=0, max_level=4)
     with pytest.raises(ValueError, match="1 <= min_level <= max_level <= 6"):
         HeadingParser(min_level=2, max_level=7)
+
+
+def test_manual_suffix_collision_routes_around() -> None:
+    md = "## foo\n\n## foo-1\n\n## foo"
+    parser = HeadingParser(min_level=2, max_level=4)
+    sections = parser.parse(md)
+    anchors = [s.anchor for s in sections]
+    # Third `foo` must NOT collide with the manually-authored `foo-1`;
+    # it should skip to `foo-2`.
+    assert anchors == ["foo", "foo-1", "foo-2"]
+
+
+def test_image_heading_extracts_alt_text() -> None:
+    md = "## ![Company logo](/img/logo.png)"
+    parser = HeadingParser(min_level=2, max_level=4)
+    sections = parser.parse(md)
+    assert sections[0].title == "Company logo"
+    assert sections[0].anchor == "company-logo"
+
+
+def test_image_heading_with_empty_alt_falls_back_to_section() -> None:
+    md = "## ![](/img/logo.png)"
+    parser = HeadingParser(min_level=2, max_level=4)
+    sections = parser.parse(md)
+    # No alt text → empty title → anchor falls back to "section".
+    assert sections[0].anchor == "section"

@@ -29,7 +29,8 @@ _NON_ALNUM = re.compile(r"[^\w\s-]")
 _WHITESPACE = re.compile(r"\s+")
 
 # Token types whose .content contributes display text.
-_TEXT_TOKEN_TYPES = {"text", "code_inline"}
+# "image" tokens carry the alt text in their .content field.
+_TEXT_TOKEN_TYPES = {"text", "code_inline", "image"}
 
 
 def _extract_title(inline: Token) -> str:
@@ -116,14 +117,20 @@ class HeadingParser:
             body = "".join(lines[line:next_line_bound])
 
             # Compute unique anchor — deduplicate GitHub-style.
+            # Route around any collision with a manually-authored heading that
+            # already claimed the candidate suffix (e.g. ## foo-1 before the
+            # dedup'd ## foo would emit foo-1).
             raw_anchor = _github_anchor(title)
             if raw_anchor not in seen_anchors:
                 anchor = raw_anchor
                 seen_anchors[raw_anchor] = 1
             else:
                 count = seen_anchors[raw_anchor]
+                while f"{raw_anchor}-{count}" in seen_anchors:
+                    count += 1
                 anchor = f"{raw_anchor}-{count}"
                 seen_anchors[raw_anchor] = count + 1
+                seen_anchors[anchor] = 1
 
             section = ParsedSection(
                 title=title,
