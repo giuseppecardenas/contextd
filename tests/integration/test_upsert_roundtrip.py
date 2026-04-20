@@ -172,3 +172,91 @@ def test_delete_edges_requires_filter(backend: GraphStore) -> None:
     backend.upsert_node("File", {"path": "a.md", "hash": "h1", "corpus": "c"})
     with pytest.raises(ValueError, match="origin or edge_type"):
         backend.delete_edges("a.md", src_label="File")
+
+
+def test_upsert_node_missing_pk_raises(backend: GraphStore) -> None:
+    """Calling upsert_node with properties that omit the label's declared
+    primary key surfaces a clear error naming the missing key — not a
+    surprising Cypher binder exception deep in the backend."""
+    with pytest.raises(ValueError, match="missing required primary key 'path'"):
+        backend.upsert_node("File", {"hash": "h1", "corpus": "c"})
+
+
+def test_kuzu_upsert_edge_without_labels_raises(backend: GraphStore) -> None:
+    """Kuzu REL tables declare FROM/TO label pairs; the backend must refuse
+    a MERGE without both endpoint labels. Memgraph accepts (advisory-
+    fallback) but Kuzu raises to keep callers honest."""
+    if backend.capabilities.name != "kuzu":
+        pytest.skip("Memgraph accepts label-less endpoints; this check is Kuzu-specific.")
+    backend.upsert_node("File", {"path": "a.md", "hash": "h1", "corpus": "c"})
+    backend.upsert_node("File", {"path": "b.md", "hash": "h2", "corpus": "c"})
+    with pytest.raises(ValueError, match="requires both src_label and dst_label"):
+        backend.upsert_edge("a.md", "b.md", "REFERENCES", origin="inferred")
+
+
+def test_kuzu_delete_edges_without_src_label_raises(backend: GraphStore) -> None:
+    if backend.capabilities.name != "kuzu":
+        pytest.skip("Memgraph accepts label-less src; this check is Kuzu-specific.")
+    backend.upsert_node("File", {"path": "a.md", "hash": "h1", "corpus": "c"})
+    with pytest.raises(ValueError, match="requires src_label"):
+        backend.delete_edges("a.md", origin="inferred")
+
+
+def test_kuzu_upsert_edge_undeclared_property_wrapped(backend: GraphStore) -> None:
+    """Passing a property that the REL table does not declare surfaces as a
+    ValueError naming the edge type and property set — not Kuzu's bare
+    'Cannot find property X for r.' binder exception."""
+    if backend.capabilities.name != "kuzu":
+        pytest.skip("Memgraph is schema-free on edges; this check is Kuzu-specific.")
+    backend.upsert_node("File", {"path": "a.md", "hash": "h1", "corpus": "c"})
+    backend.upsert_node("Section", {"id": "a.md#s1", "title": "S1", "path": "a.md", "corpus": "c"})
+    # CONTAINS REL table declares only `origin`; `weight` is undeclared.
+    with pytest.raises(ValueError, match=r"REL table 'CONTAINS'.*weight"):
+        backend.upsert_edge(
+            "a.md",
+            "a.md#s1",
+            "CONTAINS",
+            origin="structural",
+            properties={"weight": 0.5},
+            src_label="File",
+            dst_label="Section",
+        )
+
+
+def test_memgraph_upsert_edge_without_labels_works(backend: GraphStore) -> None:
+    """Memgraph's label kwargs are advisory; omitting them falls back to
+    OR-matching against path/id/name and still round-trips."""
+    if backend.capabilities.name != "memgraph":
+        pytest.skip("Advisory-endpoint behaviour is Memgraph-only.")
+    backend.upsert_node("File", {"path": "a.md", "hash": "h1", "corpus": "c"})
+    backend.upsert_node("File", {"path": "b.md", "hash": "h2", "corpus": "c"})
+    backend.upsert_edge("a.md", "b.md", "REFERENCES", origin="structural")
+    rows = backend.exec_read(
+        "MATCH (a:File {path: 'a.md'})-[r:REFERENCES]->(b:File {path: 'b.md'}) "
+        "RETURN r.origin AS origin"
+    )
+    assert rows[0]["origin"] == "structural"
+
+
+def test_kuzu_reupsert_with_changed_embedding_discards_new_vector(backend: GraphStore) -> None:
+    """Kuzu rejects SET on vector-indexed columns after node creation. The
+    two-phase upsert therefore silently keeps the original embedding on
+    re-upsert. This test documents the behaviour so a future "helpful"
+    refactor does not change it unnoticed — if the indexer ever needs to
+    update an embedding, it must DETACH DELETE and CREATE (spec §5.5 path)."""
+    if backend.capabilities.name != "kuzu":
+        pytest.skip("Memgraph has no equivalent constraint; this is a Kuzu-only quirk.")
+    original = [1.0, 0.0, 0.0] + [0.0] * 1021
+    replacement = [0.0, 1.0, 0.0] + [0.0] * 1021
+    backend.upsert_node(
+        "File", {"path": "a.md", "hash": "h1", "embedding": original, "corpus": "c"}
+    )
+    backend.upsert_node(
+        "File", {"path": "a.md", "hash": "h2", "embedding": replacement, "corpus": "c"}
+    )
+    rows = backend.exec_read(
+        "MATCH (n:File {path: 'a.md'}) RETURN n.hash AS hash, n.embedding AS embedding"
+    )
+    assert rows[0]["hash"] == "h2"  # hash was updated (mutable property)
+    # Embedding retained the original value — SET is not attempted.
+    assert rows[0]["embedding"][:3] == original[:3]

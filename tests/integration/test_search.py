@@ -90,6 +90,20 @@ def test_vector_search_orders_by_similarity(seeded_backend: GraphStore) -> None:
     assert paths.index("c.md") < paths.index("b.md")
 
 
+def test_vector_search_rejects_non_finite_threshold(seeded_backend: GraphStore) -> None:
+    """nan / inf threshold bypass the parameter bind and land in raw Cypher on
+    backends that f-string it. Both backends must refuse at the Python
+    boundary with ValueError."""
+    import math as _m
+
+    query = _basis_vector(0)
+    for bad in (_m.nan, _m.inf, -_m.inf):
+        with pytest.raises(ValueError, match="threshold must be finite"):
+            seeded_backend.vector_search(
+                label="File", property_name="embedding", query=query, k=3, threshold=bad
+            )
+
+
 def test_vector_search_threshold_filters(seeded_backend: GraphStore) -> None:
     """threshold=0.5 (cosine similarity) drops the orthogonal vector (cos=0)
     and keeps the aligned (cos=1) and 45° (cos≈0.7071) results.
