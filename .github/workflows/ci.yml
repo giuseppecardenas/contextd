@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-type:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v1
+      - run: uv pip install --system -e ".[dev]"
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: mypy --strict contextd
+
+  unit:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: astral-sh/setup-uv@v1
+      - run: uv pip install --system -e ".[dev]"
+      - run: pytest tests/unit -v --cov=contextd --cov-report=term
+
+  abstraction-invariant:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enforce that backend-specific modules are not imported outside contextd/storage/
+        run: |
+          set -euo pipefail
+          if grep -RE "from contextd\.storage\.(memgraph|kuzu)|import contextd\.storage\.(memgraph|kuzu)" contextd/ tests/ --exclude-dir=storage; then
+            echo "::error::Backend-specific modules imported outside contextd/storage/. See spec §2.5.1."
+            exit 1
+          fi
+          echo "Abstraction invariant OK."
