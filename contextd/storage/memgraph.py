@@ -63,11 +63,18 @@ class MemgraphBackend(GraphStore):
         label: str,
         origin: Origin,
         properties: dict[str, Any] | None = None,
+        *,
+        src_label: str | None = None,
+        dst_label: str | None = None,
     ) -> None:
+        # Memgraph is schema-free; src_label/dst_label are advisory and used
+        # only to narrow the MATCH for efficiency when provided.
         assert self._client is not None
         props = {**(properties or {}), "origin": origin}
+        src_frag = f":{src_label}" if src_label else ""
+        dst_frag = f":{dst_label}" if dst_label else ""
         cypher = (
-            "MATCH (a), (b) "
+            f"MATCH (a{src_frag}), (b{dst_frag}) "
             "WHERE (a.path = $src OR a.id = $src OR a.name = $src) "
             "AND (b.path = $dst OR b.id = $dst OR b.name = $dst) "
             f"MERGE (a)-[r:{label}]->(b) "
@@ -81,6 +88,7 @@ class MemgraphBackend(GraphStore):
         *,
         origin: Origin | None = None,
         label: str | None = None,
+        src_label: str | None = None,
     ) -> None:
         assert self._client is not None
         conditions = ["(a.path = $src OR a.id = $src OR a.name = $src)"]
@@ -88,8 +96,11 @@ class MemgraphBackend(GraphStore):
         if origin is not None:
             conditions.append("r.origin = $origin")
             params["origin"] = origin
+        src_frag = f":{src_label}" if src_label else ""
         label_fragment = f":{label}" if label else ""
-        cypher = f"MATCH (a)-[r{label_fragment}]->() WHERE {' AND '.join(conditions)} DELETE r"
+        cypher = (
+            f"MATCH (a{src_frag})-[r{label_fragment}]->() WHERE {' AND '.join(conditions)} DELETE r"
+        )
         self._client.execute(cypher, params)
 
     def exec_read(self, cypher: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:

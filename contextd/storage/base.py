@@ -65,7 +65,17 @@ class GraphStore(ABC):
         label: str,
         origin: Origin,
         properties: dict[str, Any] | None = None,
-    ) -> None: ...
+        *,
+        src_label: str | None = None,
+        dst_label: str | None = None,
+    ) -> None:
+        """Create or update an edge.
+
+        ``src_label`` / ``dst_label`` are required on schema-first backends
+        (Kuzu) and ignored on schema-free backends (Memgraph). When omitted
+        on Kuzu, the backend raises because REL tables declare fixed
+        FROM/TO label pairs and a lookup without labels is ambiguous.
+        """
 
     @abstractmethod
     def delete_edges(
@@ -74,7 +84,14 @@ class GraphStore(ABC):
         *,
         origin: Origin | None = None,
         label: str | None = None,
-    ) -> None: ...
+        src_label: str | None = None,
+    ) -> None:
+        """Delete outgoing edges from ``src_id``, optionally filtered by origin or type.
+
+        ``src_label`` narrows the MATCH to one node label; required on
+        schema-first backends (Kuzu) so the key-property lookup
+        (path/id/name) is unambiguous against the node table schema.
+        """
 
     @abstractmethod
     def exec_read(
