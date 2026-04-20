@@ -1,5 +1,3 @@
-import inspect
-
 from contextd.storage.base import GraphStore
 
 
@@ -13,7 +11,7 @@ def test_graphstore_is_abstract() -> None:
     raise AssertionError("GraphStore must be abstract.")
 
 
-def test_graphstore_required_methods() -> None:
+def test_graphstore_required_abstracts() -> None:
     required = {
         "connect",
         "close",
@@ -25,7 +23,8 @@ def test_graphstore_required_methods() -> None:
         "exec_write",
         "vector_search",
         "full_text_search",
+        "capabilities",
     }
-    methods = {name for name, _ in inspect.getmembers(GraphStore, predicate=inspect.isfunction)}
-    missing = required - methods
-    assert not missing, f"GraphStore missing required methods: {missing}"
+    abstract_names = getattr(GraphStore, "__abstractmethods__", frozenset())
+    missing = required - abstract_names
+    assert not missing, f"GraphStore missing required abstract members: {missing}"

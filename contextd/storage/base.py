@@ -73,7 +73,7 @@ class GraphStore(ABC):
         src_id: str,
         *,
         origin: Origin | None = None,
-        edge_type: str | None = None,
+        label: str | None = None,
     ) -> None: ...
 
     @abstractmethod
