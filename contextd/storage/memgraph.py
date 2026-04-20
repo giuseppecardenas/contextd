@@ -8,6 +8,7 @@ from typing import Any
 from gqlalchemy import Memgraph
 
 from contextd.config import MemgraphConfig
+from contextd.storage._keys import primary_key_for
 from contextd.storage.base import BackendCapabilities, GraphStore, Origin
 from contextd.storage.migration import Migration, MigrationRunner
 
@@ -47,7 +48,12 @@ class MemgraphBackend(GraphStore):
 
     def upsert_node(self, label: str, properties: dict[str, Any]) -> str:
         assert self._client is not None
-        key = _primary_key_for(label, properties)
+        key = primary_key_for(label)
+        if key not in properties:
+            raise ValueError(
+                f"upsert_node({label!r}, ...) missing required primary key "
+                f"{key!r}; properties were {sorted(properties)}"
+            )
         cypher = f"MERGE (n:{label} {{{key}: $key_value}}) SET n += $props RETURN n.{key} AS id"
         rows = list(
             self._client.execute_and_fetch(
@@ -90,6 +96,11 @@ class MemgraphBackend(GraphStore):
         label: str | None = None,
         src_label: str | None = None,
     ) -> None:
+        if origin is None and label is None:
+            raise ValueError(
+                "delete_edges requires at least one of origin or label — "
+                "an unfiltered delete would wipe structural and manual edges."
+            )
         assert self._client is not None
         conditions = ["(a.path = $src OR a.id = $src OR a.name = $src)"]
         params: dict[str, Any] = {"src": src_id}
@@ -144,10 +155,3 @@ class MemgraphBackend(GraphStore):
             f"LIMIT {k}"
         )
         return self.exec_read(cypher, {"q": query})
-
-
-def _primary_key_for(label: str, props: dict[str, Any]) -> str:
-    for candidate in ("path", "id", "name"):
-        if candidate in props:
-            return candidate
-    raise ValueError(f"No primary-key property found for {label!r}: need one of path/id/name")

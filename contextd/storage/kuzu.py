@@ -14,6 +14,7 @@ from typing import Any
 import kuzu
 
 from contextd.config import KuzuConfig
+from contextd.storage._keys import PRIMARY_KEY_BY_LABEL, primary_key_for
 from contextd.storage.base import BackendCapabilities, GraphStore, Origin
 from contextd.storage.migration import Migration, MigrationRunner
 
@@ -75,10 +76,30 @@ class KuzuBackend(GraphStore):
         MigrationRunner(self, typed).apply()
 
     def upsert_node(self, label: str, properties: dict[str, Any]) -> str:
+        # Match on PK only, then SET the remaining properties. Matching on every
+        # property would mean re-upserting with a changed non-PK value (e.g., a
+        # new file hash) creates a second node and trips Kuzu's PK uniqueness
+        # constraint — which is exactly what the indexer's re-index path does.
+        # Kuzu does not support `SET n += $props` (Cypher map-merge); enumerate
+        # individual assignments for every non-PK property instead.
+        #
+        # The key must match the table's declared PK (e.g. Section's PK is `id`,
+        # not `path`), so look up by label — inferring from the property dict
+        # via first-hit-in-[path,id,name] picks the wrong one when a Section
+        # carries both `path` and `id`.
         assert self._conn is not None
-        key = _primary_key_for(properties)
-        prop_list = ", ".join(f"{k}: ${k}" for k in properties)
-        cypher = f"MERGE (n:{label} {{{prop_list}}})"
+        key = primary_key_for(label)
+        if key not in properties:
+            raise ValueError(
+                f"upsert_node({label!r}, ...) missing required primary key "
+                f"{key!r}; properties were {sorted(properties)}"
+            )
+        non_pk = {k: v for k, v in properties.items() if k != key}
+        set_clause = ""
+        if non_pk:
+            assignments = ", ".join(f"n.{k} = ${k}" for k in non_pk)
+            set_clause = f" SET {assignments}"
+        cypher = f"MERGE (n:{label} {{{key}: ${key}}}){set_clause}"
         self._conn.execute(cypher, properties)
         return str(properties[key])
 
@@ -106,8 +127,8 @@ class KuzuBackend(GraphStore):
         # Kuzu rejects WHERE clauses that reference properties the label does
         # not declare, so select the one primary-key property per endpoint
         # label rather than OR-ing over path/id/name.
-        src_key = _PRIMARY_KEY_BY_LABEL.get(src_label, "id")
-        dst_key = _PRIMARY_KEY_BY_LABEL.get(dst_label, "id")
+        src_key = PRIMARY_KEY_BY_LABEL.get(src_label, "id")
+        dst_key = PRIMARY_KEY_BY_LABEL.get(dst_label, "id")
         cypher = (
             f"MATCH (a:{src_label} {{{src_key}: $src}}), "
             f"(b:{dst_label} {{{dst_key}: $dst}}) "
@@ -124,13 +145,18 @@ class KuzuBackend(GraphStore):
         label: str | None = None,
         src_label: str | None = None,
     ) -> None:
+        if origin is None and label is None:
+            raise ValueError(
+                "delete_edges requires at least one of origin or label — "
+                "an unfiltered delete would wipe structural and manual edges."
+            )
         if src_label is None:
             raise ValueError(
                 "KuzuBackend.delete_edges requires src_label; node tables "
                 "do not share a common set of key properties."
             )
         assert self._conn is not None
-        key = _PRIMARY_KEY_BY_LABEL.get(src_label, "id")
+        key = PRIMARY_KEY_BY_LABEL.get(src_label, "id")
         conditions: list[str] = []
         params: dict[str, Any] = {"src": src_id}
         if origin is not None:
@@ -187,30 +213,3 @@ class KuzuBackend(GraphStore):
             f"LIMIT {k}"
         )
         return self.exec_read(cypher, {"q": query})
-
-
-def _primary_key_for(props: dict[str, Any]) -> str:
-    for candidate in ("path", "id", "name"):
-        if candidate in props:
-            return candidate
-    raise ValueError("No primary-key property: need one of path/id/name")
-
-
-# Per-label primary-key property for Kuzu edge-MATCH queries (mirrors the PK
-# declarations in migrations/kuzu/_0001_baseline.py).
-_PRIMARY_KEY_BY_LABEL: dict[str, str] = {
-    "File": "path",
-    "Section": "id",
-    "Artifact": "id",
-    "Ticket": "id",
-    "Pattern": "name",
-    "Technology": "name",
-    "Client": "name",
-    "Repo": "name",
-    "Service": "name",
-    "Integration": "name",
-    "Risk": "description",
-    "WorkSession": "id",
-    "Corpus": "name",
-    "Meta": "schema_version",
-}

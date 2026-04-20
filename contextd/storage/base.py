@@ -86,7 +86,13 @@ class GraphStore(ABC):
         label: str | None = None,
         src_label: str | None = None,
     ) -> None:
-        """Delete outgoing edges from ``src_id``, optionally filtered by origin or type.
+        """Delete outgoing edges from ``src_id``, filtered by origin and/or type.
+
+        Implementations MUST raise ``ValueError`` when both ``origin`` and
+        ``label`` are None — a caller that omits both would wipe every
+        outgoing edge regardless of provenance, which violates the design
+        invariant that wipe-and-replace on re-index operates only on
+        ``origin="inferred"``. Callers must opt in explicitly.
 
         ``src_label`` narrows the MATCH to one node label; required on
         schema-first backends (Kuzu) so the key-property lookup
