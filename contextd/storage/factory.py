@@ -19,7 +19,7 @@ def build_graph_store(cfg: Config) -> GraphStore:
 
         return MemgraphBackend(cfg.storage.memgraph)
     if backend == "kuzu":
-        from contextd.storage.kuzu import KuzuBackend  # type: ignore[import-untyped]
+        from contextd.storage.kuzu import KuzuBackend
 
-        return KuzuBackend(cfg.storage.kuzu)  # type: ignore[no-any-return]
+        return KuzuBackend(cfg.storage.kuzu)
     raise StorageFactoryError(f"Unknown backend: {backend!r}")

@@ -34,8 +34,11 @@ class MigrationRunner:
             self._record_applied(m.id)
 
     def _current_applied(self) -> set[int]:
+        # The singleton Meta node uses schema_version=0 as a fixed PK. This is
+        # redundant on Memgraph (schema-free) but required on Kuzu, which
+        # rejects MERGE that omits the primary key.
         rows = self._store.exec_read(
-            "MATCH (m:Meta) RETURN m.applied AS applied LIMIT 1",
+            "MATCH (m:Meta {schema_version: 0}) RETURN m.applied AS applied LIMIT 1",
             None,
         )
         if not rows:
@@ -43,7 +46,11 @@ class MigrationRunner:
         return set(rows[0].get("applied") or [])
 
     def _record_applied(self, migration_id: int) -> None:
+        # migration_id is a developer-controlled int (no injection surface);
+        # inlining it sidesteps Kuzu's strict type inference on list-concat,
+        # which rejects Python ints as INT8 against an INT64[] column.
         self._store.exec_write(
-            "MERGE (m:Meta) SET m.applied = coalesce(m.applied, []) + [$id]",
-            {"id": migration_id},
+            f"MERGE (m:Meta {{schema_version: 0}}) "
+            f"SET m.applied = coalesce(m.applied, []) + [{int(migration_id)}]",
+            None,
         )
