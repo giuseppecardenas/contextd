@@ -13,12 +13,11 @@ class StorageFactoryError(RuntimeError):
 def build_graph_store(cfg: Config) -> GraphStore:
     # Deferred imports keep backend SDKs out of the import path when the other
     # backend is selected (preserves the abstraction-invariant grep in CI).
-    # The type: ignores come off in tasks 3.2 / 3.3 when the backend modules land.
     backend = cfg.storage.backend
     if backend == "memgraph":
-        from contextd.storage.memgraph import MemgraphBackend  # type: ignore[import-untyped]
+        from contextd.storage.memgraph import MemgraphBackend
 
-        return MemgraphBackend(cfg.storage.memgraph)  # type: ignore[no-any-return]
+        return MemgraphBackend(cfg.storage.memgraph)
     if backend == "kuzu":
         from contextd.storage.kuzu import KuzuBackend  # type: ignore[import-untyped]
 
