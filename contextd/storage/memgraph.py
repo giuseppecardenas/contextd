@@ -9,7 +9,7 @@ from typing import Any
 from gqlalchemy import Memgraph
 
 from contextd.config import MemgraphConfig
-from contextd.storage._keys import primary_key_for
+from contextd.storage._keys import PRIMARY_KEY_BY_LABEL, primary_key_for
 from contextd.storage.base import BackendCapabilities, GraphStore, Origin
 from contextd.storage.migration import Migration, MigrationRunner
 
@@ -74,20 +74,21 @@ class MemgraphBackend(GraphStore):
         src_label: str | None = None,
         dst_label: str | None = None,
     ) -> None:
-        # Memgraph is schema-free; src_label/dst_label are advisory and used
-        # only to narrow the MATCH for efficiency when provided.
+        # Memgraph is schema-free. When the caller provides a node label, we
+        # use the declared PK property (File → path, Section → id, …) for an
+        # unambiguous match. Without a label we fall back to OR-matching
+        # against path/id/name — works but risks mis-binding when different
+        # labels share a key value (File{path:"X"} vs Pattern{name:"X"}).
         assert self._client is not None
         props = {**(properties or {}), "origin": origin}
-        src_frag = f":{src_label}" if src_label else ""
-        dst_frag = f":{dst_label}" if dst_label else ""
+        src_pat, src_where, src_params = _endpoint_match("a", "src", src_id, src_label)
+        dst_pat, dst_where, dst_params = _endpoint_match("b", "dst", dst_id, dst_label)
+        where_parts = [w for w in (src_where, dst_where) if w]
+        where_clause = f"WHERE {' AND '.join(where_parts)} " if where_parts else ""
         cypher = (
-            f"MATCH (a{src_frag}), (b{dst_frag}) "
-            "WHERE (a.path = $src OR a.id = $src OR a.name = $src) "
-            "AND (b.path = $dst OR b.id = $dst OR b.name = $dst) "
-            f"MERGE (a)-[r:{label}]->(b) "
-            "SET r += $props"
+            f"MATCH {src_pat}, {dst_pat} {where_clause}MERGE (a)-[r:{label}]->(b) SET r += $props"
         )
-        self._client.execute(cypher, {"src": src_id, "dst": dst_id, "props": props})
+        self._client.execute(cypher, {**src_params, **dst_params, "props": props})
 
     def delete_edges(
         self,
@@ -103,16 +104,17 @@ class MemgraphBackend(GraphStore):
                 "an unfiltered delete would wipe structural and manual edges."
             )
         assert self._client is not None
-        conditions = ["(a.path = $src OR a.id = $src OR a.name = $src)"]
-        params: dict[str, Any] = {"src": src_id}
+        src_pat, src_where, src_params = _endpoint_match("a", "src", src_id, src_label)
+        params: dict[str, Any] = dict(src_params)
+        where_parts: list[str] = []
+        if src_where:
+            where_parts.append(src_where)
         if origin is not None:
-            conditions.append("r.origin = $origin")
+            where_parts.append("r.origin = $origin")
             params["origin"] = origin
-        src_frag = f":{src_label}" if src_label else ""
         label_fragment = f":{label}" if label else ""
-        cypher = (
-            f"MATCH (a{src_frag})-[r{label_fragment}]->() WHERE {' AND '.join(conditions)} DELETE r"
-        )
+        where_clause = f"WHERE {' AND '.join(where_parts)} " if where_parts else ""
+        cypher = f"MATCH {src_pat}-[r{label_fragment}]->() {where_clause}DELETE r"
         self._client.execute(cypher, params)
 
     def exec_read(self, cypher: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
@@ -173,3 +175,30 @@ class MemgraphBackend(GraphStore):
             f"LIMIT {k}"
         )
         return self.exec_read(cypher, {"q": query})
+
+
+def _endpoint_match(
+    var: str, param_base: str, value: Any, label: str | None
+) -> tuple[str, str, dict[str, Any]]:
+    """Build a MATCH-pattern fragment + optional WHERE clause + params for an
+    edge endpoint. Returned as ``(pattern, where, params)``.
+
+    When ``label`` is provided and known to the PK map, inline the declared
+    PK in the pattern — unambiguous on the Memgraph side (constraints make
+    the PK unique per label) and efficient (uses the PK index). When the
+    label is unknown or absent, fall back to OR-matching against
+    ``path``/``id``/``name``: a wider net, but it risks mis-binding when
+    different labels share a key value (e.g. ``File{path:"X"}`` and
+    ``Pattern{name:"X"}``), so callers should pass ``*_label`` kwargs when
+    they know the endpoint's type.
+    """
+    if label is not None:
+        pk = PRIMARY_KEY_BY_LABEL.get(label)
+        if pk is not None:
+            pk_param = f"{param_base}_{pk}"
+            return f"({var}:{label} {{{pk}: ${pk_param}}})", "", {pk_param: value}
+    prefix = f"({var}:{label})" if label else f"({var})"
+    where = (
+        f"({var}.path = ${param_base} OR {var}.id = ${param_base} OR {var}.name = ${param_base})"
+    )
+    return prefix, where, {param_base: value}
