@@ -150,7 +150,9 @@ class KuzuBackend(GraphStore):
         # Kuzu has no `SET r += $props`; enumerate one assignment per property
         # so non-origin properties (e.g. confidence) round-trip. The REL table
         # must declare every property column — undeclared columns surface as
-        # a binder exception from Kuzu.
+        # a Kuzu binder exception with a terse "Cannot find property X for r"
+        # message; wrap it with context pointing at the edge type so a caller
+        # knows which REL table needs a migration.
         assignments = ", ".join(f"r.{k} = ${k}" for k in props)
         cypher = (
             f"MATCH (a:{src_label} {{{src_key}: $src}}), "
@@ -158,7 +160,18 @@ class KuzuBackend(GraphStore):
             f"MERGE (a)-[r:{label}]->(b) "
             f"SET {assignments}"
         )
-        self._conn.execute(cypher, {"src": src_id, "dst": dst_id, **props})
+        try:
+            self._conn.execute(cypher, {"src": src_id, "dst": dst_id, **props})
+        except RuntimeError as exc:
+            msg = str(exc)
+            if "Cannot find property" in msg and "for r" in msg:
+                raise ValueError(
+                    f"KuzuBackend.upsert_edge: REL table {label!r} does not declare "
+                    f"every property in {sorted(props)}. Add the missing column via a "
+                    f"migration (CREATE REL TABLE ... or ALTER TABLE). "
+                    f"Kuzu message: {msg}"
+                ) from exc
+            raise
 
     def delete_edges(
         self,
