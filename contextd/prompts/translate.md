@@ -9,6 +9,7 @@ Rules:
 - Read-only: do NOT emit any of CREATE, MERGE, DELETE, DETACH DELETE, SET, REMOVE, DROP, FOREACH, or CALL with side-effect procedures. Read-only CALL (e.g. db.labels(), text_search.search_all) is allowed.
 - If the question is ambiguous, emit a best-effort query and include a trailing comment explaining the assumption.
 - Prefer explicit LIMIT clauses (default LIMIT 20 when none implied).
+- When a specific corpus is the target of the question, anchor the first MATCH on a node type that carries a `corpus` property (File, Section, or Corpus).
 
 Question:
 {{question}}
