@@ -114,10 +114,11 @@ def test_vector_search_threshold_filters(seeded_backend: GraphStore) -> None:
     and keeps the aligned (cos=1) and 45° (cos≈0.7071) results.
 
     The ABC normalises the contract as a similarity floor on [0, 1].
-    Kuzu's vector_search returns distance internally and converts the
-    threshold to a distance cap — this test asserts the conversion is
-    correct when the index uses cosine metric and the vectors are
-    unit-norm (which _basis_vector produces and Voyage-3 guarantees).
+    Kuzu's vector_search converts the threshold to an internal distance cap
+    and returns uniform ``score`` (cosine similarity) in the public result —
+    this test asserts the filtering is correct when the index uses cosine
+    metric and the vectors are unit-norm (which _basis_vector produces and
+    Voyage-3 guarantees).
     """
     query = _basis_vector(0)
     results = seeded_backend.vector_search(
@@ -129,6 +130,23 @@ def test_vector_search_threshold_filters(seeded_backend: GraphStore) -> None:
     )
     paths = {r["node"]["path"] for r in results}
     assert paths == {"a.md", "c.md"}
+
+
+def test_vector_search_returns_score_on_both_backends(seeded_backend: GraphStore) -> None:
+    """ABC contract: returned rows carry a `score` key (cosine similarity in
+    [0, 1]) on every backend. No `distance` key is exposed."""
+    query = _basis_vector(0)
+    results = seeded_backend.vector_search(
+        label="File", property_name="embedding", query=query, k=3
+    )
+    assert len(results) > 0
+    for row in results:
+        assert "score" in row
+        assert "distance" not in row
+        assert isinstance(row["score"], int | float)
+        assert 0.0 <= row["score"] <= 1.0
+    # And the top result for the aligned query vector should be near-1 similarity.
+    assert results[0]["score"] > 0.99
 
 
 # ---------- full_text_search ----------

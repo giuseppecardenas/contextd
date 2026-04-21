@@ -272,14 +272,20 @@ class KuzuBackend(GraphStore):
         # against the expected INT64 parameter type.
         #
         # The ABC's `threshold` is expressed as cosine similarity (0..1, higher
-        # is better) to match Memgraph's contract. On Kuzu this is converted to
-        # a distance cap. The conversion is only correct when:
+        # is better) to match Memgraph's contract. Internally, we convert to a
+        # distance cap for the server-side filter. The conversion is only correct
+        # when:
         #   - the index was declared with `metric := 'cosine'` (baseline is), AND
         #   - query and indexed vectors are unit-normalised (Voyage-3 output is).
         # Under both conditions, cosine_distance = 1 - cosine_similarity, so the
         # similarity-threshold >= t filter becomes a distance <= (1 - t) filter.
-        # A callers that passes arbitrary-norm vectors through a Kuzu backend
-        # gets unexpected ranking; the invariant is documented but not enforced.
+        # A caller that passes arbitrary-norm vectors through a Kuzu backend gets
+        # unexpected ranking; the invariant is documented but not enforced.
+        #
+        # Public return: {"node": ..., "score": <cosine similarity in [0, 1]>}
+        # consistent with MemgraphBackend. The 1 - distance transformation is
+        # applied at the return boundary; row order (ascending distance ==
+        # descending similarity) is preserved under the monotone transformation.
         validate_identifier(label, kind="label")
         validate_identifier(property_name, kind="property_name")
         validate_search_k(k)
@@ -294,7 +300,14 @@ class KuzuBackend(GraphStore):
         if validated_threshold is not None:
             distance_cap = 1.0 - validated_threshold
             rows = [r for r in rows if r["distance"] <= distance_cap]
-        return rows
+        # Normalise to the ABC's score contract (cosine similarity 0..1, higher
+        # is better). The server already ranked by ascending distance, which is
+        # equivalent to descending similarity, so row order is preserved under
+        # the 1 - distance transformation.
+        normalised: list[dict[str, Any]] = [
+            {"node": r["node"], "score": 1.0 - float(r["distance"])} for r in rows
+        ]
+        return normalised
 
     def full_text_search(
         self,

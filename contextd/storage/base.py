@@ -123,14 +123,12 @@ class GraphStore(ABC):
 
         ``threshold`` is a cosine-similarity floor in ``[0.0, 1.0]`` (higher is
         more similar). Implementations MUST raise ``ValueError`` on non-finite
-        inputs. The returned dicts have ``node`` and ``score`` keys on backends
-        that expose similarity, or ``node`` and ``distance`` keys on backends
-        whose index procedure returns distance (Kuzu) — see backend docstrings.
-
-        The similarity↔distance conversion Kuzu performs internally assumes
-        the index was declared with ``metric := 'cosine'`` and that both the
-        stored and query vectors are unit-normalised. Voyage-3 embeddings
-        satisfy both; arbitrary-norm vectors will rank unpredictably on Kuzu.
+        inputs. The returned dicts have ``node`` and ``score`` keys on both
+        backends. ``score`` is cosine similarity in ``[0, 1]`` (higher is more
+        similar). Kuzu's index procedure natively returns distance; the backend
+        converts to similarity internally. The conversion assumes the index was
+        declared with ``metric := 'cosine'`` and that stored + query vectors are
+        unit-normalised — Voyage-3 satisfies both.
         """
 
     @abstractmethod
