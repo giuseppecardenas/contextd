@@ -23,6 +23,24 @@ class BootstrapResult:
 _DEFAULT_EXCLUDE_DIRS = frozenset({".git", ".venv", "__pycache__", "node_modules"})
 
 
+def _partition_markdown(files: list[Path]) -> tuple[list[Path], list[Path]]:
+    """Split *files* into (markdown, non_markdown) by suffix.
+
+    Used in section-granular mode to route .md files through the
+    section-level phase pipeline and all other files through the
+    file-granular phase pipeline.  Order within each bucket is preserved
+    so that phase stat counts are deterministic.
+    """
+    md: list[Path] = []
+    other: list[Path] = []
+    for f in files:
+        if f.suffix == ".md":
+            md.append(f)
+        else:
+            other.append(f)
+    return md, other
+
+
 def enumerate_corpus_files(corpus: CorpusConfig) -> list[Path]:
     """Expand the corpus's include globs into a list of files.
 
@@ -60,21 +78,37 @@ def run_bootstrap(
     files = enumerate_corpus_files(corpus)
     results: list[phases.PhaseResult] = []
     if corpus.corpus.granularity == "section":
-        # Section-granular path (spec §5.11).
+        # Section-granular path (spec §5.11 + M10.9).
+        #
+        # Non-.md files cannot have sections (the heading parser yields zero
+        # sections for Lua, TOML, etc.).  They are routed through the
+        # file-granular phase pipeline instead so their File.summary is
+        # populated and they remain searchable.
+        #
+        # Partition: md_files → section pipeline; other_files → file pipeline.
+        md_files, other_files = _partition_markdown(files)
+
+        # --- Section pipeline for .md files ---
         # Embedder passed to phase_enumerate_sections so that Section.embedding
         # is included at CREATE time.
-        results.append(phases.phase_enumerate_sections(files, corpus, store, embedder, hasher))
-        # SD #74: drop stale Section nodes before the rest of the section-mode
-        # phases run. Must sit AFTER enumerate (so current-pass sections are
-        # already written and will not be collected as stale) and BEFORE
-        # summarise/relate (so the wipe-and-replace inferred-edge step doesn't
-        # briefly leave stale nodes reachable via describe_project).
-        results.append(phases.phase_gc_sections(files, corpus, store))
-        # M9.2 stubs — real implementations land in Task 9.2.
+        results.append(phases.phase_enumerate_sections(md_files, corpus, store, embedder, hasher))
+        # SD #74: drop stale Section nodes (only .md files produce sections).
+        results.append(phases.phase_gc_sections(md_files, corpus, store))
+        # Accounting phase: Section embeddings written at CREATE time.
         results.append(phases.phase_embed_sections(corpus, store))
         results.append(phases.phase_summarise_sections(corpus, summariser, store))
         results.append(phases.phase_relate_sections(corpus, inferrer, store, entity_sampler))
         results.append(phases.phase_derive_file_level(corpus, store))
+
+        # --- File-granular pipeline for non-.md files ---
+        if other_files:
+            results.append(
+                phases.phase_enumerate(other_files, corpus.corpus.name, hasher, store, embedder)
+            )
+            results.append(phases.phase_embed(other_files))
+            results.append(phases.phase_summarise(other_files, summariser, store))
+            results.append(phases.phase_relate(other_files, inferrer, store, entity_sampler))
+
         results.append(phases.phase_close(corpus.corpus.name, store, results))
     else:
         # File-granular path (default, spec §5.9).

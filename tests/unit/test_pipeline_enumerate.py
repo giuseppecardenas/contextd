@@ -1,4 +1,4 @@
-"""Unit tests for enumerate_corpus_files — the dotfile / symlink guards."""
+"""Unit tests for enumerate_corpus_files and _partition_markdown."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 
 from contextd.corpus_config import CorpusConfig
-from contextd.indexer.pipeline import enumerate_corpus_files
+from contextd.indexer.pipeline import _partition_markdown, enumerate_corpus_files
 
 
 def _cfg(root: Path, include: list[str] | None = None) -> CorpusConfig:
@@ -67,3 +67,63 @@ def test_skips_symlinks(tmp_path: Path) -> None:
     assert "target.md" in names
     # The symlink is skipped even though it would glob to *.md.
     assert "link.md" not in names
+
+
+# ---------------------------------------------------------------------------
+# _partition_markdown
+# ---------------------------------------------------------------------------
+
+
+def test_partition_markdown_splits_on_suffix(tmp_path: Path) -> None:
+    """Markdown files go into the first bucket; everything else into second."""
+    a = tmp_path / "a.md"
+    b = tmp_path / "b.lua"
+    c = tmp_path / "c.md"
+    d = tmp_path / "d.toml"
+    for p in (a, b, c, d):
+        p.write_text("x")
+
+    md, other = _partition_markdown([a, b, c, d])
+    assert md == [a, c]
+    assert other == [b, d]
+
+
+def test_partition_markdown_empty_input() -> None:
+    """Empty list returns two empty lists."""
+    md, other = _partition_markdown([])
+    assert md == []
+    assert other == []
+
+
+def test_partition_markdown_all_markdown(tmp_path: Path) -> None:
+    """All .md → first bucket; second bucket is empty."""
+    files = [tmp_path / f"f{i}.md" for i in range(3)]
+    for f in files:
+        f.write_text("x")
+
+    md, other = _partition_markdown(files)
+    assert md == files
+    assert other == []
+
+
+def test_partition_markdown_no_markdown(tmp_path: Path) -> None:
+    """No .md files → first bucket is empty; second has all files."""
+    files = [tmp_path / "a.lua", tmp_path / "b.toml", tmp_path / "c.rs"]
+    for f in files:
+        f.write_text("x")
+
+    md, other = _partition_markdown(files)
+    assert md == []
+    assert other == files
+
+
+def test_partition_markdown_preserves_order(tmp_path: Path) -> None:
+    """Relative order within each bucket matches the input order."""
+    names = ["z.md", "a.lua", "m.md", "b.lua", "k.md"]
+    paths = [tmp_path / n for n in names]
+    for p in paths:
+        p.write_text("x")
+
+    md, other = _partition_markdown(paths)
+    assert [p.name for p in md] == ["z.md", "m.md", "k.md"]
+    assert [p.name for p in other] == ["a.lua", "b.lua"]

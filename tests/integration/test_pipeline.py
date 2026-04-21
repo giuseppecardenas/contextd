@@ -493,3 +493,112 @@ def test_index_with_ontology_overrides_uses_canonical_edge_names(
     assert cites_rows[0]["c"] == 0, (
         f"CITES edges must not exist after alias resolution, got {cites_rows[0]['c']}"
     )
+
+
+def test_section_granular_mixed_extensions_routes_correctly(backend, tmp_path: Path) -> None:
+    """M10.9: non-.md files in a section-granular corpus are routed through
+    the file-granular phase pipeline so that File.summary is populated and
+    they are searchable.  .md files still receive Section children; non-.md
+    files receive none.
+    """
+    from contextd.corpus_config import CorpusConfig
+    from contextd.indexer.hasher import FileHasher
+    from contextd.indexer.pipeline import run_bootstrap
+    from contextd.inference.summarise import FileSummary
+
+    corpus_root = tmp_path / "corpus"
+    corpus_root.mkdir()
+
+    # Two .md files — each with 2 sections.
+    (corpus_root / "doc1.md").write_text(
+        "# Doc1\n\n## §A First\n\nbody a\n\n## §B Second\n\nbody b\n"
+    )
+    (corpus_root / "doc2.md").write_text(
+        "# Doc2\n\n## §C Third\n\nbody c\n\n## §D Fourth\n\nbody d\n"
+    )
+
+    # Two .lua files — no headings; heading parser yields zero sections.
+    (corpus_root / "mod1.lua").write_text("-- mod1\nregister_pattern('foo')\n")
+    (corpus_root / "mod2.lua").write_text("-- mod2\nregister_pattern('bar')\n")
+
+    cfg = CorpusConfig.model_validate(
+        {
+            "corpus": {
+                "name": "mixed",
+                "root": str(corpus_root),
+                "include": ["*.md", "*.lua"],
+                "granularity": "section",
+                "heading_min_level": 2,
+                "heading_max_level": 4,
+            },
+        }
+    )
+
+    # Embedder returns a fresh 1024-dim vector for any batch size.
+    def _embed(texts: list[str]) -> list[list[float]]:
+        return [[0.1] * 1024 for _ in texts]
+
+    fake_embedder = MagicMock()
+    fake_embedder.embed.side_effect = _embed
+
+    fake_summariser = MagicMock()
+    fake_summariser.summarise.return_value = FileSummary(
+        summary="stub_summary", key_points=[], entities_mentioned=[]
+    )
+    fake_inferrer = MagicMock()
+    fake_inferrer.infer.return_value = []
+
+    run_bootstrap(
+        corpus=cfg,
+        store=backend,
+        embedder=fake_embedder,
+        summariser=fake_summariser,
+        inferrer=fake_inferrer,
+        hasher=FileHasher(),
+        entity_sampler=lambda _s: [],
+    )
+
+    # All 4 File nodes must exist.
+    file_rows = backend.exec_read(
+        "MATCH (f:File {corpus: $c}) RETURN f.path AS path, f.summary AS summary, "
+        "f.hash AS hash ORDER BY f.name",
+        {"c": "mixed"},
+    )
+    assert len(file_rows) == 4, f"expected 4 File nodes, got {len(file_rows)}"
+
+    # File.summary populated for ALL four files.
+    for row in file_rows:
+        assert row["summary"] is not None and row["summary"] != "", (
+            f"File.summary missing for {row['path']}"
+        )
+
+    # File.hash is a real MD5 (32 hex chars) for all four.
+    for row in file_rows:
+        h = row["hash"]
+        assert h != "__pending__" and len(h) == 32, f"File.hash invalid for {row['path']}: {h!r}"
+
+    # .md files have Section children; .lua files have none.
+    section_rows = backend.exec_read(
+        "MATCH (f:File {corpus: $c})-[:CONTAINS]->(s:Section) "
+        "RETURN f.path AS fp, s.title AS title",
+        {"c": "mixed"},
+    )
+    section_parent_paths = {row["fp"] for row in section_rows}
+
+    md_paths = {str(corpus_root / n) for n in ("doc1.md", "doc2.md")}
+    lua_paths = {str(corpus_root / n) for n in ("mod1.lua", "mod2.lua")}
+
+    # Both .md files must have Section children.
+    assert md_paths <= section_parent_paths, (
+        f".md files missing from Section parents: {md_paths - section_parent_paths}"
+    )
+    # No .lua file may be a Section parent.
+    assert not (lua_paths & section_parent_paths), (
+        f".lua files unexpectedly have Section children: {lua_paths & section_parent_paths}"
+    )
+
+    # Exactly 4 Sections total (2 per .md file).
+    total_sections = backend.exec_read(
+        "MATCH (s:Section {corpus: $c}) RETURN count(s) AS c", {"c": "mixed"}
+    )
+    assert total_sections[0]["c"] == 4, f"expected 4 sections, got {total_sections[0]['c']}"

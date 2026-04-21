@@ -21,11 +21,18 @@ phase_gc_sections runs after enumerate in section mode to DETACH-DELETE
 Section nodes whose anchor is no longer produced by the parser (heading
 renamed between re-indexes). Without this, stale Section nodes accumulate
 and pollute ``describe_project``.
+
+M10.9: non-.md files in section-granular corpora are routed through the
+file-granular phase pipeline by ``run_bootstrap`` in ``pipeline.py``.
+``phase_enumerate_sections`` includes a defence-in-depth guard that logs a
+warning and skips any non-.md file that reaches it, preventing accidental
+mis-routing by future callers.
 """
 
 from __future__ import annotations
 
 import datetime as dt
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,6 +45,8 @@ from contextd.inference.summarise import Summariser
 from contextd.providers.base import EmbeddingProvider
 from contextd.storage._keys import primary_key_for
 from contextd.storage.base import GraphStore
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -210,6 +219,21 @@ def phase_enumerate_sections(
         min_level=corpus_cfg.corpus.heading_min_level,
         max_level=corpus_cfg.corpus.heading_max_level,
     )
+
+    # Defence-in-depth (M10.9): non-.md files yield zero sections and would
+    # leave File.summary NULL.  The caller (run_bootstrap) partitions files
+    # before calling this function; this guard catches future mis-routing.
+    md_files: list[Path] = []
+    for f in files:
+        if f.suffix != ".md":
+            _log.warning(
+                "phase_enumerate_sections: skipping non-markdown file %s "
+                "(route through phase_enumerate instead)",
+                f,
+            )
+        else:
+            md_files.append(f)
+    files = md_files
 
     # Collect all sections for all files first so we can batch-embed in one pass.
     parsed_by_file: list[tuple[Path, list[ParsedSection]]] = [
