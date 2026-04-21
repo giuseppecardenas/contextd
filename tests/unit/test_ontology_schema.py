@@ -43,6 +43,15 @@ def test_alias_resolution(tmp_path: Path) -> None:
     assert onto.resolve_alias("File") == "File"  # non-alias passes through
 
 
+def test_with_aliases_rejects_unknown_target() -> None:
+    """An alias whose target isn't a real node type must fail loudly —
+    otherwise a typo in a per-corpus config would silently resolve to a
+    hallucinated label and bypass validation at write time."""
+    onto = Ontology.load_base()
+    with pytest.raises(OntologyError, match="unknown node type 'Widgt'"):
+        onto.with_aliases({"FileWidget": "Widgt"})
+
+
 # --- immutability tests (SD #63) ---
 
 

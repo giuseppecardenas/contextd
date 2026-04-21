@@ -97,3 +97,46 @@ def test_index_incremental_prints_not_implemented(
         result = CliRunner().invoke(contextd.cli.cli, ["index", "docs", "--incremental"])
     assert result.exit_code == 0, result.output
     assert "not yet implemented" in result.output
+
+
+def test_index_bootstrap_prints_per_phase_results(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`contextd index <corpus> --bootstrap` must invoke run_bootstrap and
+    render a green-check per phase. Covers the else-branch that the existing
+    three tests (estimate-only, error paths, incremental stub) don't touch."""
+    home = _setup_home(tmp_path, monkeypatch)
+    corpus_root = tmp_path / "docs"
+    corpus_root.mkdir()
+    (corpus_root / "a.md").write_text("hello")
+    _register_corpus(home, "docs", corpus_root)
+
+    # Canned BootstrapResult — 5 phases matching the file-mode pipeline.
+    from contextd.indexer.phases import PhaseResult
+    from contextd.indexer.pipeline import BootstrapResult
+
+    canned = BootstrapResult(
+        phases=[
+            PhaseResult(name="enumerate", processed=3, skipped=0),
+            PhaseResult(name="embed", processed=3, skipped=0),
+            PhaseResult(name="summarise", processed=2, skipped=1),
+            PhaseResult(name="relate", processed=3, skipped=0),
+            PhaseResult(name="close", processed=1, skipped=0),
+        ]
+    )
+
+    with (
+        patch("contextd.providers.factory.build_inference_provider"),
+        patch("contextd.providers.factory.build_embedding_provider"),
+        patch("contextd.storage.factory.build_graph_store") as mock_store,
+        patch("contextd.indexer.pipeline.run_bootstrap", return_value=canned) as mock_run,
+    ):
+        mock_store.return_value = MagicMock()
+        result = CliRunner().invoke(contextd.cli.cli, ["index", "docs", "--bootstrap"])
+    assert result.exit_code == 0, result.output
+    assert mock_run.called
+    # One green-check line per phase.
+    for phase_name in ("enumerate", "embed", "summarise", "relate", "close"):
+        assert phase_name in result.output
+    # skipped count for summarise surfaces in output.
+    assert "skipped=1" in result.output

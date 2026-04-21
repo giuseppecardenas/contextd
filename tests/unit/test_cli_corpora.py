@@ -74,22 +74,51 @@ def test_add_corpus_default_name_is_basename(
 
 
 def test_add_corpus_refuses_duplicate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _setup_home(tmp_path, monkeypatch)
+    home = _setup_home(tmp_path, monkeypatch)
     corpus_dir = tmp_path / "dup"
     corpus_dir.mkdir()
     runner = CliRunner()
     first = runner.invoke(contextd.cli.cli, ["add-corpus", str(corpus_dir)])
     assert first.exit_code == 0
+    # Capture the on-disk file's mtime + bytes before the duplicate attempt.
+    toml_path = home / "corpora" / "dup.toml"
+    before_bytes = toml_path.read_bytes()
+    before_mtime = toml_path.stat().st_mtime_ns
     second = runner.invoke(contextd.cli.cli, ["add-corpus", str(corpus_dir)])
     assert second.exit_code == 0  # warns but doesn't error
     assert "already registered" in second.output
+    # Duplicate attempt must NOT have rewritten the TOML — guards against
+    # an accidental early-return reorder that lets write_bytes run first.
+    assert toml_path.read_bytes() == before_bytes
+    assert toml_path.stat().st_mtime_ns == before_mtime
+
+
+def test_list_corpora_when_corpora_dir_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`contextd list-corpora` before `contextd init` gave a specific
+    'run `contextd init` first' message. Covers the absent branch."""
+    home = tmp_path / ".contextd"
+    home.mkdir()
+    # Deliberately do NOT mkdir corpora/.
+    (home / "config.toml").write_text(
+        f'[storage]\nbackend = "kuzu"\n\n[storage.kuzu]\ndb_path = "{home}/graph"\n'
+    )
+    monkeypatch.setenv("CONTEXTD_HOME", str(home))
+    reload(contextd.cli)
+    result = CliRunner().invoke(contextd.cli.cli, ["list-corpora"])
+    assert result.exit_code == 0
+    assert "run `contextd init` first" in result.output
 
 
 def test_list_corpora_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _setup_home(tmp_path, monkeypatch)
+    """corpora/ present but empty — exercises the second-branch message
+    separately from the missing-dir branch above."""
+    home = _setup_home(tmp_path, monkeypatch)
+    (home / "corpora").mkdir()  # present-but-empty, unlike the "missing" case
     result = CliRunner().invoke(contextd.cli.cli, ["list-corpora"])
     assert result.exit_code == 0
-    assert "no corpora" in result.output.lower()
+    assert "no corpora registered yet" in result.output
 
 
 def test_list_corpora_shows_registered(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
