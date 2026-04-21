@@ -1,4 +1,3 @@
-from importlib import reload
 from pathlib import Path
 
 import pytest
@@ -11,8 +10,6 @@ def test_init_creates_layout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setenv("CONTEXTD_HOME", str(tmp_path / ".contextd"))
     monkeypatch.setenv("GEMINI_API_KEY", "x")
     monkeypatch.setenv("VOYAGE_API_KEY", "y")
-    # Re-import to pick up the CONTEXTD_HOME env var (computed at module-import time).
-    reload(contextd.cli)
     runner = CliRunner()
     result = runner.invoke(contextd.cli.cli, ["init", "--yes"])
     assert result.exit_code == 0
@@ -28,7 +25,6 @@ def test_init_is_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setenv("CONTEXTD_HOME", str(tmp_path / ".contextd"))
     monkeypatch.setenv("GEMINI_API_KEY", "x")
     monkeypatch.setenv("VOYAGE_API_KEY", "y")
-    reload(contextd.cli)
     runner = CliRunner()
 
     result1 = runner.invoke(contextd.cli.cli, ["init", "--yes"])

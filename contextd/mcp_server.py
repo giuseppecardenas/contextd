@@ -4,10 +4,10 @@ Spawned by MCP clients (Claude Desktop, Cursor) over stdio. Each tool
 is registered with a JSON schema so clients can introspect the
 surface. Tool bodies delegate to contextd.mcp.tools.
 
-Known limitation (Delta C): importing CONTEXTD_HOME from contextd.cli pulls in
-click, rich, and all CLI-command side-effects at MCP startup. Moving
-CONTEXTD_HOME to a standalone utility module is deferred to the M6
-refactor backlog — acceptable for single-user local use.
+The home-directory accessor ``contextd_home()`` is imported from
+``contextd._paths`` rather than ``contextd.cli`` so the MCP process
+doesn't pull in click/rich — SD #69 fixed the Delta-C import coupling
+that existed in the initial M7.3 implementation.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool
 
-from contextd.cli import CONTEXTD_HOME
+from contextd._paths import contextd_home
 from contextd.config import Config
 from contextd.mcp import tools
 from contextd.storage.base import GraphStore
@@ -155,9 +155,10 @@ def _dispatch_tool(name: str, arguments: dict[str, Any], store: GraphStore) -> A
 
 
 async def run() -> None:
+    home = contextd_home()
     cfg = (
-        Config.load(CONTEXTD_HOME / "config.toml")
-        if (CONTEXTD_HOME / "config.toml").exists()
+        Config.load(home / "config.toml")
+        if (home / "config.toml").exists()
         else Config.load_default()
     )
     store = build_graph_store(cfg)

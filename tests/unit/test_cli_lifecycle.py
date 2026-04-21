@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from importlib import reload
 from pathlib import Path
 from unittest.mock import patch
 
@@ -46,7 +45,6 @@ name = "demo"
 root = "/tmp/demo"
 """)
     monkeypatch.setenv("CONTEXTD_HOME", str(home))
-    reload(contextd.cli)
     result = CliRunner().invoke(contextd.cli.cli, ["status"])
     assert result.exit_code == 0
     assert "demo" in result.output
@@ -56,7 +54,6 @@ root = "/tmp/demo"
 def test_status_no_corpora(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     home = _setup_contextd_home(tmp_path, backend="kuzu")
     monkeypatch.setenv("CONTEXTD_HOME", str(home))
-    reload(contextd.cli)
     result = CliRunner().invoke(contextd.cli.cli, ["status"])
     assert result.exit_code == 0
     assert "kuzu" in result.output
@@ -68,7 +65,6 @@ def test_up_kuzu_creates_db_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     # parent directory; the actual DB file is created by KuzuBackend.connect().
     home = _setup_contextd_home(tmp_path, backend="kuzu")
     monkeypatch.setenv("CONTEXTD_HOME", str(home))
-    reload(contextd.cli)
     result = CliRunner().invoke(contextd.cli.cli, ["up"])
     assert result.exit_code == 0, result.output
     # Parent dir did NOT pre-exist — `up` must have created it. Falsifiable.
@@ -79,7 +75,6 @@ def test_up_kuzu_creates_db_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 def test_up_memgraph_calls_docker_compose(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     home = _setup_contextd_home(tmp_path, backend="memgraph")
     monkeypatch.setenv("CONTEXTD_HOME", str(home))
-    reload(contextd.cli)
     with (
         patch("subprocess.run") as mock_run,
         patch("contextd.storage.factory.build_graph_store") as mock_build,
@@ -97,7 +92,6 @@ def test_up_memgraph_calls_docker_compose(tmp_path: Path, monkeypatch: pytest.Mo
 def test_down_kuzu_prints_stopped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     home = _setup_contextd_home(tmp_path, backend="kuzu")
     monkeypatch.setenv("CONTEXTD_HOME", str(home))
-    reload(contextd.cli)
     result = CliRunner().invoke(contextd.cli.cli, ["down"])
     assert result.exit_code == 0
     assert "stopped" in result.output
@@ -108,7 +102,6 @@ def test_down_memgraph_calls_docker_compose_down(
 ) -> None:
     home = _setup_contextd_home(tmp_path, backend="memgraph")
     monkeypatch.setenv("CONTEXTD_HOME", str(home))
-    reload(contextd.cli)
     with patch("subprocess.run") as mock_run:
         result = CliRunner().invoke(contextd.cli.cli, ["down"])
     assert result.exit_code == 0
@@ -122,7 +115,6 @@ def test_up_memgraph_without_docker_raises_clickexception(
     clean ClickException instead of a FileNotFoundError traceback."""
     home = _setup_contextd_home(tmp_path, backend="memgraph")
     monkeypatch.setenv("CONTEXTD_HOME", str(home))
-    reload(contextd.cli)
     with patch("shutil.which", return_value=None):
         result = CliRunner().invoke(contextd.cli.cli, ["up"])
     assert result.exit_code != 0

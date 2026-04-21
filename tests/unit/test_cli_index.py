@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from importlib import reload
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -23,7 +22,6 @@ def _setup_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (home / "state").mkdir()
     (home / "prompts").mkdir()
     monkeypatch.setenv("CONTEXTD_HOME", str(home))
-    reload(contextd.cli)
     return home
 
 

@@ -19,6 +19,8 @@ from typing import TYPE_CHECKING
 import click
 from rich.console import Console
 
+from contextd._paths import contextd_home
+
 if TYPE_CHECKING:
     from contextd.config import Config
     from contextd.corpus_config import CorpusConfig
@@ -28,7 +30,6 @@ if TYPE_CHECKING:
     from contextd.providers.base import EmbeddingProvider
     from contextd.storage.base import GraphStore
 
-CONTEXTD_HOME = Path(os.environ.get("CONTEXTD_HOME", str(Path.home() / ".contextd")))
 console = Console()
 
 
@@ -52,7 +53,7 @@ def _load_cfg() -> Config:
     """Load user config.toml with fallback to packaged default."""
     from contextd.config import Config
 
-    path = CONTEXTD_HOME / "config.toml"
+    path = contextd_home() / "config.toml"
     return Config.load(path) if path.exists() else Config.load_default()
 
 
@@ -65,7 +66,7 @@ def cli() -> None:
 @click.option("--yes", is_flag=True, help="Accept all defaults non-interactively.")
 def init(yes: bool) -> None:
     """First-run wizard — creates ~/.contextd/ layout and registers MCP."""
-    home = CONTEXTD_HOME
+    home = contextd_home()
     for sub in ("corpora", "state", "state/session-log", "state/checkpoints", "logs", "prompts"):
         (home / sub).mkdir(parents=True, exist_ok=True)
     console.print(f"[green]✓[/] created {home} layout")
@@ -170,7 +171,7 @@ def status() -> None:
     """Report daemon + backend + corpora state."""
     cfg = _load_cfg()
     console.print(f"[bold]backend:[/] {cfg.storage.backend}")
-    corpora_dir = CONTEXTD_HOME / "corpora"
+    corpora_dir = contextd_home() / "corpora"
     if corpora_dir.exists():
         corpora = list(corpora_dir.glob("*.toml"))
         console.print(f"[bold]corpora:[/] {len(corpora)} registered")
@@ -188,7 +189,7 @@ def add_corpus(path: Path, name: str | None, granularity: str) -> None:
     """Register a corpus for indexing."""
     import tomli_w
 
-    corpora_dir = CONTEXTD_HOME / "corpora"
+    corpora_dir = contextd_home() / "corpora"
     corpora_dir.mkdir(parents=True, exist_ok=True)
     resolved_name = name or path.resolve().name
     corpus_toml = corpora_dir / f"{resolved_name}.toml"
@@ -217,7 +218,7 @@ def add_corpus(path: Path, name: str | None, granularity: str) -> None:
 @cli.command("list-corpora")
 def list_corpora() -> None:
     """List registered corpora."""
-    corpora_dir = CONTEXTD_HOME / "corpora"
+    corpora_dir = contextd_home() / "corpora"
     if not corpora_dir.exists():
         console.print("no corpora registered (run `contextd init` first).")
         return
@@ -242,13 +243,13 @@ def _build_pipeline_deps(cfg: Config, corpus_cfg: CorpusConfig, corpus_name: str
 
     inference_provider = build_inference_provider(cfg)
     embedding_provider = build_embedding_provider(cfg)
-    renderer = PromptRenderer(CONTEXTD_HOME / "prompts")
+    renderer = PromptRenderer(contextd_home() / "prompts")
     ontology = Ontology.load_base().with_aliases(corpus_cfg.ontology.aliases)
     max_words = corpus_cfg.summarization.max_words or cfg.inference.summary_max_words
     return PipelineDeps(
         summariser=Summariser(inference_provider, renderer, max_words=max_words),
         inferrer=RelationshipInferrer(inference_provider, renderer, ontology),
-        hasher=FileHasher(state_path=CONTEXTD_HOME / "state" / f"{corpus_name}-index-state.json"),
+        hasher=FileHasher(state_path=contextd_home() / "state" / f"{corpus_name}-index-state.json"),
         embedder=embedding_provider,
         store=build_graph_store(cfg),
     )
@@ -265,7 +266,7 @@ def index(corpus_name: str, bootstrap: bool, incremental: bool, estimate_only: b
     from contextd.indexer.pipeline import enumerate_corpus_files, run_bootstrap
 
     cfg = _load_cfg()
-    corpus_toml = CONTEXTD_HOME / "corpora" / f"{corpus_name}.toml"
+    corpus_toml = contextd_home() / "corpora" / f"{corpus_name}.toml"
     if not corpus_toml.exists():
         raise click.ClickException(
             f"corpus {corpus_name!r} not registered."
@@ -332,7 +333,7 @@ def ask(question: str, corpus: str | None) -> None:
     cfg = _load_cfg()
     translator = QueryTranslator(
         provider=build_inference_provider(cfg),
-        renderer=PromptRenderer(CONTEXTD_HOME / "prompts"),
+        renderer=PromptRenderer(contextd_home() / "prompts"),
         ontology=Ontology.load_base(),
     )
     try:
@@ -356,7 +357,7 @@ def ask(question: str, corpus: str | None) -> None:
 @click.option("--follow", is_flag=True)
 def logs(follow: bool) -> None:
     """Tail the structured JSON log."""
-    log_path = CONTEXTD_HOME / "logs" / "contextd.log"
+    log_path = contextd_home() / "logs" / "contextd.log"
     if not log_path.exists():
         console.print(f"no log at {log_path}")
         return
@@ -377,7 +378,7 @@ def costs(since: str | None) -> None:
     """Aggregated provider token spend."""
     from contextd.providers.cost_log import CostLog
 
-    log = CostLog(CONTEXTD_HOME / "state" / "session-log")
+    log = CostLog(contextd_home() / "state" / "session-log")
     totals = log.aggregate(since=since)
     if not totals:
         console.print("no usage recorded yet.")

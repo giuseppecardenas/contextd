@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import tomllib
-from importlib import reload
 from pathlib import Path
 
 import pytest
@@ -19,7 +18,6 @@ def _setup_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         '[storage]\nbackend = "kuzu"\n\n[storage.kuzu]\ndb_path = "' + str(home) + '/graph"\n'
     )
     monkeypatch.setenv("CONTEXTD_HOME", str(home))
-    reload(contextd.cli)
     return home
 
 
@@ -105,7 +103,6 @@ def test_list_corpora_when_corpora_dir_missing(
         f'[storage]\nbackend = "kuzu"\n\n[storage.kuzu]\ndb_path = "{home}/graph"\n'
     )
     monkeypatch.setenv("CONTEXTD_HOME", str(home))
-    reload(contextd.cli)
     result = CliRunner().invoke(contextd.cli.cli, ["list-corpora"])
     assert result.exit_code == 0
     assert "run `contextd init` first" in result.output

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from importlib import reload
 from pathlib import Path
 from unittest.mock import patch
 
@@ -40,7 +39,6 @@ db_path = "{home}/graph"
 def test_logs_no_file_prints_absent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     home = _setup_home(tmp_path)
     monkeypatch.setenv("CONTEXTD_HOME", str(home))
-    reload(contextd.cli)
     result = CliRunner().invoke(contextd.cli.cli, ["logs"])
     assert result.exit_code == 0
     assert "no log at" in result.output
@@ -51,7 +49,6 @@ def test_logs_prints_content(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     log_path = home / "logs" / "contextd.log"
     log_path.write_text('{"level":"info","msg":"hello"}\n')
     monkeypatch.setenv("CONTEXTD_HOME", str(home))
-    reload(contextd.cli)
     result = CliRunner().invoke(contextd.cli.cli, ["logs"])
     assert result.exit_code == 0
     assert "hello" in result.output
@@ -62,7 +59,6 @@ def test_logs_follow_shells_out(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     log_path = home / "logs" / "contextd.log"
     log_path.write_text("line\n")
     monkeypatch.setenv("CONTEXTD_HOME", str(home))
-    reload(contextd.cli)
     with patch("subprocess.run") as mock_run:
         result = CliRunner().invoke(contextd.cli.cli, ["logs", "--follow"])
     assert result.exit_code == 0
@@ -81,7 +77,6 @@ def test_logs_follow_shells_out(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
 def test_costs_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     home = _setup_home(tmp_path)
     monkeypatch.setenv("CONTEXTD_HOME", str(home))
-    reload(contextd.cli)
     result = CliRunner().invoke(contextd.cli.cli, ["costs"])
     assert result.exit_code == 0
     assert "no usage recorded yet" in result.output
@@ -101,7 +96,6 @@ def test_costs_shows_totals(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     )
     cost_log.append(record)
     monkeypatch.setenv("CONTEXTD_HOME", str(home))
-    reload(contextd.cli)
     result = CliRunner().invoke(contextd.cli.cli, ["costs"])
     assert result.exit_code == 0
     assert "gemini" in result.output
@@ -117,7 +111,6 @@ def test_costs_shows_totals(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
 def test_ask_help_works(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     home = _setup_home(tmp_path)
     monkeypatch.setenv("CONTEXTD_HOME", str(home))
-    reload(contextd.cli)
     result = CliRunner().invoke(contextd.cli.cli, ["ask", "--help"])
     assert result.exit_code == 0
     assert "QUESTION" in result.output
@@ -131,7 +124,6 @@ def test_ask_translation_failure_raises_clickexception(
     home = _setup_home(tmp_path)
     (home / "prompts").mkdir(exist_ok=True)
     monkeypatch.setenv("CONTEXTD_HOME", str(home))
-    reload(contextd.cli)
     with (
         patch("contextd.inference.translate.QueryTranslator") as mock_translator_cls,
         patch("contextd.providers.factory.build_inference_provider"),
@@ -152,7 +144,6 @@ def test_ask_exec_read_failure_raises_clickexception(
     home = _setup_home(tmp_path)
     (home / "prompts").mkdir(exist_ok=True)
     monkeypatch.setenv("CONTEXTD_HOME", str(home))
-    reload(contextd.cli)
     with (
         patch("contextd.inference.translate.QueryTranslator") as mock_translator_cls,
         patch("contextd.providers.factory.build_inference_provider"),
