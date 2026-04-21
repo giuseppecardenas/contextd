@@ -12,12 +12,24 @@ import shutil
 import subprocess
 from importlib import resources
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
 from rich.console import Console
 
+if TYPE_CHECKING:
+    from contextd.config import Config
+
 CONTEXTD_HOME = Path(os.environ.get("CONTEXTD_HOME", str(Path.home() / ".contextd")))
 console = Console()
+
+
+def _load_cfg() -> Config:
+    """Load user config.toml with fallback to packaged default."""
+    from contextd.config import Config
+
+    path = CONTEXTD_HOME / "config.toml"
+    return Config.load(path) if path.exists() else Config.load_default()
 
 
 @click.group()
@@ -81,13 +93,7 @@ def init(yes: bool) -> None:
 @cli.command()
 def up() -> None:
     """Start the storage backend and the indexer daemon."""
-    from contextd.config import Config
-
-    cfg = (
-        Config.load(CONTEXTD_HOME / "config.toml")
-        if (CONTEXTD_HOME / "config.toml").exists()
-        else Config.load_default()
-    )
+    cfg = _load_cfg()
 
     if cfg.storage.backend == "memgraph":
         compose_file = Path(cfg.storage.memgraph.docker_compose_file).expanduser()
@@ -121,13 +127,7 @@ def up() -> None:
 @cli.command()
 def down() -> None:
     """Stop the storage backend and indexer."""
-    from contextd.config import Config
-
-    cfg = (
-        Config.load(CONTEXTD_HOME / "config.toml")
-        if (CONTEXTD_HOME / "config.toml").exists()
-        else Config.load_default()
-    )
+    cfg = _load_cfg()
     if cfg.storage.backend == "memgraph":
         compose_file = Path(cfg.storage.memgraph.docker_compose_file).expanduser()
         subprocess.run(["docker", "compose", "-f", str(compose_file), "down"], check=False)
@@ -137,13 +137,7 @@ def down() -> None:
 @cli.command()
 def status() -> None:
     """Report daemon + backend + corpora state."""
-    from contextd.config import Config
-
-    cfg = (
-        Config.load(CONTEXTD_HOME / "config.toml")
-        if (CONTEXTD_HOME / "config.toml").exists()
-        else Config.load_default()
-    )
+    cfg = _load_cfg()
     console.print(f"[bold]backend:[/] {cfg.storage.backend}")
     corpora_dir = CONTEXTD_HOME / "corpora"
     if corpora_dir.exists():
@@ -153,6 +147,55 @@ def status() -> None:
             console.print(f"  - {c.stem}")
     else:
         console.print("[bold]corpora:[/] none (run `contextd init`)")
+
+
+@cli.command("add-corpus")
+@click.argument("path", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--name", default=None, help="Corpus name; defaults to directory basename.")
+@click.option("--granularity", type=click.Choice(["file", "section"]), default="file")
+def add_corpus(path: Path, name: str | None, granularity: str) -> None:
+    """Register a corpus for indexing."""
+    import tomli_w
+
+    corpora_dir = CONTEXTD_HOME / "corpora"
+    corpora_dir.mkdir(parents=True, exist_ok=True)
+    resolved_name = name or path.resolve().name
+    corpus_toml = corpora_dir / f"{resolved_name}.toml"
+    if corpus_toml.exists():
+        console.print(f"[yellow]⚠[/] corpus {resolved_name!r} already registered at {corpus_toml}")
+        return
+    data: dict[str, object] = {
+        "corpus": {
+            "name": resolved_name,
+            "root": str(path.resolve()),
+            "include": ["**/*.md"],
+            "granularity": granularity,
+        },
+    }
+    if granularity == "section":
+        assert isinstance(data["corpus"], dict)
+        data["corpus"]["heading_min_level"] = 2
+        data["corpus"]["heading_max_level"] = 4
+    corpus_toml.write_bytes(tomli_w.dumps(data).encode())
+    console.print(f"[green]✓[/] registered corpus {resolved_name!r} at {corpus_toml}")
+    console.print(f"  root: {path.resolve()}")
+    console.print(f"  granularity: {granularity}")
+    console.print(f"\n[bold]next:[/] `contextd index {resolved_name} --bootstrap`")
+
+
+@cli.command("list-corpora")
+def list_corpora() -> None:
+    """List registered corpora."""
+    corpora_dir = CONTEXTD_HOME / "corpora"
+    if not corpora_dir.exists():
+        console.print("no corpora registered (run `contextd init` first).")
+        return
+    corpora = sorted(corpora_dir.glob("*.toml"))
+    if not corpora:
+        console.print("no corpora registered yet.")
+        return
+    for c in corpora:
+        console.print(f"- {c.stem} ({c})")
 
 
 def main() -> None:
