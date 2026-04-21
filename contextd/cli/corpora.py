@@ -65,21 +65,41 @@ def list_corpora() -> None:
         console.print(f"- {c.stem} ({c})")
 
 
-def _build_pipeline_deps(cfg: Config, corpus_cfg: CorpusConfig, corpus_name: str) -> PipelineDeps:
+def _build_pipeline_deps(
+    cfg: Config,
+    corpus_cfg: CorpusConfig,
+    corpus_name: str,
+    corpus_toml_path: Path,
+) -> PipelineDeps:
     """Wire up the five collaborators the pipeline needs, honouring the
-    corpus→global→default override hierarchy for summary length."""
+    corpus→global→default override hierarchy for summary length.
+
+    ``corpus_toml_path`` is used to resolve relative ``[ontology] overrides``
+    paths — relative paths resolve relative to the TOML file's parent directory.
+    """
     from contextd.indexer.hasher import FileHasher
     from contextd.inference.prompts import PromptRenderer
     from contextd.inference.relate import RelationshipInferrer
     from contextd.inference.summarise import Summariser
-    from contextd.ontology.schema import Ontology
+    from contextd.ontology.overrides import OntologyOverridesError, apply_overrides
+    from contextd.ontology.schema import Ontology, OntologyError
     from contextd.providers.factory import build_embedding_provider, build_inference_provider
     from contextd.storage.factory import build_graph_store
 
     inference_provider = build_inference_provider(cfg)
     embedding_provider = build_embedding_provider(cfg)
     renderer = PromptRenderer(contextd_home() / "prompts")
+    # Apply node-label aliases first, then overlay edge-label aliases from the
+    # optional overrides file.  Order matters: with_aliases() → apply_overrides().
     ontology = Ontology.load_base().with_aliases(corpus_cfg.ontology.aliases)
+    if corpus_cfg.ontology.overrides is not None:
+        overrides_path = Path(corpus_cfg.ontology.overrides)
+        if not overrides_path.is_absolute():
+            overrides_path = corpus_toml_path.parent / overrides_path
+        try:
+            ontology = apply_overrides(ontology, overrides_path)
+        except (OntologyOverridesError, OntologyError) as exc:
+            raise click.ClickException(str(exc)) from exc
     max_words = corpus_cfg.summarization.max_words or cfg.inference.summary_max_words
     return PipelineDeps(
         summariser=Summariser(inference_provider, renderer, max_words=max_words),
@@ -130,7 +150,7 @@ def index(corpus_name: str, bootstrap: bool, incremental: bool, estimate_only: b
     if not (bootstrap or incremental):
         raise click.ClickException("specify --bootstrap or --incremental")
 
-    deps = _build_pipeline_deps(cfg, corpus_cfg, corpus_name)
+    deps = _build_pipeline_deps(cfg, corpus_cfg, corpus_name, corpus_toml)
     deps.store.connect()
     try:
         if bootstrap:

@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -374,3 +375,107 @@ def test_section_gc_removes_renamed_section(backend, tmp_path: Path) -> None:
     )
     assert anchors_after_second == ["a", "c"]  # §B is gone, §C is new
     assert "b" not in anchors_after_second
+
+
+def test_index_with_ontology_overrides_uses_canonical_edge_names(
+    backend: object, tmp_path: Path
+) -> None:
+    """M10.4 integration test: ontology overrides JSON declaring CITES→REFERENCES
+    causes phase_relate to store REFERENCES edges (not CITES) in the graph.
+
+    The inference provider stub emits ``edge_type="CITES"``; the overrides JSON
+    maps ``CITES → REFERENCES``; the pipeline must resolve the alias at write time
+    and produce a REFERENCES edge.  No CITES edges should exist after the run.
+    """
+    from contextd.corpus_config import CorpusConfig
+    from contextd.indexer.hasher import FileHasher
+    from contextd.indexer.pipeline import run_bootstrap
+    from contextd.inference.relate import InferredRelationship
+    from contextd.inference.summarise import FileSummary
+    from contextd.ontology.overrides import apply_overrides
+    from contextd.ontology.schema import Ontology
+
+    # Build a corpus with two markdown files.
+    corpus_root = tmp_path / "corpus"
+    corpus_root.mkdir()
+    a_path = corpus_root / "a.md"
+    b_path = corpus_root / "b.md"
+    a_path.write_text("alpha cites beta")
+    b_path.write_text("beta cites alpha")
+
+    # Build the ontology with the CITES→REFERENCES alias applied.
+    overrides_file = tmp_path / "overrides.json"
+    overrides_file.write_text(
+        json.dumps({"edge_label_aliases": {"CITES": "REFERENCES"}}), encoding="utf-8"
+    )
+    ontology = apply_overrides(Ontology.load_base(), overrides_file)
+
+    corpus_cfg = CorpusConfig.model_validate(
+        {
+            "corpus": {
+                "name": "overrides_test",
+                "root": str(corpus_root),
+                "include": ["*.md"],
+            },
+        }
+    )
+
+    fake_embedder = MagicMock()
+    fake_embedder.embed.return_value = [[0.1] * 1024, [0.2] * 1024]
+
+    fake_summariser = MagicMock()
+    fake_summariser.summarise.return_value = FileSummary(
+        summary="stub", key_points=[], entities_mentioned=[]
+    )
+
+    # Inference provider emits CITES (the alias), not REFERENCES (the canonical name).
+    def infer(content: str, known_entities: list[str]) -> list[InferredRelationship]:
+        if content.startswith("alpha"):
+            return [
+                InferredRelationship(
+                    edge_type="CITES",
+                    target_type="File",
+                    target_name=str(b_path),
+                    confidence=0.9,
+                    reason="test",
+                )
+            ]
+        return [
+            InferredRelationship(
+                edge_type="CITES",
+                target_type="File",
+                target_name=str(a_path),
+                confidence=0.9,
+                reason="test",
+            )
+        ]
+
+    fake_inferrer = MagicMock()
+    fake_inferrer.infer.side_effect = infer
+    # Attach the aliased ontology so RelationshipInferrer.infer (and the phase)
+    # resolves CITES → REFERENCES via validate_edge.
+    fake_inferrer._onto = ontology
+
+    run_bootstrap(
+        corpus=corpus_cfg,
+        store=backend,  # type: ignore[arg-type]
+        embedder=fake_embedder,
+        summariser=fake_summariser,
+        inferrer=fake_inferrer,
+        hasher=FileHasher(),
+        entity_sampler=lambda _s: [],
+    )
+
+    # REFERENCES edges must exist (the canonical name, not the alias).
+    refs = backend.exec_read(  # type: ignore[attr-defined]
+        "MATCH (:File)-[r:REFERENCES]->(:File) RETURN count(r) AS c"
+    )
+    assert refs[0]["c"] == 2, f"expected 2 REFERENCES edges, got {refs[0]['c']}"
+
+    # No CITES edges must exist (the alias must have been resolved away).
+    cites_rows = backend.exec_read(  # type: ignore[attr-defined]
+        "MATCH (:File)-[r:CITES]->(:File) RETURN count(r) AS c"
+    )
+    assert cites_rows[0]["c"] == 0, (
+        f"CITES edges must not exist after alias resolution, got {cites_rows[0]['c']}"
+    )
