@@ -508,10 +508,10 @@ def phase_derive_file_level(
     Spec-delta (M9.2-C): File.embedding is NOT derived in section mode
     because Kuzu's File.embedding is IMMUTABLE_AFTER_CREATE (see
     contextd/storage/_keys.py). SET f.embedding after node creation is
-    rejected by Kuzu. Centroid logic is retained via _centroid() for when a
-    migration to make embedding mutable (or a DETACH-DELETE + re-CREATE
-    pattern) lands. Known limitation: File.embedding is NULL in
-    section-mode corpora.
+    rejected by Kuzu. Centroid computation is not attempted — File.embedding
+    remains NULL in section-mode corpora on both backends for consistency.
+    See CLAUDE.md's "Permanent limitations" section for SD #71 (Kuzu 0.11.3
+    upstream bug prevents post-create embedding mutation; no fix available).
     """
     rows = store.exec_read(
         "MATCH (f:File {corpus: $c})-[:CONTAINS]->(s:Section) "

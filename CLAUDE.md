@@ -25,7 +25,7 @@ The project is mid-build against a detailed milestone plan. The plan drives buil
 
 **Cursor:** M10 Task 10.1 (Runeledger-PRD adapter + fixtures).
 
-**Spec-delta cleanup:** between M9 close and M10, a 20-commit sweep resolved 25 of 27 deferred items logged across M1–M9 (safety-critical guards, mutation-defence tightening, CLI error-handling, MCP server hygiene, label-to-PK unification, CONTEXTD_HOME extraction, prompts repackaging, Corpus-stats migration, etc.). See the spec-delta log below for per-item details. Four items intentionally deferred to future sessions: **(#71)** File/Section embedding mutability migration on Kuzu 0.11 (may not be feasible; needs research), **(#72)** real `QueryTranslator` corpus injection (cross-corpus routing design work), **(#74)** stale Section garbage collection (architectural new phase; blocks M11 incremental re-index), **(#80)** `cli.py` module split into four sub-modules (broad mechanical refactor).
+**Spec-delta cleanup:** between M9 close and M10, a 20-commit sweep resolved 25 of 27 deferred items logged across M1–M9 (safety-critical guards, mutation-defence tightening, CLI error-handling, MCP server hygiene, label-to-PK unification, CONTEXTD_HOME extraction, prompts repackaging, Corpus-stats migration, etc.). See the spec-delta log below for per-item details. Three items intentionally deferred to future sessions: **(#72)** real `QueryTranslator` corpus injection (cross-corpus routing design work), **(#74)** stale Section garbage collection (architectural new phase; blocks M11 incremental re-index), **(#80)** `cli.py` module split into four sub-modules (broad mechanical refactor). One item — **(#71)** File/Section embedding mutability on Kuzu — research-resolved as a permanent upstream limitation (see "Permanent limitations" below).
 
 **Test suite:** 243 unit + 65 integration = 308 collected, 302 executed (6 backend-specific skips for Kuzu-vs-Memgraph semantics). `ruff check`, `ruff format --check`, `mypy --strict`, and the abstraction-invariant grep all clean. Integration suite runs Memgraph via Docker (memgraph:latest v3.x) + Kuzu embedded in `tmp_path`.
 
@@ -132,14 +132,32 @@ This contract exists because a prior-session subagent silently relaxed a negativ
 
 ## Known Limitations / Deferred Items
 
-The 2026-04-20 spec-delta cleanup batch (`c9bc877..803328c`) resolved 25 of 27 deferred items logged across M1–M9. See the spec-delta log for per-item details of what changed (entries #58–#70 + #73–#79 + #81–#84). The four items below intentionally deferred to future sessions — each is substantial design or research work, not a narrow fix.
+The 2026-04-20 spec-delta cleanup batch (`c9bc877..803328c`) resolved 25 of 27 deferred items logged across M1–M9. See the spec-delta log for per-item details of what changed (entries #58–#70 + #73–#79 + #81–#84). The three items below intentionally deferred to future sessions — each is substantial design or research work, not a narrow fix. A fourth item, SD #71, has since been reclassified as a permanent upstream limitation (see "Permanent limitations" below).
 
 ### Open — substantial follow-up work
 
-- **SD #71 — Make `File.embedding` + `Section.embedding` mutable via migration.** Kuzu 0.11 declares both columns as `DOUBLE[1024]` backed by a vector index; post-creation `SET` is rejected. This blocks `phase_derive_file_level` from setting File.embedding-as-centroid in section-mode corpora (today File.embedding stays NULL in section mode). Two paths worth exploring: (a) `ALTER TABLE ... DROP INDEX` + SET + re-index via migration, (b) DETACH-DELETE + re-CREATE pattern inside the phase. Research-heavy; may conclude Kuzu simply doesn't support the first path and we're stuck with the second.
 - **SD #72 — `QueryTranslator.translate(corpus=...)` real Cypher injection.** CLI `ask --corpus <name>` threads the flag all the way to the translator, but the translator's `if corpus:` body is a `pass` + TODO pending cross-corpus routing design. Need to pick a shape — likely `WHERE n.corpus = $corpus` appended to the first MATCH's WHERE clause, or a prompt-level directive — plus write a test. Design-gap work, not a narrow bug fix.
 - **SD #74 — Stale Section garbage collection in section-mode re-index.** `phase_summarise_sections` and `phase_relate_sections` silently skip sections whose anchor no longer appears in the source (e.g., heading renamed between re-indexes). The graph retains the stale Section node. Needs a new GC phase that DETACH DELETEs Section nodes whose `id` isn't in the current parser output. Blocks M11 incremental re-index.
 - **SD #80 — `cli.py` module split.** `contextd/cli.py` is ~410 lines after all the M6 cleanups; splitting into `cli/__init__.py` (group + `init` + `main`) + `cli/infra.py` (up/down/status) + `cli/corpora.py` (add-corpus/list-corpora/index) + `cli/query.py` (ask/logs/costs) would keep each module focused. Broad mechanical refactor with test-file ripple across every `tests/unit/test_cli_*.py`.
+
+### Permanent limitations (upstream, no fix available)
+
+- **SD #71 — Kuzu embedding columns are immutable after first write, permanently.**
+  On Kuzu 0.11.3 (the final release — the project is archived upstream), vector-indexed
+  `DOUBLE[1024]` columns reject `SET` after node creation. The three workarounds —
+  `CALL DROP_VECTOR_INDEX` + SET + re-CREATE, DB close/reopen between steps, and DETACH
+  DELETE + re-CREATE per node — are all broken in Kuzu 0.11.3: DROP leaves orphan catalog
+  state (`_<N>_<idx>_UPPER does not exist in catalog` on subsequent CHECKPOINT / CREATE /
+  re-CREATE_VECTOR_INDEX), and DETACH DELETE on an indexed table silently corrupts the HNSW
+  index for the entire label thereafter (vector search returns empty for all subsequently-
+  inserted nodes, regardless of primary key). Ground-truth verified 2026-04-21 via direct
+  Kuzu experiments in a throwaway DB on the project's venv. Consequence: in section-mode
+  corpora on Kuzu, `File.embedding` remains NULL — `phase_derive_file_level` sets only
+  `File.summary` (see `contextd/indexer/phases.py::phase_derive_file_level`). Memgraph has
+  no such restriction; File.embedding-as-centroid could be wired there independently if
+  the "consistent behaviour across backends" posture is ever relaxed. The only full-
+  resolution path on Kuzu would be swapping to a post-Kuzu graph DB entirely (out of
+  scope).
 
 ### Spec-deltas applied in-flight (plan text still needs patching)
 
@@ -190,4 +208,4 @@ Items 1–24 (M1–M5 deviations: Memgraph/Kuzu connection quirks, vector-index 
     - **MCP + CLI feature tightening** (SD #73/#75/#76/#77/#78/#79/#81/#82/#83/#84): `phase_enumerate_sections` now writes real MD5 hashes via `FileHasher` (unblocks M11 incremental in section mode); coverage gaps filled for `Ontology.with_aliases` error path + `is_git_busy` branches + `add-corpus` duplicate-guard body-unchanged + `list-corpora` missing-vs-empty branches + `index --bootstrap` CLI path; `is_git_busy` resolves `.git` gitfiles for worktrees + submodules + `--separate-git-dir`; `contextd/mcp_server.py` wraps `stdio_server` in `try/finally: store.close()`, switched every tool result from `str(obj)` to `json.dumps(obj, default=str)`, catches tool-dispatch exceptions into `{"error": "…"}`, and promoted the inline tool list to a module-level `TOOL_DESCRIPTORS` constant so unit tests can assert the 8-tool surface; `tools.related` gained a defensive function-level depth clamp; `tools.describe_project` narrowed to `:File` + `tools.search` docstring pruned; dead `@field_validator("backend")` on `StorageConfig` removed, `phase_embed_sections` signature shrunk to `(corpus_cfg, store)`, `_centroid` deleted; `enumerate_corpus_files` skips `.git`/`.venv`/`__pycache__`/`node_modules` and symlinks by default; `logs --follow` traps `KeyboardInterrupt`; translator fence regex accepts any language tag + keyword-line fallback slices from first keyword to end-of-text (preserves multi-line continuations); `prompts/` moved from repo-root to `contextd/prompts/` (Hatch `force-include` replaced with ordinary `include`); section phases cache `ParsedSection` per-file; `index` body refactored to `_build_pipeline_deps` + `--estimate-only` now counts UTF-8 chars not bytes.
     - **New Kuzu migration 2** (SD #70): `Corpus.node_count` + `Corpus.edge_count` columns added via `ALTER TABLE Corpus ADD … INT64`. `phase_close` now persists both counts at registration time. Memgraph's sibling migration is a no-op (schema-free) maintained for `schema_version` parity.
 
-    Test suite grew 183 → 243 unit tests (60 new) across this batch; integration stayed at 65 with two new assertions (Corpus-stats read-back, File.hash 32-hex-char). All four CI gates + the abstraction-invariant grep stayed green throughout. Four items deferred — see **Known Limitations / Deferred Items** above for SD #71/#72/#74/#80 rationales.
+    Test suite grew 183 → 243 unit tests (60 new) across this batch; integration stayed at 65 with two new assertions (Corpus-stats read-back, File.hash 32-hex-char). All four CI gates + the abstraction-invariant grep stayed green throughout. Four items deferred at the time — see **Known Limitations / Deferred Items** above for SD #72/#74/#80 rationales; SD #71 was subsequently reclassified as a permanent upstream Kuzu limitation (see "Permanent limitations" above).
