@@ -1,0 +1,29 @@
+[corpus]
+name = "runeledger-prd"
+root = "/home/giuseppe/src/games/runeledger"
+include = ["docs/prd/**/*.md", "mods/base/**/*.lua", "prd.md", "CLAUDE.md"]
+exclude = ["docs/prd/_audit-methodology.md"]
+granularity = "section"
+heading_min_level = 2
+heading_max_level = 4
+
+[embedding]
+model = "voyage-3"
+
+[ontology]
+base = "default"
+overrides = "examples/runeledger-prd/ontology.json"
+
+[ontology.aliases]
+Registry = "Pattern"
+FRRow = "Ticket"
+LuaFile = "File"
+GapEntry = "Risk"
+
+[mcp.tools]
+four_surface = "examples/runeledger-prd/tools/four_surface.cypher"
+find_dangling_registrations = "examples/runeledger-prd/tools/dangling.cypher"
+audit_stale_shas = "examples/runeledger-prd/tools/stale_shas.cypher"
+
+[summarization]
+prompt_override = "examples/runeledger-prd/prompts/summary.md"

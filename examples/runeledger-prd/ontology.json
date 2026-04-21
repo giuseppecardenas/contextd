@@ -1,0 +1,9 @@
+{
+  "edge_label_aliases": {
+    "CITES": "REFERENCES",
+    "CONSUMES": "USES",
+    "SCHEMA_FOR": "DOCUMENTS",
+    "REGISTERS": "DOCUMENTED_IN",
+    "CLOSES_GAP": "SUPERSEDES"
+  }
+}
