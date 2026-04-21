@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 from importlib import resources
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -196,6 +197,80 @@ def list_corpora() -> None:
         return
     for c in corpora:
         console.print(f"- {c.stem} ({c})")
+
+
+@cli.command()
+@click.argument("corpus_name")
+@click.option("--bootstrap", is_flag=True)
+@click.option("--incremental", is_flag=True)
+@click.option("--estimate-only", is_flag=True)
+def index(corpus_name: str, bootstrap: bool, incremental: bool, estimate_only: bool) -> None:
+    """Run an indexing pass on the named corpus."""
+    from contextd.corpus_config import CorpusConfig
+    from contextd.indexer.hasher import FileHasher
+    from contextd.indexer.pipeline import enumerate_corpus_files, run_bootstrap
+    from contextd.inference.prompts import PromptRenderer
+    from contextd.inference.relate import RelationshipInferrer
+    from contextd.inference.summarise import Summariser
+    from contextd.ontology.schema import Ontology
+    from contextd.providers.factory import build_embedding_provider, build_inference_provider
+    from contextd.storage.factory import build_graph_store
+
+    cfg = _load_cfg()
+    corpus_toml = CONTEXTD_HOME / "corpora" / f"{corpus_name}.toml"
+    if not corpus_toml.exists():
+        console.print(
+            f"[red]✗[/] corpus {corpus_name!r} not registered."
+            f" Run `contextd add-corpus <path> --name {corpus_name}` first."
+        )
+        sys.exit(1)
+    corpus_cfg = CorpusConfig.load(corpus_toml)
+
+    files = enumerate_corpus_files(corpus_cfg)
+    console.print(f"found {len(files)} files in corpus {corpus_name!r}")
+
+    if estimate_only:
+        total_chars = sum(p.stat().st_size for p in files)
+        est_tokens = total_chars // 4  # rough: 4 chars per token
+        console.print(f"~{est_tokens} input tokens projected (2 call types per file)")
+        return
+
+    if not (bootstrap or incremental):
+        console.print("[red]✗[/] specify --bootstrap or --incremental")
+        sys.exit(1)
+
+    inference_provider = build_inference_provider(cfg)
+    embedding_provider = build_embedding_provider(cfg)
+    renderer = PromptRenderer(CONTEXTD_HOME / "prompts")
+    ontology = Ontology.load_base().with_aliases(corpus_cfg.ontology.aliases)
+    # Override hierarchy for summary length: corpus → global → default.
+    max_words = corpus_cfg.summarization.max_words or cfg.inference.summary_max_words
+    summariser = Summariser(inference_provider, renderer, max_words=max_words)
+    inferrer = RelationshipInferrer(inference_provider, renderer, ontology)
+    hasher = FileHasher(state_path=CONTEXTD_HOME / "state" / f"{corpus_name}-index-state.json")
+
+    store = build_graph_store(cfg)
+    store.connect()
+    try:
+        if bootstrap:
+            result = run_bootstrap(
+                corpus=corpus_cfg,
+                store=store,
+                embedder=embedding_provider,
+                summariser=summariser,
+                inferrer=inferrer,
+                hasher=hasher,
+                entity_sampler=lambda _s: [],
+            )
+            for phase in result.phases:
+                console.print(
+                    f"  [green]✓[/] {phase.name}:"
+                    f" processed={phase.processed} skipped={phase.skipped}"
+                )
+        else:
+            console.print("[yellow]⚠[/] incremental mode not yet implemented in this build")
+    finally:
+        store.close()
 
 
 def main() -> None:
