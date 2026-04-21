@@ -179,6 +179,12 @@ class Neo4jBackend(GraphStore):
         Neo4j returns (node, score) where score is cosine similarity in [0, 1]
         (higher is more similar). Matches the ABC's contract directly — no
         distance-to-similarity conversion needed (unlike Kuzu did).
+
+        Note: Neo4j normalises similarity via ``(1 + dot) / 2``, so
+        orthogonal vectors score 0.5 (not 0.0); identical direction scores
+        1.0; anti-parallel scores 0.0. Threshold filtering is client-side
+        for parity with the Memgraph path (server-side WHERE after CALL
+        requires WITH re-projection).
         """
         assert self._driver is not None
         validate_identifier(label, kind="label")
@@ -208,6 +214,13 @@ class Neo4jBackend(GraphStore):
         query: str,
         k: int,
     ) -> list[dict[str, Any]]:
+        """Call Neo4j's db.index.fulltext.queryNodes procedure.
+
+        ``score`` is a Lucene BM25 relevance score (unbounded positive float;
+        higher is more relevant), NOT normalised like vector_search's
+        similarity. Do not compare scores directly across the two search
+        types.
+        """
         assert self._driver is not None
         validate_identifier(label, kind="label")
         validate_identifier(property_name, kind="property_name")
