@@ -39,6 +39,7 @@ from contextd.indexer.heading_parser import HeadingParser, ParsedSection
 from contextd.inference.relate import RelationshipInferrer
 from contextd.inference.summarise import Summariser
 from contextd.providers.base import EmbeddingProvider
+from contextd.storage._keys import primary_key_for
 from contextd.storage.base import GraphStore
 
 
@@ -142,8 +143,15 @@ def phase_relate(
         # delete_edges; without it KuzuBackend raises ValueError.
         store.delete_edges(str(f), origin="inferred", src_label="File")
         for rel in relations:
-            # Upsert target node (structural or weak entry) then edge.
-            store.upsert_node(rel.target_type, {_infer_key(rel.target_type): rel.target_name})
+            try:
+                pk = _infer_key(rel.target_type)
+            except ValueError:
+                # Hallucinated target label — skip this edge rather than
+                # creating a malformed weak-entry node or aborting the
+                # whole batch.
+                skipped += 1
+                continue
+            store.upsert_node(rel.target_type, {pk: rel.target_name})
             # Spec-delta (c): src_label="File", dst_label=rel.target_type added —
             # Kuzu requires both labels on upsert_edge for schema-first REL tables.
             store.upsert_edge(
@@ -416,7 +424,14 @@ def phase_relate_sections(
         # Wipe-and-replace inferred edges for this section (spec §5.5).
         store.delete_edges(r["id"], origin="inferred", src_label="Section")
         for rel in relations:
-            store.upsert_node(rel.target_type, {_infer_key(rel.target_type): rel.target_name})
+            try:
+                pk = _infer_key(rel.target_type)
+            except ValueError:
+                # Hallucinated target label — skip silently (see phase_relate
+                # for the same pattern in file-mode).
+                skipped += 1
+                continue
+            store.upsert_node(rel.target_type, {pk: rel.target_name})
             store.upsert_edge(
                 r["id"],
                 rel.target_name,
@@ -460,16 +475,14 @@ def phase_derive_file_level(
 
 
 def _infer_key(target_type: str) -> str:
-    """Return the primary-key property name for target_type.
+    """Return the primary-key property name for target_type, or raise ValueError.
 
-    Deferred item: should route through primary_key_for() from
-    contextd.storage._keys instead of this hardcoded subset. _keys.py knows
-    14 labels; this map covers 4. Any new target label with a different PK
-    (e.g., Risk.description) will silently return "name". Address during M8/M9.
+    Delegates to contextd.storage._keys.primary_key_for — the authoritative
+    label→PK map that mirrors the migration DDL. Unknown labels raise
+    ValueError; the phase_relate / phase_relate_sections call sites catch
+    and skip so a hallucinated edge target doesn't abort the whole batch.
     """
-    return {"File": "path", "Section": "id", "Artifact": "id", "Ticket": "id"}.get(
-        target_type, "name"
-    )
+    return primary_key_for(target_type)
 
 
 def _build_parser(corpus_cfg: CorpusConfig) -> HeadingParser:

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from contextd.storage._keys import primary_key_for
 from contextd.storage.base import GraphStore
 
 Embedder = Callable[[list[str]], list[list[float]]]
@@ -36,8 +37,12 @@ class EntityResolver:
         if float(top.get("score", 0.0)) < self._threshold:
             return None
         node = top["node"]
-        # Return path, id, or name — whichever is the canonical key for this label.
-        for key in ("path", "id", "name"):
-            if key in node:
-                return str(node[key])
+        # Look up the canonical PK for this label via the centralised map
+        # (storage/_keys.py::PRIMARY_KEY_BY_LABEL) rather than a hardcoded
+        # fallback chain — a label with a non-standard PK (Risk.description,
+        # Meta.schema_version) will now return the right value instead of
+        # silently missing via the old ("path", "id", "name") walk.
+        key = primary_key_for(label)
+        if key in node:
+            return str(node[key])
         return None
