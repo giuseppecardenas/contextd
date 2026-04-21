@@ -36,8 +36,8 @@ _DDL = [
     "CREATE REL TABLE CONTAINS(FROM File TO Section, origin STRING)",
     "CREATE REL TABLE PARENT_OF(FROM Section TO Section, origin STRING)",
     "CREATE REL TABLE NEXT_SIBLING(FROM Section TO Section, origin STRING)",
-    "CREATE REL TABLE REFERENCES(FROM File TO File, FROM Section TO Section, FROM Artifact TO Artifact, origin STRING, confidence DOUBLE)",
-    "CREATE REL TABLE BELONGS_TO(FROM File TO Ticket, FROM Artifact TO Ticket, origin STRING, confidence DOUBLE)",
+    "CREATE REL TABLE REFERENCES(FROM File TO File, FROM Section TO Section, FROM Artifact TO Artifact, origin STRING, confidence DOUBLE, reason STRING)",
+    "CREATE REL TABLE BELONGS_TO(FROM File TO Ticket, FROM Artifact TO Ticket, origin STRING, confidence DOUBLE, reason STRING)",
     # Vector + FTS indexes via procedure calls. Kuzu infers dimension from the
     # column's fixed-size ARRAY type; `dim :=` is not a recognised kwarg.
     "CALL CREATE_VECTOR_INDEX('File', 'File_embedding_idx', 'embedding', metric := 'cosine')",

@@ -80,19 +80,13 @@ def phase_enumerate(
     return PhaseResult(name="enumerate", processed=processed, skipped=0)
 
 
-def phase_embed(
-    files: list[Path],
-    embedder: EmbeddingProvider,
-    store: GraphStore,
-    batch_size: int = 128,
-) -> PhaseResult:
+def phase_embed(files: list[Path]) -> PhaseResult:
     """Accounting phase: embedding was performed in phase_enumerate.
 
-    Spec-delta (b): The plan's exec_write("... SET n.embedding = $vec", ...)
-    fails on Kuzu (File.embedding is IMMUTABLE_AFTER_CREATE). Embeddings are
-    written at node-creation time in phase_enumerate. This phase exists to
-    preserve the 5-phase contract and the integration test assertion
-    result.phases[1].processed == 2.
+    Spec-delta (b): phase_enumerate embeds at node-CREATE time because
+    Kuzu's File.embedding is IMMUTABLE_AFTER_CREATE. This phase reports
+    the count of files that were embedded, preserving the 5-phase contract
+    and the integration test's phases[1].processed assertion.
     """
     return PhaseResult(name="embed", processed=len(files), skipped=0)
 
@@ -159,21 +153,12 @@ def phase_close(
     store: GraphStore,
     results: list[PhaseResult],
 ) -> PhaseResult:
-    # Spec-delta (f-extended): The plan upserts node_count + edge_count onto the
-    # Corpus node. The Kuzu baseline DDL for Corpus is:
-    #   Corpus(name STRING PRIMARY KEY, root STRING, registered_at TIMESTAMP, content_profile STRING)
-    # There are no node_count / edge_count columns declared — upserting them would
-    # fail on Kuzu ("Cannot find property node_count for n"). These stats are
-    # computed and available to callers (e.g., for logging) but not persisted on the
-    # Corpus node. Deferred: add node_count + edge_count columns via a migration if
-    # the MCP server needs them queryable. Memgraph is schema-free and would accept
-    # them, but writing only to Memgraph breaks the backend-neutral contract.
-    count_files = store.exec_read(
-        "MATCH (n:File {corpus: $c}) RETURN count(n) AS c", {"c": corpus}
-    )[0]["c"]
     # Spec-delta (d): replaced "__now__" placeholder with datetime.now(timezone.utc).
     # Kuzu's TIMESTAMP column rejects the string "__now__" — no backend code performed
     # the substitution. Using a real UTC datetime at the call site is the correct fix.
+    # Spec-delta (f-extended): node_count / edge_count not persisted on the
+    # Corpus node because Kuzu's Corpus schema does not declare those columns.
+    # Adding them requires a migration; deferred until the MCP server needs them.
     store.upsert_node(
         "Corpus",
         {
@@ -181,7 +166,6 @@ def phase_close(
             "registered_at": dt.datetime.now(dt.UTC),
         },
     )
-    _ = count_files  # available for caller logging; not stored (see spec-delta note above)
     return PhaseResult(name="close", processed=1, skipped=0)
 
 

@@ -45,7 +45,7 @@ def run_bootstrap(
     # embedding at CREATE time; File.embedding is IMMUTABLE_AFTER_CREATE).
     results.append(phases.phase_enumerate(files, corpus.corpus.name, hasher, store, embedder))
     # phase_embed is an accounting-only pass (embedding already done in enumerate).
-    results.append(phases.phase_embed(files, embedder, store))
+    results.append(phases.phase_embed(files))
     results.append(phases.phase_summarise(files, summariser, store))
     results.append(phases.phase_relate(files, inferrer, store, entity_sampler))
     results.append(phases.phase_close(corpus.corpus.name, store, results))
