@@ -64,6 +64,12 @@ def run_bootstrap(
         # Spec-delta (M9.1-A): embedder passed to phase_enumerate_sections so that
         # Section.embedding is included at CREATE time (IMMUTABLE_AFTER_CREATE on Kuzu).
         results.append(phases.phase_enumerate_sections(files, corpus, store, embedder, hasher))
+        # SD #74: drop stale Section nodes before the rest of the section-mode
+        # phases run. Must sit AFTER enumerate (so current-pass sections are
+        # already written and will not be collected as stale) and BEFORE
+        # summarise/relate (so the wipe-and-replace inferred-edge step doesn't
+        # briefly leave stale nodes reachable via describe_project).
+        results.append(phases.phase_gc_sections(files, corpus, store))
         # M9.2 stubs — real implementations land in Task 9.2.
         results.append(phases.phase_embed_sections(corpus, store))
         results.append(phases.phase_summarise_sections(corpus, summariser, store))

@@ -289,3 +289,88 @@ def test_section_granular_inferred_edges(backend, tmp_path: Path) -> None:
     # Two Section→Section REFERENCES edges must exist.
     rows = backend.exec_read("MATCH (:Section)-[r:REFERENCES]->(:Section) RETURN count(r) AS c")
     assert rows[0]["c"] == 2
+
+
+def test_section_gc_removes_renamed_section(backend, tmp_path: Path) -> None:
+    """SD #74: phase_gc_sections DETACH-DELETEs Section nodes whose anchor no
+    longer appears in the current parser output.
+
+    Scenario: first bootstrap emits §A and §B Sections. The author renames §B
+    to §C and we re-index. Without the GC phase, §B persists forever in the
+    graph (phase_summarise_sections / phase_relate_sections silently skip it
+    because the anchor is absent from the parser output). With the GC phase,
+    §B is DETACH-DELETEd and the graph reflects the current file shape.
+    """
+    from contextd.corpus_config import CorpusConfig
+    from contextd.indexer.hasher import FileHasher
+    from contextd.indexer.pipeline import run_bootstrap
+    from contextd.inference.summarise import FileSummary
+
+    corpus_root = tmp_path / "corpus"
+    corpus_root.mkdir()
+    doc = corpus_root / "doc.md"
+    doc.write_text("# Title\n\n## §A\n\nbody a\n\n## §B\n\nbody b\n")
+
+    cfg = CorpusConfig.model_validate(
+        {
+            "corpus": {
+                "name": "gc_sec",
+                "root": str(corpus_root),
+                "include": ["*.md"],
+                "granularity": "section",
+                "heading_min_level": 2,
+                "heading_max_level": 4,
+            },
+        }
+    )
+
+    # Both runs process at most 2 sections — side_effect returns a fresh
+    # list each time embed() is called so the second run also has vectors.
+    def _embed_side_effect(texts: list[str]) -> list[list[float]]:
+        return [[0.1] * 1024 for _ in texts]
+
+    fake_embedder = MagicMock()
+    fake_embedder.embed.side_effect = _embed_side_effect
+    fake_summariser = MagicMock()
+    fake_summariser.summarise.return_value = FileSummary(
+        summary="s", key_points=[], entities_mentioned=[]
+    )
+    fake_inferrer = MagicMock()
+    fake_inferrer.infer.return_value = []
+
+    # First bootstrap: §A + §B.
+    run_bootstrap(
+        corpus=cfg,
+        store=backend,
+        embedder=fake_embedder,
+        summariser=fake_summariser,
+        inferrer=fake_inferrer,
+        hasher=FileHasher(),
+        entity_sampler=lambda _s: [],
+    )
+
+    anchors_after_first = sorted(
+        r["anchor"]
+        for r in backend.exec_read("MATCH (s:Section {corpus: 'gc_sec'}) RETURN s.anchor AS anchor")
+    )
+    assert anchors_after_first == ["a", "b"]
+
+    # Rename §B → §C and re-index.
+    doc.write_text("# Title\n\n## §A\n\nbody a\n\n## §C\n\nbody c\n")
+
+    run_bootstrap(
+        corpus=cfg,
+        store=backend,
+        embedder=fake_embedder,
+        summariser=fake_summariser,
+        inferrer=fake_inferrer,
+        hasher=FileHasher(),
+        entity_sampler=lambda _s: [],
+    )
+
+    anchors_after_second = sorted(
+        r["anchor"]
+        for r in backend.exec_read("MATCH (s:Section {corpus: 'gc_sec'}) RETURN s.anchor AS anchor")
+    )
+    assert anchors_after_second == ["a", "c"]  # §B is gone, §C is new
+    assert "b" not in anchors_after_second

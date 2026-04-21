@@ -24,6 +24,11 @@ Spec-delta note (M9.1-B): upsert_edge calls in phase_enumerate_sections supply
 src_label/dst_label kwargs. Kuzu requires these for schema-first REL tables:
   CONTAINS (FROM File TO Section), PARENT_OF (FROM Section TO Section),
   NEXT_SIBLING (FROM Section TO Section).
+
+Spec-delta note (SD #74): phase_gc_sections runs after enumerate in section
+mode to DETACH-DELETE Section nodes whose anchor is no longer produced by
+the parser (e.g., heading renamed between re-indexes). Without this, stale
+Section nodes accumulate across re-indexes and pollute describe_project.
 """
 
 from __future__ import annotations
@@ -305,6 +310,55 @@ def phase_enumerate_sections(
             previous_sibling_id[sec.parent_anchor] = section_id
             processed += 1
     return PhaseResult(name="enumerate_sections", processed=processed, skipped=0)
+
+
+def phase_gc_sections(
+    files: list[Path],
+    corpus_cfg: CorpusConfig,
+    store: GraphStore,
+) -> PhaseResult:
+    """Delete Section nodes whose anchor is no longer produced by the parser.
+
+    Runs after ``phase_enumerate_sections`` in section-mode bootstrap so that
+    newly-created sections for the current pass are already written and will
+    not be collected as stale. Builds the current-id set from parser output
+    (one parse per file, cached via ``_parse_cached``), queries existing
+    Section ids for the corpus, and DETACH-DELETEs the set difference. The
+    DETACH DELETE cascades to both structural (CONTAINS / PARENT_OF /
+    NEXT_SIBLING) and inferred (REFERENCES etc.) edges anchored at the
+    stale section — no separate edge cleanup is required.
+
+    SD #74: unblocks M11 incremental re-index. Without this phase, renaming a
+    heading between re-indexes leaves the old Section node orphaned in the
+    graph; ``phase_summarise_sections`` / ``phase_relate_sections`` silently
+    skip such sections (their anchor is absent from the parser output) but
+    the node itself persists forever and pollutes ``describe_project``.
+
+    Per-id iteration rather than a bulk ``IN``-list parameter because Kuzu
+    0.11 has quirks passing large lists as ``$keep`` parameters; one
+    ``MATCH ... DETACH DELETE`` per stale section is fine at realistic
+    corpus scale (≤ a few hundred stale sections per re-index) and keeps
+    the query shape identical on both backends.
+    """
+    parser = _build_parser(corpus_cfg)
+    parse_cache: dict[str, list[ParsedSection]] = {}
+    current_ids: set[str] = set()
+    for f in files:
+        file_path = str(f)
+        for sec in _parse_cached(parser, f, parse_cache):
+            current_ids.add(f"{file_path}#{sec.anchor}")
+
+    existing = store.exec_read(
+        "MATCH (s:Section {corpus: $c}) RETURN s.id AS id",
+        {"c": corpus_cfg.corpus.name},
+    )
+    stale = [r["id"] for r in existing if r["id"] not in current_ids]
+    for sid in stale:
+        store.exec_write(
+            "MATCH (s:Section {id: $id}) DETACH DELETE s",
+            {"id": sid},
+        )
+    return PhaseResult(name="gc_sections", processed=len(stale), skipped=0)
 
 
 def phase_embed_sections(corpus_cfg: CorpusConfig, store: GraphStore) -> PhaseResult:
