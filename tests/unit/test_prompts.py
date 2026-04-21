@@ -34,3 +34,16 @@ def test_template_name_cannot_escape_template_dir(tmp_path: Path) -> None:
     renderer = PromptRenderer(template_dir)
     with pytest.raises(ValueError, match="escapes template_dir"):
         renderer.render("../secret")
+
+
+def test_render_path_raises_keyerror_on_missing_placeholder(tmp_path: Path) -> None:
+    """Override template with {{unknown}} placeholder that wasn't passed
+    must raise KeyError naming the missing variable and the template path.
+    Locks in the behaviour so a future refactor doesn't silently tolerate
+    unbound placeholders.
+    """
+    template_path = tmp_path / "override.md"
+    template_path.write_text("Hello {{unknown_var}}", encoding="utf-8")
+    renderer = PromptRenderer(tmp_path)
+    with pytest.raises(KeyError, match="unknown_var"):
+        renderer.render_path(template_path, content="body")

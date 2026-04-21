@@ -111,6 +111,16 @@ def _build_pipeline_deps(
             raise click.ClickException(
                 f"summarization.prompt_override file not found: {resolved_prompt}"
             )
+        try:
+            resolved_prompt.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise click.ClickException(
+                f"summarization.prompt_override file not readable: {resolved_prompt} ({exc})"
+            ) from exc
+        except UnicodeDecodeError as exc:
+            raise click.ClickException(
+                f"summarization.prompt_override file is not valid UTF-8: {resolved_prompt} ({exc})"
+            ) from exc
         prompt_path = resolved_prompt
     return PipelineDeps(
         summariser=Summariser(

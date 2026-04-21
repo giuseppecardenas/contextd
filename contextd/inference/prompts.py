@@ -50,7 +50,7 @@ class PromptRenderer:
                 f"Template name {template!r} escapes template_dir {self._dir}; "
                 "templates must resolve inside the configured directory."
             )
-        template_text = template_path.read_text()
+        template_text = template_path.read_text(encoding="utf-8")
         return _substitute(template_text, template, **kwargs)
 
     def render_path(self, path: Path, **kwargs: str) -> str:

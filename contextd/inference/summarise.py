@@ -40,6 +40,14 @@ class Summariser:
         max_words: int = 100,
         prompt_path: Path | None = None,
     ) -> None:
+        """Wire provider + renderer + config for per-file summarisation.
+
+        ``prompt_path``: absolute path to an override template. If None,
+        Summariser uses the default 'summarise' template from the renderer's
+        search directory. The override receives the same {content, max_words}
+        variable set as the default — templates that reference only a subset
+        are valid.
+        """
         self._provider = provider
         self._renderer = renderer
         self._max_words = max_words
