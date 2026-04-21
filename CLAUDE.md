@@ -49,7 +49,7 @@ These are non-negotiable. Skipping them means working without context that's loa
 - **Local path:** `/home/giuseppe/src/contextd/`
 - **Branch:** `main` (single-branch project; all work lands here)
 - **Visibility:** currently private; flip to public at M13 per the plan
-- **Auth for push:** `GITHUB_PAT` env var (exported in `~/.bashrc`). Origin URL stays clean — inline the PAT per-push only: `git push "https://giuseppecardenas:${GITHUB_PAT}@github.com/giuseppecardenas/contextd.git" main:main`.
+- **Auth:** global `credential.helper=store` reads `~/.git-credentials`; `git push origin main` / `git fetch origin` authenticate silently against github.com/giuseppecardenas. Rotate the PAT by editing that single line — git no longer consults `$GITHUB_PAT` (the env var is still exported in `~/.bashrc` for the `gh` CLI).
 
 ## Environment
 
