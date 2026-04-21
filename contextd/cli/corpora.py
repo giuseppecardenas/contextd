@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import click
 
@@ -20,7 +21,14 @@ if TYPE_CHECKING:
 @click.argument("path", type=click.Path(exists=True, file_okay=False, path_type=Path))
 @click.option("--name", default=None, help="Corpus name; defaults to directory basename.")
 @click.option("--granularity", type=click.Choice(["file", "section"]), default="file")
-def add_corpus(path: Path, name: str | None, granularity: str) -> None:
+@click.option(
+    "--from",
+    "template",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Use TEMPLATE as the TOML shape; only corpus.root (and name) are overridden.",
+)
+def add_corpus(path: Path, name: str | None, granularity: str, template: Path | None) -> None:
     """Register a corpus for indexing."""
     import tomli_w
 
@@ -31,6 +39,17 @@ def add_corpus(path: Path, name: str | None, granularity: str) -> None:
     if corpus_toml.exists():
         console.print(f"[yellow]⚠[/] corpus {resolved_name!r} already registered at {corpus_toml}")
         return
+
+    if template is not None:
+        _add_corpus_from_template(
+            path=path,
+            resolved_name=resolved_name,
+            corpus_toml=corpus_toml,
+            template=template,
+            granularity=granularity,
+        )
+        return
+
     data: dict[str, object] = {
         "corpus": {
             "name": resolved_name,
@@ -47,6 +66,59 @@ def add_corpus(path: Path, name: str | None, granularity: str) -> None:
     console.print(f"[green]✓[/] registered corpus {resolved_name!r} at {corpus_toml}")
     console.print(f"  root: {path.resolve()}")
     console.print(f"  granularity: {granularity}")
+    console.print(f"\n[bold]next:[/] `contextd index {resolved_name} --bootstrap`")
+
+
+def _add_corpus_from_template(
+    path: Path,
+    resolved_name: str,
+    corpus_toml: Path,
+    template: Path,
+    granularity: str,
+) -> None:
+    """Handle `add-corpus --from TEMPLATE` — validates, rewrites, and writes the corpus TOML."""
+    import tomli_w
+
+    from contextd.corpus_config import CorpusConfig, CorpusConfigError
+
+    # Step 1: validate via CorpusConfig.load (catches both bad TOML and bad schema).
+    # CorpusConfig.load wraps pydantic errors in CorpusConfigError but lets
+    # tomllib.TOMLDecodeError propagate unwrapped — catch both.
+    try:
+        template_cfg = CorpusConfig.load(template)
+    except (CorpusConfigError, tomllib.TOMLDecodeError) as exc:
+        raise click.ClickException(f"template invalid: {exc}") from exc
+
+    # Step 2: load the raw dict for mutation (preserves unknown keys, avoids pydantic coercion).
+    raw: dict[str, Any] = tomllib.loads(template.read_text(encoding="utf-8"))
+    corpus_section = raw.setdefault("corpus", {})
+    corpus_section["name"] = resolved_name
+    corpus_section["root"] = str(path.resolve())
+
+    # Step 3: rewrite relative paths to absolute (relative to the template's directory).
+    def _rewrite(p: str) -> str:
+        maybe_path = Path(p)
+        if maybe_path.is_absolute():
+            return str(maybe_path)
+        return str((template.parent / maybe_path).resolve())
+
+    if "ontology" in raw and "overrides" in raw["ontology"]:
+        raw["ontology"]["overrides"] = _rewrite(str(raw["ontology"]["overrides"]))
+    if "summarization" in raw and "prompt_override" in raw["summarization"]:
+        raw["summarization"]["prompt_override"] = _rewrite(
+            str(raw["summarization"]["prompt_override"])
+        )
+    if "mcp" in raw and "tools" in raw["mcp"]:
+        raw["mcp"]["tools"] = {k: _rewrite(str(v)) for k, v in raw["mcp"]["tools"].items()}
+
+    corpus_toml.write_bytes(tomli_w.dumps(raw).encode())
+
+    # Granularity comes from the template; report it accurately.
+    effective_granularity = template_cfg.corpus.granularity
+    console.print(f"[green]✓[/] registered corpus {resolved_name!r} at {corpus_toml}")
+    console.print(f"  root: {path.resolve()}")
+    console.print(f"  granularity: {effective_granularity} (from template)")
+    console.print(f"  template: {template.resolve()}")
     console.print(f"\n[bold]next:[/] `contextd index {resolved_name} --bootstrap`")
 
 

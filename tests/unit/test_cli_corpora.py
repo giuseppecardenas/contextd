@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import tomllib
 from pathlib import Path
+from textwrap import dedent
 
 import pytest
 from click.testing import CliRunner
@@ -128,3 +129,344 @@ def test_list_corpora_shows_registered(tmp_path: Path, monkeypatch: pytest.Monke
     result = CliRunner().invoke(contextd.cli.cli, ["list-corpora"])
     assert result.exit_code == 0
     assert "first" in result.output
+
+
+# ---------------------------------------------------------------------------
+# --from TEMPLATE tests
+# ---------------------------------------------------------------------------
+
+
+def _write_template(
+    template_dir: Path,
+    *,
+    overrides: str | None = "ontology.json",
+    prompt_override: str | None = "prompts/summary.md",
+    mcp_tools: dict[str, str] | None = None,
+    granularity: str = "section",
+    name: str = "template-corpus",
+    root: str = "/some/root",
+) -> Path:
+    """Write a synthetic corpus TOML template to *template_dir* and return its path."""
+    if mcp_tools is None:
+        mcp_tools = {"my_tool": "tools/query.cypher"}
+
+    lines = [
+        "[corpus]",
+        f'name = "{name}"',
+        f'root = "{root}"',
+        'include = ["**/*.md"]',
+        f'granularity = "{granularity}"',
+        "",
+        "[embedding]",
+        'model = "voyage-3"',
+        "",
+        "[ontology]",
+        'base = "default"',
+    ]
+    if overrides is not None:
+        lines.append(f'overrides = "{overrides}"')
+    lines += ["", "[ontology.aliases]", 'Foo = "Pattern"', ""]
+
+    lines += ["[mcp.tools]"]
+    for k, v in mcp_tools.items():
+        lines.append(f'{k} = "{v}"')
+    lines.append("")
+
+    lines += ["[summarization]"]
+    if prompt_override is not None:
+        lines.append(f'prompt_override = "{prompt_override}"')
+
+    template_path = template_dir / "corpus.toml"
+    template_path.write_text("\n".join(lines), encoding="utf-8")
+    return template_path
+
+
+def test_add_corpus_from_template_copies_aliases_and_overrides(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Aliases and section-structure config are preserved; root/name are overridden."""
+    home = _setup_home(tmp_path, monkeypatch)
+    template_dir = tmp_path / "tpl"
+    template_dir.mkdir()
+    template = _write_template(template_dir)
+
+    corpus_dir = tmp_path / "my-data"
+    corpus_dir.mkdir()
+
+    result = CliRunner().invoke(
+        contextd.cli.cli,
+        ["add-corpus", str(corpus_dir), "--name", "foo", "--from", str(template)],
+    )
+    assert result.exit_code == 0, result.output
+
+    toml_path = home / "corpora" / "foo.toml"
+    assert toml_path.exists()
+    data = tomllib.loads(toml_path.read_text())
+    assert data["corpus"]["name"] == "foo"
+    assert data["corpus"]["root"] == str(corpus_dir.resolve())
+    # Aliases preserved.
+    assert data["ontology"]["aliases"]["Foo"] == "Pattern"
+    # Relative overrides path was rewritten to absolute.
+    abs_overrides = str((template_dir / "ontology.json").resolve())
+    assert data["ontology"]["overrides"] == abs_overrides
+    # Granularity preserved from template.
+    assert data["corpus"]["granularity"] == "section"
+    # Success message includes template path.
+    assert "foo" in result.output
+    assert "from template" in result.output
+
+
+def test_add_corpus_from_template_rewrites_relative_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """All three relative-path fields are rewritten to absolute paths."""
+    home = _setup_home(tmp_path, monkeypatch)
+    template_dir = tmp_path / "tpl2"
+    template_dir.mkdir()
+    template = _write_template(
+        template_dir,
+        overrides="ontology.json",
+        prompt_override="prompts/summary.md",
+        mcp_tools={"t": "tools/q.cypher"},
+    )
+
+    corpus_dir = tmp_path / "data2"
+    corpus_dir.mkdir()
+
+    result = CliRunner().invoke(
+        contextd.cli.cli,
+        ["add-corpus", str(corpus_dir), "--name", "bar", "--from", str(template)],
+    )
+    assert result.exit_code == 0, result.output
+    data = tomllib.loads((home / "corpora" / "bar.toml").read_text())
+
+    assert Path(data["ontology"]["overrides"]).is_absolute()
+    assert Path(data["ontology"]["overrides"]) == (template_dir / "ontology.json").resolve()
+
+    assert Path(data["summarization"]["prompt_override"]).is_absolute()
+    assert (
+        Path(data["summarization"]["prompt_override"])
+        == (template_dir / "prompts" / "summary.md").resolve()
+    )
+
+    assert Path(data["mcp"]["tools"]["t"]).is_absolute()
+    assert Path(data["mcp"]["tools"]["t"]) == (template_dir / "tools" / "q.cypher").resolve()
+
+
+def test_add_corpus_from_template_preserves_absolute_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Absolute paths in the template are left unchanged."""
+    home = _setup_home(tmp_path, monkeypatch)
+    template_dir = tmp_path / "tpl3"
+    template_dir.mkdir()
+    abs_ontology = "/opt/shared/ontology.json"
+    template = _write_template(template_dir, overrides=abs_ontology, prompt_override=None)
+
+    corpus_dir = tmp_path / "data3"
+    corpus_dir.mkdir()
+
+    result = CliRunner().invoke(
+        contextd.cli.cli,
+        ["add-corpus", str(corpus_dir), "--name", "baz", "--from", str(template)],
+    )
+    assert result.exit_code == 0, result.output
+    data = tomllib.loads((home / "corpora" / "baz.toml").read_text())
+    assert data["ontology"]["overrides"] == abs_ontology
+
+
+def test_add_corpus_from_template_granularity_inherited_from_template(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Template granularity wins over (or is unaffected by) --granularity flag."""
+    home = _setup_home(tmp_path, monkeypatch)
+    template_dir = tmp_path / "tpl4"
+    template_dir.mkdir()
+    # Template explicitly says section.
+    template = _write_template(template_dir, granularity="section")
+
+    corpus_dir = tmp_path / "data4"
+    corpus_dir.mkdir()
+
+    # Pass --granularity file (the default), but the template says section.
+    result = CliRunner().invoke(
+        contextd.cli.cli,
+        [
+            "add-corpus",
+            str(corpus_dir),
+            "--name",
+            "qux",
+            "--granularity",
+            "file",
+            "--from",
+            str(template),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    data = tomllib.loads((home / "corpora" / "qux.toml").read_text())
+    # Template granularity is preserved; the --granularity flag is ignored.
+    assert data["corpus"]["granularity"] == "section"
+
+
+def test_add_corpus_from_template_invalid_toml_raises_clickexception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Malformed TOML template → exit code 1 with readable error."""
+    _setup_home(tmp_path, monkeypatch)
+    template_dir = tmp_path / "bad_toml"
+    template_dir.mkdir()
+    bad_template = template_dir / "corpus.toml"
+    bad_template.write_text("this is [not valid\nTOML", encoding="utf-8")
+
+    corpus_dir = tmp_path / "data5"
+    corpus_dir.mkdir()
+
+    result = CliRunner().invoke(
+        contextd.cli.cli,
+        ["add-corpus", str(corpus_dir), "--name", "err1", "--from", str(bad_template)],
+    )
+    assert result.exit_code == 1
+    assert "template invalid" in result.output
+
+
+def test_add_corpus_from_template_invalid_schema_raises_clickexception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Structurally invalid template (e.g. corpus.name is an integer) → exit code 1."""
+    _setup_home(tmp_path, monkeypatch)
+    template_dir = tmp_path / "bad_schema"
+    template_dir.mkdir()
+    bad_template = template_dir / "corpus.toml"
+    # corpus.name must be a string; 42 is invalid.
+    bad_template.write_text(
+        dedent("""\
+        [corpus]
+        name = 42
+        root = "/some/path"
+        """),
+        encoding="utf-8",
+    )
+
+    corpus_dir = tmp_path / "data6"
+    corpus_dir.mkdir()
+
+    result = CliRunner().invoke(
+        contextd.cli.cli,
+        ["add-corpus", str(corpus_dir), "--name", "err2", "--from", str(bad_template)],
+    )
+    assert result.exit_code == 1
+    assert "template invalid" in result.output
+
+
+def test_add_corpus_without_from_preserves_existing_behaviour(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Smoke test: omitting --from leaves the original scratch-TOML path intact."""
+    home = _setup_home(tmp_path, monkeypatch)
+    corpus_dir = tmp_path / "smoke"
+    corpus_dir.mkdir()
+    result = CliRunner().invoke(
+        contextd.cli.cli,
+        ["add-corpus", str(corpus_dir), "--name", "smoke", "--granularity", "file"],
+    )
+    assert result.exit_code == 0, result.output
+    toml_path = home / "corpora" / "smoke.toml"
+    assert toml_path.exists()
+    data = tomllib.loads(toml_path.read_text())
+    assert data["corpus"]["name"] == "smoke"
+    assert data["corpus"]["include"] == ["**/*.md"]
+    assert data["corpus"]["granularity"] == "file"
+
+
+def test_add_corpus_from_runeledger_template(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Round-trip test with a copy of the realistic runeledger-prd corpus.toml."""
+    home = _setup_home(tmp_path, monkeypatch)
+
+    # Build a directory that mimics examples/runeledger-prd/ structure.
+    examples_dir = tmp_path / "examples" / "runeledger-prd"
+    examples_dir.mkdir(parents=True)
+    tools_dir = examples_dir / "tools"
+    tools_dir.mkdir()
+    prompts_dir = examples_dir / "prompts"
+    prompts_dir.mkdir()
+
+    template = examples_dir / "corpus.toml"
+    template.write_text(
+        dedent("""\
+        [corpus]
+        name = "runeledger-prd"
+        root = "/home/giuseppe/src/games/runeledger"
+        include = ["docs/prd/**/*.md", "mods/base/**/*.lua", "prd.md", "CLAUDE.md"]
+        exclude = ["docs/prd/_audit-methodology.md"]
+        granularity = "section"
+        heading_min_level = 2
+        heading_max_level = 4
+
+        [embedding]
+        model = "voyage-3"
+
+        [ontology]
+        base = "default"
+        overrides = "examples/runeledger-prd/ontology.json"
+
+        [ontology.aliases]
+        Registry = "Pattern"
+        FRRow = "Ticket"
+        LuaFile = "File"
+        GapEntry = "Risk"
+
+        [mcp.tools]
+        four_surface = "examples/runeledger-prd/tools/four_surface.cypher"
+        find_dangling_registrations = "examples/runeledger-prd/tools/dangling.cypher"
+        audit_stale_shas = "examples/runeledger-prd/tools/stale_shas.cypher"
+
+        [summarization]
+        prompt_override = "examples/runeledger-prd/prompts/summary.md"
+        """),
+        encoding="utf-8",
+    )
+
+    corpus_dir = tmp_path / "runeledger"
+    corpus_dir.mkdir()
+
+    result = CliRunner().invoke(
+        contextd.cli.cli,
+        [
+            "add-corpus",
+            str(corpus_dir),
+            "--name",
+            "runeledger-prd",
+            "--from",
+            str(template),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+    data = tomllib.loads((home / "corpora" / "runeledger-prd.toml").read_text())
+
+    # Name and root overridden.
+    assert data["corpus"]["name"] == "runeledger-prd"
+    assert data["corpus"]["root"] == str(corpus_dir.resolve())
+
+    # Aliases preserved.
+    assert data["ontology"]["aliases"]["Registry"] == "Pattern"
+    assert data["ontology"]["aliases"]["GapEntry"] == "Risk"
+
+    # Relative paths rewritten to absolute (resolved relative to template parent).
+    template_parent = examples_dir
+    assert (
+        Path(data["ontology"]["overrides"])
+        == (template_parent / "examples/runeledger-prd/ontology.json").resolve()
+    )
+    assert (
+        Path(data["summarization"]["prompt_override"])
+        == (template_parent / "examples/runeledger-prd/prompts/summary.md").resolve()
+    )
+    for tool_path in data["mcp"]["tools"].values():
+        assert Path(tool_path).is_absolute()
+
+    # Include/exclude preserved.
+    assert "docs/prd/**/*.md" in data["corpus"]["include"]
+    assert data["corpus"]["exclude"] == ["docs/prd/_audit-methodology.md"]
