@@ -45,12 +45,17 @@ def init(yes: bool) -> None:
         compose_path.write_text(compose)
         console.print(f"[green]✓[/] wrote docker-compose template to {compose_path}")
 
+    copied = 0
     for name in ("summarise.md", "relate.md", "translate.md"):
         dst = home / "prompts" / name
         if not dst.exists():
             src_text = resources.files("prompts").joinpath(name).read_text()
             dst.write_text(src_text)
-    console.print("[green]✓[/] prompt templates copied (overridable)")
+            copied += 1
+    if copied:
+        console.print(f"[green]✓[/] prompt templates copied ({copied}/3, overridable)")
+    else:
+        console.print("[dim]·[/] prompt templates already present")
 
     # Env-var prerequisite check.
     missing: list[str] = []
