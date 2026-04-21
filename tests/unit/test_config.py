@@ -11,7 +11,7 @@ def test_load_default_returns_valid_config() -> None:
     assert cfg.providers.embedding == "voyage"
     assert cfg.storage.backend == "neo4j"
     assert cfg.storage.memgraph.port == 7687
-    assert cfg.storage.kuzu.db_path.endswith("/graph/")
+    assert cfg.storage.neo4j.port == 7687
     assert cfg.inference.summary_max_words == 100
     assert cfg.indexer.debounce_seconds == 30
 
@@ -30,13 +30,13 @@ def test_load_user_overrides_defaults(tmp_path: Path) -> None:
     user_cfg = tmp_path / "config.toml"
     user_cfg.write_text("""
 [storage]
-backend = "kuzu"
+backend = "memgraph"
 
 [indexer]
 debounce_seconds = 15
 """)
     cfg = Config.load(user_cfg)
-    assert cfg.storage.backend == "kuzu"
+    assert cfg.storage.backend == "memgraph"
     assert cfg.indexer.debounce_seconds == 15
     # Unspecified fields fall back to defaults.
     assert cfg.providers.inference == "gemini"
@@ -48,7 +48,7 @@ def test_rejects_unknown_backend(tmp_path: Path) -> None:
 [storage]
 backend = "redis"
 """)
-    with pytest.raises(ConfigError, match=r"memgraph.*kuzu"):
+    with pytest.raises(ConfigError, match=r"memgraph.*neo4j"):
         Config.load(user_cfg)
 
 

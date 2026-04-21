@@ -52,25 +52,14 @@ def _seed_corpus(backend: GraphStore, *, with_embeddings: bool = True) -> None:
 
 
 def _rebuild_fts_index_if_needed(backend: GraphStore) -> None:
-    """Memgraph's TEXT INDEX is created in the baseline migration, but empty
-    until the first write invalidates the cache. A subsequent search works
-    without ceremony — no explicit rebuild is required. Kuzu FTS indexes,
-    by contrast, index only rows that were present at CREATE_FTS_INDEX
-    time, so populating rows after the migration means the FTS sees no hits.
+    """No-op on the current backend roster.
 
-    This helper drops and recreates the Kuzu FTS index post-seeding. It is
-    a no-op on Memgraph.
-
-    Single-seed assumption: call this exactly once, after the final seed
-    insert. A test that re-seeds later must call it again (otherwise only
-    the pre-rebuild rows are visible to Kuzu FTS — Memgraph would still
-    surface the late rows, silently diverging behaviour across backends).
+    Memgraph's TEXT INDEX and Neo4j's FULLTEXT INDEX both pick up late
+    writes without an explicit rebuild. The helper is retained for a
+    uniform call-site signature and a place to hang future backend-
+    specific workarounds.
     """
-    if backend.capabilities.name != "kuzu":
-        return
-    # Drop + recreate so the FTS picks up the just-inserted rows.
-    backend.exec_write("CALL DROP_FTS_INDEX('File', 'File_summary_ft')", None)
-    backend.exec_write("CALL CREATE_FTS_INDEX('File', 'File_summary_ft', ['summary'])", None)
+    return
 
 
 # ---------- vector_search ----------
@@ -116,12 +105,12 @@ def test_vector_search_threshold_filters(seeded_backend: GraphStore) -> None:
     The ABC normalises the contract as a similarity floor on [0, 1], but the
     scoring origin differs by backend:
 
-    - Memgraph/Kuzu: raw cosine similarity (orthogonal = 0.0).
+    - Memgraph: raw cosine similarity (orthogonal = 0.0).
     - Neo4j: (1 + dot) / 2 normalisation (orthogonal = 0.5, documented in
       ``Neo4jBackend.vector_search``).
 
     We pick ``threshold=0.6`` so the orthogonal vector is dropped on every
-    backend (0.0 < 0.6 on Memgraph/Kuzu; 0.5 < 0.6 on Neo4j) while the
+    backend (0.0 < 0.6 on Memgraph; 0.5 < 0.6 on Neo4j) while the
     45° vector (0.7071 raw / ≈0.854 Neo4j) and aligned vector still pass.
     Threshold calibration is inherently backend-aware because of the
     scoring-origin difference; picking a value that works under both

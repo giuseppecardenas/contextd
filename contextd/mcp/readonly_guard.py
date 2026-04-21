@@ -1,7 +1,7 @@
 """Rejects Cypher containing write keywords.
 
 Spec §7.4: all MCP tools are read-only. The guard is a thin keyword
-check — sufficient because Memgraph and Kuzu both tokenize identically,
+check — sufficient because Memgraph and Neo4j both tokenize identically,
 and the read-only surface (MATCH, WITH, UNWIND, RETURN, and read-only
 CALL procedures like db.labels() or text_search.search_all) is small.
 

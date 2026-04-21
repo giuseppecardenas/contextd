@@ -1,7 +1,7 @@
 """Backend input-validation helpers.
 
 Backend methods accept ``label``, ``edge_type``, and ``property_name`` as
-``str`` and splice them into Cypher because neither Memgraph nor Kuzu support
+``str`` and splice them into Cypher because neither Memgraph nor Neo4j support
 parameterising identifier positions (labels, relationship types, property
 names in CREATE/SET patterns). The upstream callers — the indexer and the
 ontology-validation layer — already restrict these to known values, but
@@ -15,9 +15,8 @@ Any call site that cannot accept an identifier (e.g., a whole property
 dict) must parameterise via ``$bind`` instead of splicing.
 
 The module also hosts numeric-input guards (``validate_search_k``,
-``validate_threshold``) that both backends share because ``k`` is either
-inlined into Cypher (Kuzu) or bound positionally (Memgraph) — silent
-coercions like ``k=True -> 1`` or ``k=9.9 -> 9`` would otherwise succeed.
+``validate_threshold``) that both backends share — silent coercions
+like ``k=True -> 1`` or ``k=9.9 -> 9`` would otherwise succeed.
 """
 
 from __future__ import annotations
@@ -62,9 +61,8 @@ def validate_search_k(k: int) -> int:
     """Return ``k`` unchanged if it is a positive non-bool ``int``.
 
     ``isinstance(True, int)`` is ``True`` in Python — the bool check must
-    precede the int check. Kuzu inlines ``k`` as a Cypher literal and
-    Memgraph binds it as a parameter; both paths silently mis-interpret
-    ``True`` as ``1`` or ``9.9`` as ``9`` if we accept anything beyond ``int``.
+    precede the int check. Both backends silently mis-interpret ``True``
+    as ``1`` or ``9.9`` as ``9`` if we accept anything beyond ``int``.
     """
     if isinstance(k, bool) or not isinstance(k, int):
         raise ValueError(f"k must be a non-bool int; got {k!r} ({type(k).__name__})")
@@ -77,9 +75,9 @@ def validate_threshold(threshold: float | None) -> float | None:
     """Return ``threshold`` unchanged, or raise if it is non-finite or out of [0, 1].
 
     Both backends treat threshold as a cosine-similarity floor in ``[0, 1]``.
-    ``nan`` / ``inf`` would bypass the parameter bind on Kuzu (distance_cap
-    math) and land in raw Cypher; values outside ``[0, 1]`` yield the empty
-    set on Memgraph and nonsense rankings on Kuzu.
+    ``nan`` / ``inf`` would bypass the parameter bind on backends that
+    f-string the value; values outside ``[0, 1]`` yield empty-set or
+    nonsense results depending on the backend's scoring origin.
     """
     if threshold is None:
         return None

@@ -15,7 +15,8 @@ def _setup_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home = tmp_path / ".contextd"
     home.mkdir()
     (home / "config.toml").write_text(
-        '[storage]\nbackend = "kuzu"\n\n[storage.kuzu]\ndb_path = "' + str(home) + '/graph"\n'
+        '[storage]\nbackend = "memgraph"\n\n[storage.memgraph]\n'
+        f'docker_compose_file = "{home}/docker-compose.yml"\n'
     )
     monkeypatch.setenv("CONTEXTD_HOME", str(home))
     return home
@@ -100,7 +101,8 @@ def test_list_corpora_when_corpora_dir_missing(
     home.mkdir()
     # Deliberately do NOT mkdir corpora/.
     (home / "config.toml").write_text(
-        f'[storage]\nbackend = "kuzu"\n\n[storage.kuzu]\ndb_path = "{home}/graph"\n'
+        f'[storage]\nbackend = "memgraph"\n\n[storage.memgraph]\n'
+        f'docker_compose_file = "{home}/docker-compose.yml"\n'
     )
     monkeypatch.setenv("CONTEXTD_HOME", str(home))
     result = CliRunner().invoke(contextd.cli.cli, ["list-corpora"])

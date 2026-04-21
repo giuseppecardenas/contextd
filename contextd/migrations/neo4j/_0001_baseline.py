@@ -2,8 +2,7 @@
 
 Neo4j 5.x declares vector and full-text indexes via CREATE ... INDEX DDL
 with an OPTIONS map. Uniqueness is a CONSTRAINT, not an index. The schema
-is schema-free at the node-table level (unlike Kuzu); nodes gain
-properties dynamically.
+is schema-free at the node-table level; nodes gain properties dynamically.
 """
 
 from typing import Any

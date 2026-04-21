@@ -1,7 +1,7 @@
 """Forward-only migration runner.
 
 Each backend ships its own migrations (contextd/migrations/memgraph/*.py
-and contextd/migrations/kuzu/*.py) because schema DDL differs. The
+and contextd/migrations/neo4j/*.py) because schema DDL differs. The
 Meta singleton node records applied IDs; the runner skips any migration
 whose ID is already present.
 """
@@ -21,12 +21,10 @@ class Migration:
     succeeds and then fails (e.g., table 2 of 3 raises), the runner halts
     without recording the migration as applied, and the next ``apply()``
     call will re-run ``up`` from the top. Every statement inside ``up``
-    must therefore be safe to re-execute — use ``CREATE TABLE IF NOT
-    EXISTS``, ``CREATE INDEX IF NOT EXISTS``, and treat ``ALTER TABLE
-    ... ADD COLUMN`` with care (neither Memgraph nor Kuzu support
-    ``IF NOT EXISTS`` on ADD COLUMN, so a partial failure there blocks
-    retries; prefer a CREATE-then-REPLACE pattern or split into multiple
-    migrations).
+    must therefore be safe to re-execute — use ``CREATE CONSTRAINT IF
+    NOT EXISTS``, ``CREATE INDEX IF NOT EXISTS``, and treat schema
+    mutations with care (prefer CREATE-then-REPLACE patterns or split
+    into multiple migrations).
     """
 
     id: int
@@ -48,9 +46,7 @@ class MigrationRunner:
             self._record_applied(m.id)
 
     def _current_applied(self) -> set[int]:
-        # The singleton Meta node uses schema_version=0 as a fixed PK. This is
-        # redundant on Memgraph (schema-free) but required on Kuzu, which
-        # rejects MERGE that omits the primary key.
+        # The singleton Meta node uses schema_version=0 as a fixed PK.
         rows = self._store.exec_read(
             "MATCH (m:Meta {schema_version: 0}) RETURN m.applied AS applied LIMIT 1",
             None,
@@ -61,8 +57,8 @@ class MigrationRunner:
 
     def _record_applied(self, migration_id: int) -> None:
         # migration_id is a developer-controlled int (no injection surface);
-        # inlining it sidesteps Kuzu's strict type inference on list-concat,
-        # which rejects Python ints as INT8 against an INT64[] column.
+        # inlining it avoids any backend-specific type-inference quirks on
+        # list-concat against the INT64[] applied column.
         self._store.exec_write(
             f"MERGE (m:Meta {{schema_version: 0}}) "
             f"SET m.applied = coalesce(m.applied, []) + [{int(migration_id)}]",

@@ -24,11 +24,6 @@ docker_compose_file = "~/.contextd/docker-compose.yml"
 memory_limit_gb = 1.0
 cpu_limit = 1.0
 
-[storage.kuzu]
-db_path = "~/.contextd/graph/"
-buffer_pool_size_mb = 1024
-max_threads = 4
-
 [inference]
 summary_max_words = 100
 

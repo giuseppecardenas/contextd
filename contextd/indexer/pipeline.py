@@ -61,8 +61,8 @@ def run_bootstrap(
     results: list[phases.PhaseResult] = []
     if corpus.corpus.granularity == "section":
         # Section-granular path (spec §5.11).
-        # Spec-delta (M9.1-A): embedder passed to phase_enumerate_sections so that
-        # Section.embedding is included at CREATE time (IMMUTABLE_AFTER_CREATE on Kuzu).
+        # Embedder passed to phase_enumerate_sections so that Section.embedding
+        # is included at CREATE time.
         results.append(phases.phase_enumerate_sections(files, corpus, store, embedder, hasher))
         # SD #74: drop stale Section nodes before the rest of the section-mode
         # phases run. Must sit AFTER enumerate (so current-pass sections are
@@ -78,9 +78,8 @@ def run_bootstrap(
         results.append(phases.phase_close(corpus.corpus.name, store, results))
     else:
         # File-granular path (default, spec §5.9).
-        # Spec-delta (b): phase_enumerate now accepts embedder so that embedding
-        # vectors are included in the initial upsert_node call (Kuzu requires
-        # embedding at CREATE time; File.embedding is IMMUTABLE_AFTER_CREATE).
+        # phase_enumerate accepts an embedder so that embedding vectors are
+        # included in the initial upsert_node call (CREATE time).
         results.append(phases.phase_enumerate(files, corpus.corpus.name, hasher, store, embedder))
         # phase_embed is an accounting-only pass (embedding already done in enumerate).
         results.append(phases.phase_embed(files))

@@ -1,8 +1,8 @@
-"""Memgraph sibling of SD #70's Kuzu migration.
+"""SD #70 — Corpus.node_count + Corpus.edge_count accounting.
 
-No-op: Memgraph is schema-free, so Corpus nodes can accept new
-properties at write time without DDL. This migration exists to keep
-schema_version parity with Kuzu so cross-backend upgrade paths line up.
+No-op on Memgraph: schema-free, so Corpus nodes can accept new properties
+at write time without DDL. This migration exists to keep schema_version
+parity across backends so cross-backend upgrade paths line up.
 """
 
 from typing import Any

@@ -1,6 +1,6 @@
 """Unit tests for MCP tool behaviour — Cypher shape, clamps, and descriptors.
 
-Integration coverage (queries actually executing against Memgraph + Kuzu)
+Integration coverage (queries actually executing against Memgraph + Neo4j)
 lives in tests/integration/test_mcp_tools.py; this file exercises the
 pure-Python surface that doesn't need a backend.
 """

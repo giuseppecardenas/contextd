@@ -14,7 +14,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-BackendName = Literal["memgraph", "kuzu", "neo4j"]
+BackendName = Literal["memgraph", "neo4j"]
 SafetyBlock = Literal[
     "BLOCK_NONE", "BLOCK_ONLY_HIGH", "BLOCK_MEDIUM_AND_ABOVE", "BLOCK_LOW_AND_ABOVE"
 ]
@@ -57,13 +57,6 @@ class MemgraphConfig(BaseModel):
     cpu_limit: float = 1.0
 
 
-class KuzuConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    db_path: str = "~/.contextd/graph/"
-    buffer_pool_size_mb: int = 1024
-    max_threads: int = 4
-
-
 class Neo4jConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     host: str = "127.0.0.1"
@@ -84,9 +77,8 @@ class StorageConfig(BaseModel):
         "neo4j"  # was "memgraph"; flipped in M11.8 for reference-Cypher reliability
     )
     memgraph: MemgraphConfig = Field(default_factory=MemgraphConfig)
-    kuzu: KuzuConfig = Field(default_factory=KuzuConfig)
     neo4j: Neo4jConfig = Field(default_factory=Neo4jConfig)
-    # The `Literal["memgraph", "kuzu", "neo4j"]` type constraint on BackendName
+    # The `Literal["memgraph", "neo4j"]` type constraint on BackendName
     # above is enforced by pydantic v2 before any @field_validator runs — a
     # manual validator was redundant and has been removed. Adding a new backend
     # requires updating BackendName + the factory + the migrations dirs.

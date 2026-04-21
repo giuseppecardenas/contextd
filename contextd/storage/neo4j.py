@@ -86,7 +86,6 @@ class Neo4jBackend(GraphStore):
         # Both labels required: a MERGE without the endpoint label match silently
         # binds zero rows on schema-free Neo4j (unlike Memgraph's OR-across-PKs
         # fallback), which would fail to create the edge with no visible error.
-        # Matches KuzuBackend's strict-labels contract.
         if src_label is None or dst_label is None:
             raise ValueError(
                 "Neo4jBackend.upsert_edge requires both src_label and dst_label; "
@@ -123,8 +122,7 @@ class Neo4jBackend(GraphStore):
             )
         # src_label required: without it the MATCH would silently bind zero rows
         # on schema-free Neo4j when the endpoint is not a File (Section/Artifact/
-        # Pattern/etc. have non-"path" PKs). Matches KuzuBackend's strict-labels
-        # contract.
+        # Pattern/etc. have non-"path" PKs).
         if src_label is None:
             raise ValueError(
                 "Neo4jBackend.delete_edges requires src_label; node tables "
@@ -172,7 +170,7 @@ class Neo4jBackend(GraphStore):
 
         Neo4j returns (node, score) where score is cosine similarity in [0, 1]
         (higher is more similar). Matches the ABC's contract directly — no
-        distance-to-similarity conversion needed (unlike Kuzu did).
+        distance-to-similarity conversion needed.
 
         Note: Neo4j normalises similarity via ``(1 + dot) / 2``, so
         orthogonal vectors score 0.5 (not 0.0); identical direction scores

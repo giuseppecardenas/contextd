@@ -19,10 +19,10 @@ def _setup_home(tmp_path: Path) -> Path:
     home.mkdir()
     config = f"""
 [storage]
-backend = "kuzu"
+backend = "memgraph"
 
-[storage.kuzu]
-db_path = "{home}/graph"
+[storage.memgraph]
+docker_compose_file = "{home}/docker-compose.yml"
 """
     (home / "config.toml").write_text(config)
     (home / "corpora").mkdir()

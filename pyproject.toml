@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
 authors = [{ name = "Giuseppe Cardenas" }]
-keywords = ["mcp", "knowledge-graph", "rag", "graphrag", "memgraph", "kuzu"]
+keywords = ["mcp", "knowledge-graph", "rag", "graphrag", "memgraph", "neo4j"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -31,7 +31,6 @@ dependencies = [
     "mcp>=0.9",
     "neo4j>=5.15",
     "gqlalchemy>=1.5",
-    "kuzu>=0.4",
     "google-genai>=0.3",
     "voyageai>=0.2",
 ]

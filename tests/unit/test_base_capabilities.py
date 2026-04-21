@@ -15,7 +15,7 @@ def test_capabilities_is_frozen() -> None:
     import dataclasses
 
     try:
-        caps.name = "kuzu"  # type: ignore[misc]
+        caps.name = "neo4j"  # type: ignore[misc]
     except dataclasses.FrozenInstanceError:
         return
     raise AssertionError("BackendCapabilities must be frozen.")
@@ -33,13 +33,13 @@ def test_unlimited_sentinel() -> None:
     )
     assert caps.unlimited_writers is True
 
-    caps_kuzu = BackendCapabilities(
-        name="kuzu",
+    caps_bounded = BackendCapabilities(
+        name="neo4j",
         concurrent_writers=1,
         supports_vector_index=True,
         supports_full_text_index=True,
         supports_graph_algorithms=False,
-        requires_docker=False,
-        default_connection="~/.contextd/graph/",
+        requires_docker=True,
+        default_connection="bolt://127.0.0.1:7687",
     )
-    assert caps_kuzu.unlimited_writers is False
+    assert caps_bounded.unlimited_writers is False

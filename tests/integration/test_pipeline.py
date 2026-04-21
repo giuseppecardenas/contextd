@@ -216,8 +216,8 @@ def test_section_granular_bootstrap(backend, tmp_path: Path) -> None:
 
 def test_section_granular_inferred_edges(backend, tmp_path: Path) -> None:
     """Exercise phase_relate_sections' delete_edges + upsert_edge with the
-    Delta B label kwargs (src_label='Section', dst_label=...). Without this,
-    the label-plumbing code path is not validated at runtime on Kuzu."""
+    Delta B label kwargs (src_label='Section', dst_label=...). Exercises
+    the label-plumbing code path at runtime on both backends."""
     from contextd.corpus_config import CorpusConfig
     from contextd.indexer.hasher import FileHasher
     from contextd.indexer.pipeline import run_bootstrap

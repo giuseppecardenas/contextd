@@ -31,7 +31,6 @@ def _compose_file_for(cfg: Config) -> Path:
     elif backend == "neo4j":
         compose_file_str = cfg.storage.neo4j.docker_compose_file
     else:
-        # kuzu branch is handled by callers; this shouldn't trigger.
         raise RuntimeError(f"unexpected backend for compose dispatch: {backend!r}")
     return Path(compose_file_str).expanduser()
 
@@ -42,33 +41,23 @@ def up() -> None:
     cfg = _load_cfg()
     backend = cfg.storage.backend
 
-    if backend == "kuzu":
-        # Kuzu is embedded — no container needed. Ensure the DB parent
-        # directory exists; KuzuBackend.connect() creates the file itself.
-        db_path = Path(cfg.storage.kuzu.db_path).expanduser()
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        console.print(f"[green]✓[/] kuzu database directory: {db_path}")
-    else:
-        if not shutil.which("docker"):
-            raise click.ClickException(
-                "docker not on PATH. Install Docker, or set [storage] backend = 'kuzu' "
-                "in ~/.contextd/config.toml to run without it."
-            )
-        compose_file = _compose_file_for(cfg)
-        cmd = [
-            "docker",
-            "compose",
-            "-f",
-            str(compose_file),
-            "--profile",
-            backend,
-            "up",
-            "-d",
-        ]
-        result = subprocess.run(cmd, check=False)
-        if result.returncode != 0:
-            raise click.ClickException(f"docker compose up failed (exit {result.returncode})")
-        console.print(f"[green]✓[/] {backend} container up at 127.0.0.1:7687")
+    if not shutil.which("docker"):
+        raise click.ClickException("docker not on PATH. Install Docker to run contextd.")
+    compose_file = _compose_file_for(cfg)
+    cmd = [
+        "docker",
+        "compose",
+        "-f",
+        str(compose_file),
+        "--profile",
+        backend,
+        "up",
+        "-d",
+    ]
+    result = subprocess.run(cmd, check=False)
+    if result.returncode != 0:
+        raise click.ClickException(f"docker compose up failed (exit {result.returncode})")
+    console.print(f"[green]✓[/] {backend} container up at 127.0.0.1:7687")
 
     # Apply migrations against the configured backend.
     from contextd.storage.factory import build_graph_store
@@ -85,9 +74,7 @@ def up() -> None:
 
             store.apply_migrations(ALL_MIGRATIONS)
         else:
-            from contextd.migrations.kuzu import ALL_MIGRATIONS
-
-            store.apply_migrations(ALL_MIGRATIONS)
+            raise RuntimeError(f"unexpected backend: {backend!r}")
         console.print("[green]✓[/] migrations applied")
     finally:
         store.close()
@@ -99,20 +86,19 @@ def down() -> None:
     """Stop the storage backend and indexer."""
     cfg = _load_cfg()
     backend = cfg.storage.backend
-    if backend in ("memgraph", "neo4j"):
-        compose_file = _compose_file_for(cfg)
-        subprocess.run(
-            [
-                "docker",
-                "compose",
-                "-f",
-                str(compose_file),
-                "--profile",
-                backend,
-                "down",
-            ],
-            check=False,
-        )
+    compose_file = _compose_file_for(cfg)
+    subprocess.run(
+        [
+            "docker",
+            "compose",
+            "-f",
+            str(compose_file),
+            "--profile",
+            backend,
+            "down",
+        ],
+        check=False,
+    )
     console.print("[green]✓[/] stopped")
 
 

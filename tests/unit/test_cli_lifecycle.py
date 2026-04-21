@@ -11,25 +11,14 @@ from click.testing import CliRunner
 import contextd.cli
 
 
-def _setup_contextd_home(tmp_path: Path, backend: str = "kuzu") -> Path:
+def _setup_contextd_home(tmp_path: Path, backend: str = "memgraph") -> Path:
     home = tmp_path / ".contextd"
     home.mkdir()
-    if backend == "kuzu":
-        # Use a nested path so the parent dir does NOT pre-exist — lets
-        # `test_up_kuzu_creates_db_path` assert that `up` actually created it.
-        config = f"""
+    config = f"""
 [storage]
-backend = "kuzu"
+backend = "{backend}"
 
-[storage.kuzu]
-db_path = "{home}/nested/graph"
-"""
-    else:
-        config = f"""
-[storage]
-backend = "memgraph"
-
-[storage.memgraph]
+[storage.{backend}]
 docker_compose_file = "{home}/docker-compose.yml"
 """
     (home / "config.toml").write_text(config)
@@ -38,7 +27,7 @@ docker_compose_file = "{home}/docker-compose.yml"
 
 
 def test_status_lists_corpora(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    home = _setup_contextd_home(tmp_path, backend="kuzu")
+    home = _setup_contextd_home(tmp_path, backend="memgraph")
     (home / "corpora" / "demo.toml").write_text("""
 [corpus]
 name = "demo"
@@ -48,28 +37,16 @@ root = "/tmp/demo"
     result = CliRunner().invoke(contextd.cli.cli, ["status"])
     assert result.exit_code == 0
     assert "demo" in result.output
-    assert "kuzu" in result.output
+    assert "memgraph" in result.output
 
 
 def test_status_no_corpora(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    home = _setup_contextd_home(tmp_path, backend="kuzu")
+    home = _setup_contextd_home(tmp_path, backend="memgraph")
     monkeypatch.setenv("CONTEXTD_HOME", str(home))
     result = CliRunner().invoke(contextd.cli.cli, ["status"])
     assert result.exit_code == 0
-    assert "kuzu" in result.output
+    assert "memgraph" in result.output
     assert "0 registered" in result.output
-
-
-def test_up_kuzu_creates_db_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # Kuzu stores its DB in a single file (spec-delta #3), so `up` creates the
-    # parent directory; the actual DB file is created by KuzuBackend.connect().
-    home = _setup_contextd_home(tmp_path, backend="kuzu")
-    monkeypatch.setenv("CONTEXTD_HOME", str(home))
-    result = CliRunner().invoke(contextd.cli.cli, ["up"])
-    assert result.exit_code == 0, result.output
-    # Parent dir did NOT pre-exist — `up` must have created it. Falsifiable.
-    assert (home / "nested").is_dir()
-    assert "kuzu database directory" in result.output
 
 
 def test_up_memgraph_calls_docker_compose(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -90,14 +67,6 @@ def test_up_memgraph_calls_docker_compose(tmp_path: Path, monkeypatch: pytest.Mo
     calls = [c.args[0] for c in mock_run.call_args_list]
     compose_calls = [c for c in calls if "compose" in c]
     assert any("--profile" in c and "memgraph" in c and "up" in c for c in compose_calls)
-
-
-def test_down_kuzu_prints_stopped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    home = _setup_contextd_home(tmp_path, backend="kuzu")
-    monkeypatch.setenv("CONTEXTD_HOME", str(home))
-    result = CliRunner().invoke(contextd.cli.cli, ["down"])
-    assert result.exit_code == 0
-    assert "stopped" in result.output
 
 
 def test_down_memgraph_calls_docker_compose_down(

@@ -14,7 +14,7 @@ Split layout (SD #80):
 - ``cli/_shared.py``  — ``PipelineDeps``, ``_load_cfg``, ``console`` (private helpers)
 
 All commands route through the global config (``~/.contextd/config.toml``).
-The factory layer decides whether to stand up Memgraph or Kuzu based on
+The factory layer decides whether to stand up Memgraph or Neo4j based on
 ``[storage] backend``.
 """
 
@@ -81,10 +81,10 @@ def init(yes: bool) -> None:
         for m in missing:
             console.print(f"  - {m}")
 
-    # Docker check (informational only — KuzuDB backend doesn't need it).
+    # Docker check — all supported backends run via docker compose.
     if not shutil.which("docker"):
         console.print(
-            "[yellow]⚠[/] docker not on PATH; set [storage] backend = 'kuzu' to run without Docker"
+            "[yellow]⚠[/] docker not on PATH; install Docker before running `contextd up`"
         )
 
     console.print("\n[bold]next:[/] `contextd up` to start the daemon.")

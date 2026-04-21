@@ -6,29 +6,21 @@ Phase 5c: summarisation     (Gemini per-file → File.summary + key_points)
 Phase 5d: relationship inf. (Gemini per-file → typed edges, wipe-and-replace inferred)
 Phase 5e: corpus closure    (write Corpus singleton stats)
 
-Spec-delta note (b): The plan's phase_embed used exec_write("... SET n.embedding = $vec",
-...) which fails on Kuzu because File.embedding is in
-IMMUTABLE_AFTER_CREATE_BY_LABEL — Kuzu rejects SET on vector-indexed columns after
-node creation. Resolution: embedding is computed in batch during phase_enumerate and
-included in the initial upsert_node call (so embedding is set at CREATE time).
-phase_embed is retained as a named accounting phase that reports the count without
-re-issuing writes, preserving the 5-phase contract and the integration test assertion
-result.phases[1].processed == 2. This is a structural deviation from the plan text;
-logged as spec-delta (b).
+Embedding vectors are computed in batch during phase_enumerate and passed to
+the initial upsert_node call at CREATE time. phase_embed is a named
+accounting phase that reports the count without re-issuing writes, preserving
+the 5-phase contract and the integration test assertion shape.
 
-Spec-delta note (M9.1-A): phase_enumerate_sections accepts embedder and pre-computes
-Section embeddings in batch at CREATE time. Section.embedding is IMMUTABLE_AFTER_CREATE
-on Kuzu; SET after creation would fail. Mirrors the M5.4 pattern for File.embedding.
+phase_enumerate_sections follows the same pattern for Section nodes: bodies
+are batch-embedded upfront and vectors are included in upsert_node at CREATE
+time. Structural edges (CONTAINS File→Section, PARENT_OF Section→Section,
+NEXT_SIBLING Section→Section) carry ``src_label``/``dst_label`` kwargs (the
+ABC requires them; see ``GraphStore.upsert_edge``).
 
-Spec-delta note (M9.1-B): upsert_edge calls in phase_enumerate_sections supply
-src_label/dst_label kwargs. Kuzu requires these for schema-first REL tables:
-  CONTAINS (FROM File TO Section), PARENT_OF (FROM Section TO Section),
-  NEXT_SIBLING (FROM Section TO Section).
-
-Spec-delta note (SD #74): phase_gc_sections runs after enumerate in section
-mode to DETACH-DELETE Section nodes whose anchor is no longer produced by
-the parser (e.g., heading renamed between re-indexes). Without this, stale
-Section nodes accumulate across re-indexes and pollute describe_project.
+phase_gc_sections runs after enumerate in section mode to DETACH-DELETE
+Section nodes whose anchor is no longer produced by the parser (heading
+renamed between re-indexes). Without this, stale Section nodes accumulate
+and pollute ``describe_project``.
 """
 
 from __future__ import annotations
@@ -65,14 +57,12 @@ def phase_enumerate(
 ) -> PhaseResult:
     """Create File nodes with embeddings included at creation time.
 
-    Spec-delta (b): embedder is accepted here so that embedding vectors are
-    passed to upsert_node at CREATE time. Kuzu rejects SET on vector-indexed
-    columns (File.embedding) after node creation; including the embedding in
-    the initial properties dict satisfies the constraint. The phase_embed step
-    below is a count-only accounting pass.
+    Embedder is accepted so that embedding vectors are passed to
+    ``upsert_node`` at CREATE time. The phase_embed step below is a
+    count-only accounting pass.
     """
     # Batch-compute embeddings for all files upfront so we can include them
-    # in the initial upsert_node call (required by Kuzu's IMMUTABLE_AFTER_CREATE).
+    # in the initial upsert_node call.
     all_embeddings: list[list[float]] = []
     for start in range(0, len(files), batch_size):
         batch = files[start : start + batch_size]
@@ -100,10 +90,9 @@ def phase_enumerate(
 def phase_embed(files: list[Path]) -> PhaseResult:
     """Accounting phase: embedding was performed in phase_enumerate.
 
-    Spec-delta (b): phase_enumerate embeds at node-CREATE time because
-    Kuzu's File.embedding is IMMUTABLE_AFTER_CREATE. This phase reports
-    the count of files that were embedded, preserving the 5-phase contract
-    and the integration test's phases[1].processed assertion.
+    Reports the count of files that were embedded, preserving the
+    5-phase contract and the integration test's phases[1].processed
+    assertion.
     """
     return PhaseResult(name="embed", processed=len(files), skipped=0)
 
@@ -144,8 +133,9 @@ def phase_relate(
             skipped += 1
             continue
         # Wipe-and-replace inferred edges (spec §5.5).
-        # Spec-delta (c): src_label="File" added — Kuzu requires src_label on
-        # delete_edges; without it KuzuBackend raises ValueError.
+        # src_label="File" required by GraphStore.delete_edges (see ABC
+        # docstring) — a label-less MATCH is ambiguous when endpoints
+        # have non-"path" PKs.
         store.delete_edges(str(f), origin="inferred", src_label="File")
         for rel in relations:
             try:
@@ -157,8 +147,7 @@ def phase_relate(
                 skipped += 1
                 continue
             store.upsert_node(rel.target_type, {pk: rel.target_name})
-            # Spec-delta (c): src_label="File", dst_label=rel.target_type added —
-            # Kuzu requires both labels on upsert_edge for schema-first REL tables.
+            # src_label/dst_label required by GraphStore.upsert_edge.
             store.upsert_edge(
                 str(f),
                 rel.target_name,
@@ -177,12 +166,9 @@ def phase_close(
     store: GraphStore,
     results: list[PhaseResult],
 ) -> PhaseResult:
-    # Spec-delta (d): replaced "__now__" placeholder with datetime.now(timezone.utc).
-    # Kuzu's TIMESTAMP column rejects the string "__now__" — no backend code performed
-    # the substitution. Using a real UTC datetime at the call site is the correct fix.
-    # SD #70: Corpus.node_count + Corpus.edge_count now persisted. Migration 2
-    # (_0002_corpus_stats) adds the columns on Kuzu; Memgraph is schema-free
-    # and accepted the properties without DDL.
+    # SD #70: Corpus.node_count + Corpus.edge_count are persisted. Both
+    # backends are schema-free at the Corpus level; the fields land directly
+    # via upsert_node without DDL.
     count_files = store.exec_read(
         "MATCH (n:File {corpus: $c}) RETURN count(n) AS c", {"c": corpus}
     )[0]["c"]
@@ -209,17 +195,16 @@ def phase_enumerate_sections(
 ) -> PhaseResult:
     """Section-granular enumeration — emits Section nodes + structural edges.
 
-    Spec-delta (M9.1-A): embedder is accepted here so that Section.embedding
-    is included in upsert_node at CREATE time. Kuzu rejects SET on
-    IMMUTABLE_AFTER_CREATE columns (Section.embedding) after node creation.
-    Batch-embed all section bodies first, then upsert with embedding attached.
+    Embedder is accepted so that Section.embedding is included in
+    ``upsert_node`` at CREATE time. Section bodies are batch-embedded
+    upfront, then each Section is upserted with its embedding attached.
 
-    Spec-delta (M9.1-B): upsert_edge calls supply src_label/dst_label kwargs
-    because Kuzu requires them for schema-first REL tables.
+    ``upsert_edge`` calls supply ``src_label``/``dst_label`` kwargs as
+    required by ``GraphStore.upsert_edge``.
 
-    SD #73 (follow-up to M9.1-E): FileHasher is now threaded through so
-    File.hash records the real MD5 of the file. Previously a "__pending__"
-    sentinel blocked incremental re-index in section mode.
+    SD #73: FileHasher is threaded through so File.hash records the real
+    MD5 of the file. Previously a "__pending__" sentinel blocked
+    incremental re-index in section mode.
     """
     parser = HeadingParser(
         min_level=corpus_cfg.corpus.heading_min_level,
@@ -278,7 +263,7 @@ def phase_enumerate_sections(
                     "embedding": embedding_map[(file_path, section_id)],
                 },
             )
-            # Delta B: labels required for Kuzu schema-first REL tables.
+            # src_label/dst_label required by GraphStore.upsert_edge.
             store.upsert_edge(
                 file_path,
                 section_id,
@@ -334,11 +319,10 @@ def phase_gc_sections(
     skip such sections (their anchor is absent from the parser output) but
     the node itself persists forever and pollutes ``describe_project``.
 
-    Per-id iteration rather than a bulk ``IN``-list parameter because Kuzu
-    0.11 has quirks passing large lists as ``$keep`` parameters; one
-    ``MATCH ... DETACH DELETE`` per stale section is fine at realistic
-    corpus scale (≤ a few hundred stale sections per re-index) and keeps
-    the query shape identical on both backends.
+    Per-id iteration rather than a bulk ``IN``-list parameter keeps the
+    query shape simple and consistent across backends; realistic corpus
+    scale (≤ a few hundred stale sections per re-index) makes the N-query
+    overhead negligible.
     """
     parser = _build_parser(corpus_cfg)
     parse_cache: dict[str, list[ParsedSection]] = {}
@@ -363,13 +347,7 @@ def phase_gc_sections(
 
 def phase_embed_sections(corpus_cfg: CorpusConfig, store: GraphStore) -> PhaseResult:
     """Accounting phase: Section embeddings are written at CREATE time in
-    phase_enumerate_sections (spec-delta #21 — Kuzu's Section.embedding is
-    IMMUTABLE_AFTER_CREATE). This phase counts rows and returns.
-
-    Signature shrunk in follow-up to SD #81: the ``embedder`` and
-    ``batch_size`` params that mirrored the plan's pre-delta shape were
-    unused — dropping them to match the M5.4 cleanup pattern from
-    `1591925` (file-mode ``phase_embed(files)`` also lost dead params).
+    phase_enumerate_sections. This phase counts rows and returns.
 
     TODO(M9-followup): if incremental re-index needs to refresh stale
     embeddings, implement a DETACH-DELETE + re-CREATE pattern here.
@@ -390,11 +368,8 @@ def phase_summarise_sections(
 
     Reads the section body by re-parsing the source file and locating the
     section by anchor. On any exception (provider error, parse failure) the
-    section is skipped and counted in skipped.
-
-    Spec-delta (M9.2-F): each section requires a full file re-parse; for an
-    N-section file that is N parses per phase. Deferred: cache
-    ParsedSection-by-anchor in-memory or store body as a graph property.
+    section is skipped and counted in skipped. Parse output is cached per
+    file via ``_parse_cached`` so each file is parsed once per phase.
     """
     rows = store.exec_read(
         "MATCH (s:Section {corpus: $c}) RETURN s.id AS id, s.path AS path",
@@ -438,21 +413,10 @@ def phase_relate_sections(
     """Infer typed edges from each Section node (spec §5.11.3).
 
     Wipe-and-replace inferred edges per section then upsert new ones.
-
-    Spec-delta (M9.2-B): delete_edges and upsert_edge both supply
-    src_label="Section" and dst_label=rel.target_type. Kuzu requires
-    explicit src/dst labels on REL-table operations; without them
-    KuzuBackend raises ValueError.
-
-    Spec-delta (M9.2-F): each section re-parses its source file (see
-    phase_summarise_sections note).
-
-    Spec-delta (M9.2-G): inferred edges from Section to arbitrary target
-    types may not match Kuzu's REL-table declarations (e.g., only
-    REFERENCES(FROM Section TO Section) exists). If Kuzu raises on an
-    unsupported Section→X edge type, the caller will surface the error.
-    The integration test guards against this by using an inferrer that
-    returns no relations.
+    ``delete_edges`` and ``upsert_edge`` both supply ``src_label="Section"``
+    and ``dst_label=rel.target_type`` as required by ``GraphStore``. Parse
+    output is cached per file via ``_parse_cached`` so each file is parsed
+    once per phase.
     """
     rows = store.exec_read(
         "MATCH (s:Section {corpus: $c}) RETURN s.id AS id, s.path AS path",
@@ -505,13 +469,10 @@ def phase_derive_file_level(
 ) -> PhaseResult:
     """Derive File.summary from child section summaries (spec §5.11.3).
 
-    Spec-delta (M9.2-C): File.embedding is NOT derived in section mode
-    because Kuzu's File.embedding is IMMUTABLE_AFTER_CREATE (see
-    contextd/storage/_keys.py). SET f.embedding after node creation is
-    rejected by Kuzu. Centroid computation is not attempted — File.embedding
-    remains NULL in section-mode corpora on both backends for consistency.
-    See CLAUDE.md's "Permanent limitations" section for SD #71 (Kuzu 0.11.3
-    upstream bug prevents post-create embedding mutation; no fix available).
+    File.embedding is NOT derived in section mode — centroid computation
+    is not attempted; File.embedding remains NULL in section-mode corpora.
+    Callers that need a file-level embedding in section mode should
+    compute a centroid at query time over the Section embeddings.
     """
     rows = store.exec_read(
         "MATCH (f:File {corpus: $c})-[:CONTAINS]->(s:Section) "

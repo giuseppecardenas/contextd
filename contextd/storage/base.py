@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
-BackendName = Literal["memgraph", "kuzu", "neo4j"]
+BackendName = Literal["memgraph", "neo4j"]
 Origin = Literal["inferred", "structural", "manual"]
 
 
@@ -36,11 +36,11 @@ class BackendCapabilities:
 
 
 class GraphStore(ABC):
-    """Common interface for pluggable graph stores (Memgraph, KùzuDB).
+    """Common interface for pluggable graph stores (Memgraph, Neo4j).
 
     All higher layers (indexer, MCP server, CLI) depend on this ABC.
     Backend-specific imports are confined to ``contextd/storage/memgraph.py``
-    and ``contextd/storage/kuzu.py``; a CI grep step (see .github/workflows/
+    and ``contextd/storage/neo4j.py``; a CI grep step (see .github/workflows/
     ci.yml) enforces the separation.
     """
 
@@ -73,11 +73,11 @@ class GraphStore(ABC):
 
         ``edge_type`` is the relationship type (REFERENCES, CONTAINS, …).
         ``src_label`` / ``dst_label`` are the endpoint *node* labels; they
-        are required on schema-first backends (Kuzu) and advisory on
-        schema-free backends (Memgraph, which uses them to narrow the
-        MATCH). When omitted on Kuzu, the backend raises because REL tables
-        declare fixed FROM/TO label pairs and a lookup without labels is
-        ambiguous.
+        are required on Neo4j (a MERGE without the endpoint label match
+        silently binds zero rows on schema-free Neo4j, which fails to
+        create the edge with no visible error) and advisory on Memgraph
+        (which uses them to narrow the MATCH and otherwise falls back to
+        OR-matching across shared PK shapes).
         """
 
     @abstractmethod
@@ -98,8 +98,9 @@ class GraphStore(ABC):
         ``origin="inferred"``. Callers must opt in explicitly.
 
         ``src_label`` narrows the MATCH to one node label; required on
-        schema-first backends (Kuzu) so the key-property lookup
-        (path/id/name) is unambiguous against the node table schema.
+        Neo4j so the key-property lookup (path/id/name) is unambiguous
+        when the endpoint is not a File (Section/Artifact/Pattern/etc.
+        have non-"path" PKs).
         """
 
     @abstractmethod
@@ -125,10 +126,9 @@ class GraphStore(ABC):
         more similar). Implementations MUST raise ``ValueError`` on non-finite
         inputs. The returned dicts have ``node`` and ``score`` keys on both
         backends. ``score`` is cosine similarity in ``[0, 1]`` (higher is more
-        similar). Kuzu's index procedure natively returns distance; the backend
-        converts to similarity internally. The conversion assumes the index was
-        declared with ``metric := 'cosine'`` and that stored + query vectors are
-        unit-normalised — Voyage-3 satisfies both.
+        similar). Neo4j normalises via ``(1 + dot) / 2`` so orthogonal vectors
+        score 0.5 (not 0.0); Memgraph returns raw cosine similarity. Callers
+        that pick thresholds must be aware of this backend-specific origin.
         """
 
     @abstractmethod

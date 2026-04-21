@@ -199,13 +199,11 @@ class MemgraphBackend(GraphStore):
 def _normalise_cell(value: Any) -> Any:
     """Convert gqlalchemy Node / Relationship instances to plain dicts.
 
-    Kuzu's exec_read returns plain dicts for node/relationship cells already;
     Memgraph's underlying gqlalchemy ORM yields ``Node`` / ``Relationship``
-    pydantic models. Callers writing ``row["node"]["path"]`` should get the
-    same shape on both backends. We return ``dict(value)`` which exposes the
-    node's properties plus `_labels` / `_id` metadata (shape is not fully
-    unified with Kuzu — `_id` is an int on Memgraph vs. a dict on Kuzu —
-    but `node["path"]` works everywhere).
+    pydantic models; Neo4j's driver yields plain dicts directly. We return
+    ``dict(value)`` which exposes the node's properties plus `_labels` /
+    `_id` metadata so callers writing ``row["node"]["path"]`` get a
+    uniform shape across backends.
     """
     if isinstance(value, Node | Relationship):
         return dict(value)

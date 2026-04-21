@@ -18,10 +18,6 @@ def build_graph_store(cfg: Config) -> GraphStore:
         from contextd.storage.memgraph import MemgraphBackend
 
         return MemgraphBackend(cfg.storage.memgraph)
-    if backend == "kuzu":
-        from contextd.storage.kuzu import KuzuBackend
-
-        return KuzuBackend(cfg.storage.kuzu)
     if backend == "neo4j":
         from contextd.storage.neo4j import Neo4jBackend
 
