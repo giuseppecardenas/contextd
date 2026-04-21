@@ -13,7 +13,11 @@ from typing import TYPE_CHECKING, Any
 
 from neo4j import Driver, GraphDatabase
 
-from contextd.storage._identifiers import validate_identifier
+from contextd.storage._identifiers import (
+    validate_identifier,
+    validate_search_k,
+    validate_threshold,
+)
 from contextd.storage._keys import primary_key_for
 from contextd.storage.base import BackendCapabilities, GraphStore, Origin
 from contextd.storage.migration import Migration, MigrationRunner
@@ -170,7 +174,32 @@ class Neo4jBackend(GraphStore):
         k: int,
         threshold: float | None = None,
     ) -> list[dict[str, Any]]:
-        raise NotImplementedError("Task 11.4")
+        """Call Neo4j's db.index.vector.queryNodes procedure.
+
+        Neo4j returns (node, score) where score is cosine similarity in [0, 1]
+        (higher is more similar). Matches the ABC's contract directly — no
+        distance-to-similarity conversion needed (unlike Kuzu did).
+        """
+        assert self._driver is not None
+        validate_identifier(label, kind="label")
+        validate_identifier(property_name, kind="property_name")
+        validate_search_k(k)
+        validated_threshold = validate_threshold(threshold)
+        index_name = f"{label}_{property_name}_idx"
+        cypher = (
+            "CALL db.index.vector.queryNodes($idx, $k, $q) "
+            "YIELD node, score "
+            "RETURN node, score "
+            "ORDER BY score DESC"
+        )
+        with self._driver.session() as session:
+            result = session.run(cypher, idx=index_name, k=k, q=query)
+            rows: list[dict[str, Any]] = [
+                {"node": dict(r["node"]), "score": float(r["score"])} for r in result
+            ]
+        if validated_threshold is not None:
+            rows = [r for r in rows if r["score"] >= validated_threshold]
+        return rows
 
     def full_text_search(
         self,
@@ -179,4 +208,18 @@ class Neo4jBackend(GraphStore):
         query: str,
         k: int,
     ) -> list[dict[str, Any]]:
-        raise NotImplementedError("Task 11.4")
+        assert self._driver is not None
+        validate_identifier(label, kind="label")
+        validate_identifier(property_name, kind="property_name")
+        validate_search_k(k)
+        index_name = f"{label}_{property_name}_ft"
+        cypher = (
+            "CALL db.index.fulltext.queryNodes($idx, $q) "
+            "YIELD node, score "
+            "RETURN node, score "
+            "ORDER BY score DESC "
+            f"LIMIT {k}"
+        )
+        with self._driver.session() as session:
+            result = session.run(cypher, idx=index_name, q=query)
+            return [{"node": dict(r["node"]), "score": float(r["score"])} for r in result]

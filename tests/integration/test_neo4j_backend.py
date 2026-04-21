@@ -135,3 +135,68 @@ def test_upsert_edge_requires_labels(neo4j_backend) -> None:
 def test_delete_edges_requires_src_label(neo4j_backend) -> None:
     with pytest.raises(ValueError, match="requires src_label"):
         neo4j_backend.delete_edges("/a.md", origin="inferred")
+
+
+def test_vector_search_roundtrip(neo4j_backend) -> None:
+    from contextd.migrations.neo4j._0001_baseline import migration
+
+    neo4j_backend.apply_migrations([migration])
+
+    neo4j_backend.upsert_node(
+        "File", {"path": "/a.md", "corpus": "t", "embedding": [1.0] + [0.0] * 1023}
+    )
+    neo4j_backend.upsert_node(
+        "File", {"path": "/b.md", "corpus": "t", "embedding": [0.0, 1.0] + [0.0] * 1022}
+    )
+    neo4j_backend.upsert_node(
+        "File", {"path": "/c.md", "corpus": "t", "embedding": [1.0] + [0.0] * 1023}
+    )
+
+    results = neo4j_backend.vector_search("File", "embedding", query=[1.0] + [0.0] * 1023, k=3)
+    # /a.md and /c.md are identical to query; /b.md is orthogonal.
+    paths = [r["node"]["path"] for r in results]
+    scores = [r["score"] for r in results]
+    assert paths[0] in {"/a.md", "/c.md"}
+    # First two scores should be ~1.0 (identical direction).
+    assert scores[0] > 0.99
+    # Orthogonal vector should score ~0.5 (cosine 0.0 → similarity 0.5 after
+    # Neo4j's [0,1] normalisation).
+    assert "/b.md" in paths
+
+
+def test_vector_search_threshold_filter(neo4j_backend) -> None:
+    from contextd.migrations.neo4j._0001_baseline import migration
+
+    neo4j_backend.apply_migrations([migration])
+
+    neo4j_backend.upsert_node(
+        "File", {"path": "/a.md", "corpus": "t", "embedding": [1.0] + [0.0] * 1023}
+    )
+    neo4j_backend.upsert_node(
+        "File", {"path": "/b.md", "corpus": "t", "embedding": [0.0, 1.0] + [0.0] * 1022}
+    )
+    results = neo4j_backend.vector_search(
+        "File",
+        "embedding",
+        query=[1.0] + [0.0] * 1023,
+        k=10,
+        threshold=0.9,
+    )
+    paths = [r["node"]["path"] for r in results]
+    assert "/a.md" in paths
+    assert "/b.md" not in paths
+
+
+def test_full_text_search_roundtrip(neo4j_backend) -> None:
+    from contextd.migrations.neo4j._0001_baseline import migration
+
+    neo4j_backend.apply_migrations([migration])
+
+    neo4j_backend.upsert_node(
+        "File", {"path": "/a.md", "corpus": "t", "summary": "alpha beta gamma"}
+    )
+    neo4j_backend.upsert_node("File", {"path": "/b.md", "corpus": "t", "summary": "delta epsilon"})
+    results = neo4j_backend.full_text_search("File", "summary", "alpha", k=5)
+    assert len(results) == 1
+    assert results[0]["node"]["path"] == "/a.md"
+    assert results[0]["score"] > 0
