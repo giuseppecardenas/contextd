@@ -15,7 +15,14 @@ class Overview:
 
 
 def describe_project(store: GraphStore, *, corpus: str | None = None, n: int = 40) -> Overview:
-    """Top-N nodes by inbound-citation count with summaries (spec §7.2).
+    """Top-N File nodes by inbound-citation count with summaries (spec §7.2).
+
+    Narrowed to ``:File`` so the returned rows have a stable shape
+    (``path``, ``name``, ``summary``, ``key_points``, ``inbound``).
+    Section-level detail is surfaced via ``section_tree(file_path)`` in
+    section-mode corpora. In section-mode, ``File.summary`` is populated
+    by ``phase_derive_file_level`` as a rollup of child-section summaries
+    (spec-delta #39).
 
     Delta A applied: merged the two WHERE clauses that the plan rendered
     as consecutive WHEREs (a Cypher parse error). Predicates are now joined
@@ -28,11 +35,11 @@ def describe_project(store: GraphStore, *, corpus: str | None = None, n: int = 4
         params["corpus"] = corpus
     where = "WHERE " + " AND ".join(filters)
     cypher = f"""
-    MATCH (n)
+    MATCH (n:File)
     {where}
     OPTIONAL MATCH ()-[r]->(n)
     WITH n, count(r) AS inbound
-    RETURN n.path AS path, n.id AS id, n.name AS name, n.title AS title,
+    RETURN n.path AS path, n.name AS name,
            n.summary AS summary, n.key_points AS key_points, inbound
     ORDER BY inbound DESC
     LIMIT {n}
@@ -44,7 +51,13 @@ def describe_project(store: GraphStore, *, corpus: str | None = None, n: int = 4
 def search(
     store: GraphStore, query: str, *, kind: str | None = None, limit: int = 20
 ) -> list[dict[str, Any]]:
-    """Hybrid search — full-text over summaries first, fall back to vector."""
+    """Full-text search over node summaries for ``kind`` (defaults to File).
+
+    Vector-similarity fallback is deferred to a future milestone (the plan
+    originally framed this as 'hybrid search'; today's implementation is
+    full-text only). Callers needing vector-space matches should call
+    ``GraphStore.vector_search`` directly for now.
+    """
     label = kind or "File"
     rows = store.full_text_search(label, "summary", query, k=limit)
     return rows
