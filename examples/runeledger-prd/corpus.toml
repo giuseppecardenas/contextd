@@ -12,7 +12,7 @@ model = "voyage-3"
 
 [ontology]
 base = "default"
-overrides = "examples/runeledger-prd/ontology.json"
+overrides = "ontology.json"
 
 [ontology.aliases]
 Registry = "Pattern"
@@ -21,9 +21,9 @@ LuaFile = "File"
 GapEntry = "Risk"
 
 [mcp.tools]
-four_surface = "examples/runeledger-prd/tools/four_surface.cypher"
-find_dangling_registrations = "examples/runeledger-prd/tools/dangling.cypher"
-audit_stale_shas = "examples/runeledger-prd/tools/stale_shas.cypher"
+four_surface = "tools/four_surface.cypher"
+find_dangling_registrations = "tools/dangling.cypher"
+audit_stale_shas = "tools/stale_shas.cypher"
 
 [summarization]
-prompt_override = "examples/runeledger-prd/prompts/summary.md"
+prompt_override = "prompts/summary.md"

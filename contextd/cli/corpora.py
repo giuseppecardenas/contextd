@@ -69,6 +69,22 @@ def add_corpus(path: Path, name: str | None, granularity: str, template: Path | 
     console.print(f"\n[bold]next:[/] `contextd index {resolved_name} --bootstrap`")
 
 
+def _rewrite_template_path(p: str, anchor: Path) -> str:
+    """Rewrite *p* so that relative paths are resolved against *anchor*.
+
+    Absolute paths are returned unchanged.  Relative paths are joined to
+    *anchor* and resolved to a canonical absolute string — this is the correct
+    behaviour for templates, which must be self-contained and portable: a user
+    who copies ``examples/runeledger-prd/`` to a different location should have
+    all relative paths continue to work because they are anchored to the
+    template's own directory, not to the repo root.
+    """
+    maybe_path = Path(p)
+    if maybe_path.is_absolute():
+        return str(maybe_path)
+    return str((anchor / maybe_path).resolve())
+
+
 def _add_corpus_from_template(
     path: Path,
     resolved_name: str,
@@ -89,27 +105,30 @@ def _add_corpus_from_template(
     except (CorpusConfigError, tomllib.TOMLDecodeError) as exc:
         raise click.ClickException(f"template invalid: {exc}") from exc
 
-    # Step 2: load the raw dict for mutation (preserves unknown keys, avoids pydantic coercion).
+    # Double read: first via CorpusConfig.load for typed validation +
+    # error-class discipline (CorpusConfigError), then via tomllib.loads
+    # for raw-dict mutation (preserves unknown keys, avoids pydantic
+    # round-trip coercion). Templates are O(KB); negligible overhead.
     raw: dict[str, Any] = tomllib.loads(template.read_text(encoding="utf-8"))
     corpus_section = raw.setdefault("corpus", {})
     corpus_section["name"] = resolved_name
     corpus_section["root"] = str(path.resolve())
 
     # Step 3: rewrite relative paths to absolute (relative to the template's directory).
-    def _rewrite(p: str) -> str:
-        maybe_path = Path(p)
-        if maybe_path.is_absolute():
-            return str(maybe_path)
-        return str((template.parent / maybe_path).resolve())
+    anchor = template.parent
 
     if "ontology" in raw and "overrides" in raw["ontology"]:
-        raw["ontology"]["overrides"] = _rewrite(str(raw["ontology"]["overrides"]))
+        raw["ontology"]["overrides"] = _rewrite_template_path(
+            str(raw["ontology"]["overrides"]), anchor
+        )
     if "summarization" in raw and "prompt_override" in raw["summarization"]:
-        raw["summarization"]["prompt_override"] = _rewrite(
-            str(raw["summarization"]["prompt_override"])
+        raw["summarization"]["prompt_override"] = _rewrite_template_path(
+            str(raw["summarization"]["prompt_override"]), anchor
         )
     if "mcp" in raw and "tools" in raw["mcp"]:
-        raw["mcp"]["tools"] = {k: _rewrite(str(v)) for k, v in raw["mcp"]["tools"].items()}
+        raw["mcp"]["tools"] = {
+            k: _rewrite_template_path(str(v), anchor) for k, v in raw["mcp"]["tools"].items()
+        }
 
     corpus_toml.write_bytes(tomli_w.dumps(raw).encode())
 

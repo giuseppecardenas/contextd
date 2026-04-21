@@ -10,6 +10,7 @@ import pytest
 from click.testing import CliRunner
 
 import contextd.cli
+from contextd.cli.corpora import _rewrite_template_path
 
 
 def _setup_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
@@ -381,7 +382,16 @@ def test_add_corpus_without_from_preserves_existing_behaviour(
 def test_add_corpus_from_runeledger_template(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Round-trip test with a copy of the realistic runeledger-prd corpus.toml."""
+    """Round-trip test with a copy of the realistic runeledger-prd corpus.toml.
+
+    Validates:
+    - Template paths are template-parent-relative (not repo-root-relative).
+    - The rewritten paths resolve to real files (existence check).
+    - The resulting TOML is loadable via CorpusConfig.load (the downstream
+      invariant: written TOML must be usable by the indexer).
+    """
+    from contextd.corpus_config import CorpusConfig
+
     home = _setup_home(tmp_path, monkeypatch)
 
     # Build a directory that mimics examples/runeledger-prd/ structure.
@@ -392,6 +402,17 @@ def test_add_corpus_from_runeledger_template(
     prompts_dir = examples_dir / "prompts"
     prompts_dir.mkdir()
 
+    # Create placeholder files for the artifacts referenced by the template.
+    # These must exist so the existence assertions below are meaningful; without
+    # them a path-doubling bug (e.g. "runeledger-prd/runeledger-prd/ontology.json")
+    # would silently produce a non-existent path that the test would catch.
+    (examples_dir / "ontology.json").write_text("{}", encoding="utf-8")
+    (prompts_dir / "summary.md").write_text("# Summary\n", encoding="utf-8")
+    (tools_dir / "four_surface.cypher").write_text("MATCH (n) RETURN n", encoding="utf-8")
+    (tools_dir / "dangling.cypher").write_text("MATCH (n) RETURN n", encoding="utf-8")
+    (tools_dir / "stale_shas.cypher").write_text("MATCH (n) RETURN n", encoding="utf-8")
+
+    # Template uses template-parent-relative paths (the correct form).
     template = examples_dir / "corpus.toml"
     template.write_text(
         dedent("""\
@@ -409,7 +430,7 @@ def test_add_corpus_from_runeledger_template(
 
         [ontology]
         base = "default"
-        overrides = "examples/runeledger-prd/ontology.json"
+        overrides = "ontology.json"
 
         [ontology.aliases]
         Registry = "Pattern"
@@ -418,12 +439,12 @@ def test_add_corpus_from_runeledger_template(
         GapEntry = "Risk"
 
         [mcp.tools]
-        four_surface = "examples/runeledger-prd/tools/four_surface.cypher"
-        find_dangling_registrations = "examples/runeledger-prd/tools/dangling.cypher"
-        audit_stale_shas = "examples/runeledger-prd/tools/stale_shas.cypher"
+        four_surface = "tools/four_surface.cypher"
+        find_dangling_registrations = "tools/dangling.cypher"
+        audit_stale_shas = "tools/stale_shas.cypher"
 
         [summarization]
-        prompt_override = "examples/runeledger-prd/prompts/summary.md"
+        prompt_override = "prompts/summary.md"
         """),
         encoding="utf-8",
     )
@@ -444,7 +465,8 @@ def test_add_corpus_from_runeledger_template(
     )
     assert result.exit_code == 0, result.output
 
-    data = tomllib.loads((home / "corpora" / "runeledger-prd.toml").read_text())
+    corpus_toml_path = home / "corpora" / "runeledger-prd.toml"
+    data = tomllib.loads(corpus_toml_path.read_text())
 
     # Name and root overridden.
     assert data["corpus"]["name"] == "runeledger-prd"
@@ -456,17 +478,55 @@ def test_add_corpus_from_runeledger_template(
 
     # Relative paths rewritten to absolute (resolved relative to template parent).
     template_parent = examples_dir
-    assert (
-        Path(data["ontology"]["overrides"])
-        == (template_parent / "examples/runeledger-prd/ontology.json").resolve()
-    )
+    assert Path(data["ontology"]["overrides"]) == (template_parent / "ontology.json").resolve()
     assert (
         Path(data["summarization"]["prompt_override"])
-        == (template_parent / "examples/runeledger-prd/prompts/summary.md").resolve()
+        == (template_parent / "prompts" / "summary.md").resolve()
     )
-    for tool_path in data["mcp"]["tools"].values():
-        assert Path(tool_path).is_absolute()
+    expected_tool_paths = {
+        "four_surface": (template_parent / "tools" / "four_surface.cypher").resolve(),
+        "find_dangling_registrations": (template_parent / "tools" / "dangling.cypher").resolve(),
+        "audit_stale_shas": (template_parent / "tools" / "stale_shas.cypher").resolve(),
+    }
+    for tool_name, expected in expected_tool_paths.items():
+        assert Path(data["mcp"]["tools"][tool_name]) == expected
+
+    # Each rewritten path must resolve to a real file on disk.
+    assert Path(data["ontology"]["overrides"]).exists(), (
+        f"ontology.overrides does not exist: {data['ontology']['overrides']}"
+    )
+    assert Path(data["summarization"]["prompt_override"]).exists(), (
+        f"summarization.prompt_override does not exist: {data['summarization']['prompt_override']}"
+    )
+    for tool_name, tool_path in data["mcp"]["tools"].items():
+        assert Path(tool_path).exists(), f"mcp.tools.{tool_name} does not exist: {tool_path}"
+
+    # The resulting TOML must be loadable via CorpusConfig.load — this is the
+    # downstream invariant that actually matters: a written TOML must be usable
+    # by the indexer without errors.
+    loaded_cfg = CorpusConfig.load(corpus_toml_path)
+    assert loaded_cfg.corpus.name == "runeledger-prd"
+    assert loaded_cfg.corpus.granularity == "section"
+    assert loaded_cfg.ontology.aliases["Registry"] == "Pattern"
 
     # Include/exclude preserved.
     assert "docs/prd/**/*.md" in data["corpus"]["include"]
     assert data["corpus"]["exclude"] == ["docs/prd/_audit-methodology.md"]
+
+
+# ---------------------------------------------------------------------------
+# _rewrite_template_path unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_rewrite_template_path_absolute_passes_through() -> None:
+    """Absolute paths are returned unchanged regardless of the anchor."""
+    assert _rewrite_template_path("/etc/foo", Path("/tmp")) == "/etc/foo"
+
+
+def test_rewrite_template_path_relative_resolves_against_anchor(tmp_path: Path) -> None:
+    """Relative paths are resolved against the supplied anchor directory."""
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "x.json").write_text("", encoding="utf-8")
+    result = _rewrite_template_path("sub/x.json", tmp_path)
+    assert result == str((tmp_path / "sub" / "x.json").resolve())
