@@ -83,3 +83,47 @@ def test_validate_node_unknown_raises() -> None:
     onto = Ontology.load_base()
     with pytest.raises(OntologyError, match="Unknown node type 'Widget'"):
         onto.validate_node("Widget")
+
+
+# --- edge-alias tests (M10.3) ---
+
+
+def test_with_edge_aliases_valid() -> None:
+    onto = Ontology.load_base().with_edge_aliases({"CITES": "REFERENCES"})
+    assert dict(onto.edge_aliases) == {"CITES": "REFERENCES"}
+    assert onto.resolve_edge_alias("CITES") == "REFERENCES"
+    assert onto.resolve_edge_alias("USES") == "USES"  # non-alias passes through
+    onto.validate_edge("CITES", origin="inferred")  # must not raise
+
+
+def test_with_edge_aliases_rejects_unknown_target() -> None:
+    onto = Ontology.load_base()
+    with pytest.raises(
+        OntologyError, match="Edge alias 'CITES' targets unknown edge type 'NONEXISTENT'"
+    ):
+        onto.with_edge_aliases({"CITES": "NONEXISTENT"})
+
+
+def test_with_edge_aliases_is_immutable_on_source() -> None:
+    base = Ontology.load_base()
+    _derived = base.with_edge_aliases({"CITES": "REFERENCES"})
+    # Original instance must be unaffected (frozen dataclass + replace semantics)
+    assert dict(base.edge_aliases) == {}
+
+
+def test_with_aliases_and_with_edge_aliases_stackable() -> None:
+    onto = (
+        Ontology.load_base()
+        .with_aliases({"Registry": "Pattern"})
+        .with_edge_aliases({"CITES": "REFERENCES"})
+    )
+    # Both layers preserved
+    assert onto.resolve_alias("Registry") == "Pattern"
+    assert onto.resolve_edge_alias("CITES") == "REFERENCES"
+
+
+def test_validate_edge_through_alias() -> None:
+    onto = Ontology.load_base().with_edge_aliases({"CITES": "REFERENCES"})
+    onto.validate_edge("CITES", origin="inferred")  # must not raise
+    with pytest.raises(OntologyError, match="Unknown edge type 'NONEXISTENT'"):
+        onto.validate_edge("NONEXISTENT", origin="inferred")

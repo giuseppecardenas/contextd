@@ -61,7 +61,10 @@ class RelationshipInferrer:
             edge_type = row.get("type")
             target_type = row.get("target_type")
             target_name = row.get("target_name")
-            if edge_type not in self._onto.edge_types:
+            if not isinstance(edge_type, str):
+                continue
+            resolved_edge_type = self._onto.resolve_edge_alias(edge_type)
+            if resolved_edge_type not in self._onto.edge_types:
                 continue
             if target_type not in self._onto.node_types:
                 continue
@@ -69,7 +72,7 @@ class RelationshipInferrer:
                 continue
             valid.append(
                 InferredRelationship(
-                    edge_type=cast(str, edge_type),
+                    edge_type=resolved_edge_type,
                     target_type=cast(str, target_type),
                     target_name=target_name,
                     confidence=float(row.get("confidence", 0.0)),

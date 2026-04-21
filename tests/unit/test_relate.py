@@ -141,6 +141,31 @@ def test_no_json_object_raises_valueerror() -> None:
         inferrer.infer("content", known_entities=[])
 
 
+def test_infer_resolves_edge_aliases() -> None:
+    """Aliased edge types are resolved to the canonical name before storage."""
+    ontology = Ontology.load_base().with_edge_aliases({"CITES": "REFERENCES"})
+    mock_provider = MagicMock()
+    mock_provider.generate.return_value = json.dumps(
+        {
+            "relationships": [
+                {
+                    "type": "CITES",
+                    "target_type": "File",
+                    "target_name": "foo.md",
+                    "confidence": 0.9,
+                    "reason": "explicit citation",
+                }
+            ]
+        }
+    )
+    mock_renderer = MagicMock()
+    mock_renderer.render.return_value = "prompt"
+    inferrer = RelationshipInferrer(mock_provider, mock_renderer, ontology)
+    result = inferrer.infer("content", known_entities=[])
+    assert len(result) == 1
+    assert result[0].edge_type == "REFERENCES"  # canonical, not "CITES"
+
+
 def test_missing_or_empty_target_name_is_silently_discarded() -> None:
     """Rows that pass ontology checks but lack target_name are dropped
     silently — consistent with the tolerant-parsing pattern the rest of
