@@ -9,15 +9,13 @@ edges.
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass
 from typing import Any, cast
 
+from contextd.inference._json_body import extract_json_body
 from contextd.inference.prompts import PromptRenderer
 from contextd.ontology.schema import Ontology
 from contextd.providers.base import InferenceProvider, PromptRequest
-
-_FENCE = re.compile(r"^```(?:json)?\s*|\s*```\s*$", re.MULTILINE)
 
 
 @dataclass
@@ -51,10 +49,15 @@ class RelationshipInferrer:
         response = self._provider.generate(
             PromptRequest(system="", prompt=prompt, call_site="inference")
         )
-        cleaned = _FENCE.sub("", response).strip()
+        cleaned = extract_json_body(response)
         data = cast(dict[str, Any], json.loads(cleaned))
         valid: list[InferredRelationship] = []
-        for row in data.get("relationships", []):
+        relationships = data.get("relationships")
+        if not isinstance(relationships, list):
+            relationships = []
+        for row in relationships:
+            if not isinstance(row, dict):
+                continue
             edge_type = row.get("type")
             target_type = row.get("target_type")
             if edge_type not in self._onto.edge_types:

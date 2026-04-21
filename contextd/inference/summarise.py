@@ -6,22 +6,9 @@ import json
 from dataclasses import dataclass
 from typing import Any, cast
 
+from contextd.inference._json_body import extract_json_body
 from contextd.inference.prompts import PromptRenderer
 from contextd.providers.base import InferenceProvider, PromptRequest
-
-
-def _extract_json_body(response: str) -> str:
-    """Return the substring from the first '{' to the last '}' inclusive.
-
-    Tolerates language-tagged code fences (```json, ```yaml, ...) and
-    prose around the JSON block, which Gemini occasionally emits despite
-    the prompt instructing JSON-only output.
-    """
-    start = response.find("{")
-    end = response.rfind("}")
-    if start == -1 or end == -1 or end < start:
-        raise ValueError(f"Provider response contains no JSON object; got {response!r}")
-    return response[start : end + 1]
 
 
 def _as_str_list(raw: object) -> list[str]:
@@ -64,7 +51,7 @@ class Summariser:
         response = self._provider.generate(
             PromptRequest(system="", prompt=prompt, call_site="summary")
         )
-        data = cast(dict[str, Any], json.loads(_extract_json_body(response)))
+        data = cast(dict[str, Any], json.loads(extract_json_body(response)))
         return FileSummary(
             summary=cast(str, data["summary"]),
             key_points=_as_str_list(data.get("key_points")),
