@@ -11,8 +11,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
-from neo4j import GraphDatabase
+from neo4j import Driver, GraphDatabase
 
+from contextd.storage._identifiers import validate_identifier
+from contextd.storage._keys import primary_key_for
 from contextd.storage.base import BackendCapabilities, GraphStore, Origin
 from contextd.storage.migration import Migration, MigrationRunner
 
@@ -37,7 +39,7 @@ _CAPABILITIES = BackendCapabilities(
 class Neo4jBackend(GraphStore):
     def __init__(self, config: Neo4jConfig) -> None:  # type: ignore[no-any-unimported]
         self._cfg = config
-        self._driver: Any | None = None
+        self._driver: Driver | None = None
 
     @property
     def capabilities(self) -> BackendCapabilities:
@@ -56,12 +58,21 @@ class Neo4jBackend(GraphStore):
         typed: list[Migration] = list(migrations)
         MigrationRunner(self, typed).apply()
 
-    # Remaining methods (upsert_node, upsert_edge, delete_edges, exec_read,
-    # exec_write, vector_search, full_text_search) implemented in Tasks 11.3-4.
-    # Raise NotImplementedError explicitly so the ABC's abstractmethod contract
-    # doesn't silently pass at instantiation time.
     def upsert_node(self, label: str, properties: dict[str, Any]) -> str:
-        raise NotImplementedError("Task 11.3")
+        assert self._driver is not None
+        validate_identifier(label, kind="label")
+        key = primary_key_for(label)
+        if key not in properties:
+            raise ValueError(
+                f"upsert_node({label!r}, ...) missing required primary key "
+                f"{key!r}; properties were {sorted(properties)}"
+            )
+        cypher = f"MERGE (n:{label} {{{key}: $key_value}}) SET n += $props RETURN n.{key} AS id"
+        with self._driver.session() as session:
+            result = session.run(cypher, key_value=properties[key], props=properties)
+            row = result.single()
+            assert row is not None
+            return str(row["id"])
 
     def upsert_edge(
         self,
@@ -74,7 +85,27 @@ class Neo4jBackend(GraphStore):
         src_label: str | None = None,
         dst_label: str | None = None,
     ) -> None:
-        raise NotImplementedError("Task 11.3")
+        assert self._driver is not None
+        validate_identifier(edge_type, kind="edge_type")
+        props = {**(properties or {}), "origin": origin}
+
+        # src_label / dst_label are advisory on Neo4j (schema-free). When
+        # provided they narrow the MATCH. When omitted, we MATCH any label
+        # with the corresponding PK — slower but correct. Primary key lookup
+        # uses the canonical label->PK map.
+        src_key = primary_key_for(src_label) if src_label else "path"
+        dst_key = primary_key_for(dst_label) if dst_label else "path"
+        src_pattern = f"(a:{src_label})" if src_label else "(a)"
+        dst_pattern = f"(b:{dst_label})" if dst_label else "(b)"
+
+        cypher = (
+            f"MATCH {src_pattern} WHERE a.{src_key} = $src "
+            f"MATCH {dst_pattern} WHERE b.{dst_key} = $dst "
+            f"MERGE (a)-[r:{edge_type}]->(b) "
+            f"SET r += $props"
+        )
+        with self._driver.session() as session:
+            session.run(cypher, src=src_id, dst=dst_id, props=props)
 
     def delete_edges(
         self,
@@ -84,13 +115,40 @@ class Neo4jBackend(GraphStore):
         edge_type: str | None = None,
         src_label: str | None = None,
     ) -> None:
-        raise NotImplementedError("Task 11.3")
+        if origin is None and edge_type is None:
+            raise ValueError(
+                "delete_edges requires at least one of origin or edge_type — "
+                "an unfiltered delete would wipe structural and manual edges."
+            )
+        assert self._driver is not None
+        if edge_type is not None:
+            validate_identifier(edge_type, kind="edge_type")
+        src_key = primary_key_for(src_label) if src_label else "path"
+        src_pattern = f"(a:{src_label})" if src_label else "(a)"
+        conditions: list[str] = []
+        params: dict[str, Any] = {"src": src_id}
+        if origin is not None:
+            conditions.append("r.origin = $origin")
+            params["origin"] = origin
+        where_clause = f"WHERE {' AND '.join(conditions)} " if conditions else ""
+        edge_fragment = f":{edge_type}" if edge_type else ""
+        cypher = (
+            f"MATCH {src_pattern} WHERE a.{src_key} = $src "
+            f"WITH a MATCH (a)-[r{edge_fragment}]->() {where_clause}DELETE r"
+        )
+        with self._driver.session() as session:
+            session.run(cypher, **params)
 
     def exec_read(self, cypher: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-        raise NotImplementedError("Task 11.3")
+        assert self._driver is not None
+        with self._driver.session() as session:
+            result = session.run(cypher, params or {})
+            return [dict(record) for record in result]
 
     def exec_write(self, cypher: str, params: dict[str, Any] | None = None) -> None:
-        raise NotImplementedError("Task 11.3")
+        assert self._driver is not None
+        with self._driver.session() as session:
+            session.run(cypher, params or {})
 
     def vector_search(
         self,

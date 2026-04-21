@@ -98,6 +98,12 @@ filterwarnings = [
     # not mapped to a Python ORM class. We intentionally don't map — the
     # GraphStore layer returns plain dicts — so this warning is structural.
     "ignore::gqlalchemy.exceptions.GQLAlchemySubclassNotFoundWarning",
+    # testcontainers 4.x emits DeprecationWarning from its own @wait_container_is_ready
+    # decorator + wait_for_logs helper (paths their Neo4jContainer still uses
+    # internally). We're pinned to 4.x; remove these filters when the library
+    # upgrades its own callers.
+    "ignore:The @wait_container_is_ready decorator is deprecated:DeprecationWarning",
+    "ignore:The wait_for_logs function with string or callable predicates:DeprecationWarning",
 ]
 markers = [
     "integration: tests that require Docker (Memgraph) or other external services",

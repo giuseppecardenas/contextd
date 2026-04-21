@@ -3,14 +3,29 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import BaseModel, ConfigDict
 from testcontainers.neo4j import Neo4jContainer
+
+# Temporary shim until Task 11.5 adds the real Neo4jConfig.
+# Delete this block in Task 11.5.
+
+
+class Neo4jConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    host: str = "127.0.0.1"
+    port: int = 7687
+    user: str = "neo4j"
+    password: str = "neo4j"
+    docker_compose_file: str = "~/.contextd/docker-compose.yml"
+    memory_limit_gb: float = 1.0
+    cpu_limit: float = 1.0
+
 
 pytestmark = pytest.mark.integration
 
 
 @pytest.fixture
 def neo4j_backend():
-    from contextd.config import Neo4jConfig
     from contextd.storage.neo4j import Neo4jBackend
 
     with Neo4jContainer("neo4j:5.15-community") as container:
@@ -41,3 +56,62 @@ def test_baseline_migration_creates_indexes(neo4j_backend) -> None:
     rows = neo4j_backend.exec_read("SHOW CONSTRAINTS YIELD name RETURN collect(name) AS names")
     names = rows[0]["names"]
     assert any("File" in n and "path" in n.lower() for n in names)
+
+
+def test_upsert_node_roundtrip(neo4j_backend) -> None:
+    from contextd.migrations.neo4j._0001_baseline import migration
+
+    neo4j_backend.apply_migrations([migration])
+
+    pk = neo4j_backend.upsert_node(
+        "File",
+        {"path": "/a.md", "name": "a.md", "corpus": "test", "embedding": [0.1] * 1024},
+    )
+    assert pk == "/a.md"
+    rows = neo4j_backend.exec_read(
+        "MATCH (n:File {path: $p}) RETURN n.name AS name",
+        {"p": "/a.md"},
+    )
+    assert rows[0]["name"] == "a.md"
+
+    # Re-upsert updates mutable properties.
+    neo4j_backend.upsert_node(
+        "File",
+        {"path": "/a.md", "name": "renamed.md", "corpus": "test", "embedding": [0.1] * 1024},
+    )
+    rows = neo4j_backend.exec_read(
+        "MATCH (n:File {path: $p}) RETURN n.name AS name",
+        {"p": "/a.md"},
+    )
+    assert rows[0]["name"] == "renamed.md"
+
+
+def test_upsert_edge_and_delete_edges(neo4j_backend) -> None:
+    from contextd.migrations.neo4j._0001_baseline import migration
+
+    neo4j_backend.apply_migrations([migration])
+
+    # Two File nodes.
+    neo4j_backend.upsert_node("File", {"path": "/a.md", "corpus": "t"})
+    neo4j_backend.upsert_node("File", {"path": "/b.md", "corpus": "t"})
+    neo4j_backend.upsert_edge(
+        "/a.md",
+        "/b.md",
+        "REFERENCES",
+        origin="inferred",
+        properties={"confidence": 0.9},
+        src_label="File",
+        dst_label="File",
+    )
+    rows = neo4j_backend.exec_read("MATCH ()-[r:REFERENCES]->() RETURN count(r) AS c")
+    assert rows[0]["c"] == 1
+
+    # Delete inferred edges from /a.md.
+    neo4j_backend.delete_edges("/a.md", origin="inferred", src_label="File")
+    rows = neo4j_backend.exec_read("MATCH ()-[r:REFERENCES]->() RETURN count(r) AS c")
+    assert rows[0]["c"] == 0
+
+
+def test_delete_edges_unfiltered_raises(neo4j_backend) -> None:
+    with pytest.raises(ValueError, match="requires at least one of"):
+        neo4j_backend.delete_edges("/a.md", src_label="File")
