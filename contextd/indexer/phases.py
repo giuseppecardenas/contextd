@@ -15,6 +15,15 @@ phase_embed is retained as a named accounting phase that reports the count witho
 re-issuing writes, preserving the 5-phase contract and the integration test assertion
 result.phases[1].processed == 2. This is a structural deviation from the plan text;
 logged as spec-delta (b).
+
+Spec-delta note (M9.1-A): phase_enumerate_sections accepts embedder and pre-computes
+Section embeddings in batch at CREATE time. Section.embedding is IMMUTABLE_AFTER_CREATE
+on Kuzu; SET after creation would fail. Mirrors the M5.4 pattern for File.embedding.
+
+Spec-delta note (M9.1-B): upsert_edge calls in phase_enumerate_sections supply
+src_label/dst_label kwargs. Kuzu requires these for schema-first REL tables:
+  CONTAINS (FROM File TO Section), PARENT_OF (FROM Section TO Section),
+  NEXT_SIBLING (FROM Section TO Section).
 """
 
 from __future__ import annotations
@@ -24,7 +33,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from contextd.corpus_config import CorpusConfig
 from contextd.indexer.hasher import FileHasher
+from contextd.indexer.heading_parser import HeadingParser, ParsedSection
 from contextd.inference.relate import RelationshipInferrer
 from contextd.inference.summarise import Summariser
 from contextd.providers.base import EmbeddingProvider
@@ -167,6 +178,169 @@ def phase_close(
         },
     )
     return PhaseResult(name="close", processed=1, skipped=0)
+
+
+def phase_enumerate_sections(
+    files: list[Path],
+    corpus_cfg: CorpusConfig,
+    store: GraphStore,
+    embedder: EmbeddingProvider,
+    batch_size: int = 128,
+) -> PhaseResult:
+    """Section-granular enumeration — emits Section nodes + structural edges.
+
+    Spec-delta (M9.1-A): embedder is accepted here so that Section.embedding
+    is included in upsert_node at CREATE time. Kuzu rejects SET on
+    IMMUTABLE_AFTER_CREATE columns (Section.embedding) after node creation.
+    Batch-embed all section bodies first, then upsert with embedding attached.
+
+    Spec-delta (M9.1-B): upsert_edge calls supply src_label/dst_label kwargs
+    because Kuzu requires them for schema-first REL tables.
+
+    Spec-delta (M9.1-E): File.hash is set to "__pending__" as a sentinel
+    placeholder. The hasher is not threaded through the section pipeline in
+    this task. Incremental re-index cannot compare hashes reliably in section
+    mode until hasher is wired here.
+    TODO(M9-followup or M11): compute real MD5 via FileHasher instead of
+    "__pending__" so incremental re-index works in section granularity mode.
+    """
+    parser = HeadingParser(
+        min_level=corpus_cfg.corpus.heading_min_level,
+        max_level=corpus_cfg.corpus.heading_max_level,
+    )
+
+    # Collect all sections for all files first so we can batch-embed in one pass.
+    parsed_by_file: list[tuple[Path, list[ParsedSection]]] = [
+        (f, parser.parse(f.read_text(errors="replace"))) for f in files
+    ]
+    all_sections: list[tuple[Path, ParsedSection]] = [
+        (f, sec) for f, secs in parsed_by_file for sec in secs
+    ]
+    all_bodies = [sec.body for _, sec in all_sections]
+
+    # Batch-embed all section bodies.
+    embeddings: list[list[float]] = []
+    for start in range(0, len(all_bodies), batch_size):
+        embeddings.extend(embedder.embed(all_bodies[start : start + batch_size]))
+
+    # Build (file_path, section_id) → embedding lookup.
+    embedding_map: dict[tuple[str, str], list[float]] = {
+        (str(f), f"{f!s}#{sec.anchor}"): vec
+        for (f, sec), vec in zip(all_sections, embeddings, strict=True)
+    }
+
+    processed = 0
+    for f, sections in parsed_by_file:
+        file_path = str(f)
+        # Upsert the parent File node (hash sentinel — see TODO above).
+        store.upsert_node(
+            "File",
+            {
+                "path": file_path,
+                "name": f.name,
+                "type": f.suffix.lstrip(".") or "unknown",
+                "hash": "__pending__",
+                "size": f.stat().st_size,
+                "corpus": corpus_cfg.corpus.name,
+            },
+        )
+        previous_sibling_id: dict[str | None, str] = {}
+        for sec in sections:
+            section_id = f"{file_path}#{sec.anchor}"
+            store.upsert_node(
+                "Section",
+                {
+                    "id": section_id,
+                    "anchor": sec.anchor,
+                    "title": sec.title,
+                    "level": sec.level,
+                    "path": file_path,
+                    "corpus": corpus_cfg.corpus.name,
+                    "file_id": file_path,
+                    "ordinal": sec.ordinal,
+                    "embedding": embedding_map[(file_path, section_id)],
+                },
+            )
+            # Delta B: labels required for Kuzu schema-first REL tables.
+            store.upsert_edge(
+                file_path,
+                section_id,
+                "CONTAINS",
+                origin="structural",
+                src_label="File",
+                dst_label="Section",
+            )
+            if sec.parent_anchor is not None:
+                parent_id = f"{file_path}#{sec.parent_anchor}"
+                store.upsert_edge(
+                    parent_id,
+                    section_id,
+                    "PARENT_OF",
+                    origin="structural",
+                    src_label="Section",
+                    dst_label="Section",
+                )
+            prev = previous_sibling_id.get(sec.parent_anchor)
+            if prev is not None:
+                store.upsert_edge(
+                    prev,
+                    section_id,
+                    "NEXT_SIBLING",
+                    origin="structural",
+                    src_label="Section",
+                    dst_label="Section",
+                )
+            previous_sibling_id[sec.parent_anchor] = section_id
+            processed += 1
+    return PhaseResult(name="enumerate_sections", processed=processed, skipped=0)
+
+
+def phase_embed_sections(
+    corpus_cfg: CorpusConfig,
+    embedder: EmbeddingProvider,
+    store: GraphStore,
+) -> PhaseResult:
+    """M9.2 placeholder — section embedding is done at CREATE time in phase_enumerate_sections.
+
+    TODO(M9.2): implement if a separate embed-update pass is needed for incremental mode.
+    """
+    return PhaseResult(name="embed_sections", processed=0, skipped=0)
+
+
+def phase_summarise_sections(
+    corpus_cfg: CorpusConfig,
+    summariser: Summariser,
+    store: GraphStore,
+) -> PhaseResult:
+    """M9.2 placeholder — summarise each Section node via LLM.
+
+    TODO(M9.2): implement per-section summarisation (mirrors phase_summarise for files).
+    """
+    return PhaseResult(name="summarise_sections", processed=0, skipped=0)
+
+
+def phase_relate_sections(
+    corpus_cfg: CorpusConfig,
+    inferrer: RelationshipInferrer,
+    store: GraphStore,
+    entity_sampler: Callable[[GraphStore], list[str]],
+) -> PhaseResult:
+    """M9.2 placeholder — infer typed edges between Section nodes.
+
+    TODO(M9.2): implement per-section relationship inference (mirrors phase_relate for files).
+    """
+    return PhaseResult(name="relate_sections", processed=0, skipped=0)
+
+
+def phase_derive_file_level(
+    corpus_cfg: CorpusConfig,
+    store: GraphStore,
+) -> PhaseResult:
+    """M9.2 placeholder — roll up section summaries/embeddings to parent File node.
+
+    TODO(M9.2): implement aggregation from Section → File (spec §5.11.3).
+    """
+    return PhaseResult(name="derive_file_level", processed=0, skipped=0)
 
 
 def _infer_key(target_type: str) -> str:
