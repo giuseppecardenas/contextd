@@ -86,8 +86,10 @@ def init(yes: bool) -> None:
     for name in ("summarise.md", "relate.md", "translate.md"):
         dst = home / "prompts" / name
         if not dst.exists():
-            src_text = resources.files("prompts").joinpath(name).read_text()
-            dst.write_text(src_text)
+            src_text = (
+                resources.files("contextd.prompts").joinpath(name).read_text(encoding="utf-8")
+            )
+            dst.write_text(src_text, encoding="utf-8")
             copied += 1
     if copied:
         console.print(f"[green]✓[/] prompt templates copied ({copied}/3, overridable)")

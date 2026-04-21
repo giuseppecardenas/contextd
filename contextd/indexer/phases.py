@@ -341,10 +341,11 @@ def phase_summarise_sections(
         {"c": corpus_cfg.corpus.name},
     )
     parser = _build_parser(corpus_cfg)
+    parse_cache: dict[str, list[ParsedSection]] = {}
     processed, skipped = 0, 0
     for r in rows:
         path = Path(r["path"])
-        sections = parser.parse(path.read_text(errors="replace"))
+        sections = _parse_cached(parser, path, parse_cache)
         anchor = r["id"].split("#", 1)[1]
         sec = next((s for s in sections if s.anchor == anchor), None)
         if not sec:
@@ -398,11 +399,12 @@ def phase_relate_sections(
         {"c": corpus_cfg.corpus.name},
     )
     parser = _build_parser(corpus_cfg)
+    parse_cache: dict[str, list[ParsedSection]] = {}
     known = entity_sampler(store)
     processed, skipped = 0, 0
     for r in rows:
         path = Path(r["path"])
-        sections = parser.parse(path.read_text(errors="replace"))
+        sections = _parse_cached(parser, path, parse_cache)
         anchor = r["id"].split("#", 1)[1]
         sec = next((s for s in sections if s.anchor == anchor), None)
         if not sec:
@@ -483,6 +485,25 @@ def _build_parser(corpus_cfg: CorpusConfig) -> HeadingParser:
         min_level=corpus_cfg.corpus.heading_min_level,
         max_level=corpus_cfg.corpus.heading_max_level,
     )
+
+
+def _parse_cached(
+    parser: HeadingParser, path: Path, cache: dict[str, list[ParsedSection]]
+) -> list[ParsedSection]:
+    """Parse ``path`` once per phase, caching by absolute path string.
+
+    Was: each of the three section phases re-parsed every file per
+    section row. For a file with N sections, phase_summarise_sections
+    and phase_relate_sections each did N parses. Now each phase does
+    one parse per file, N-times cheaper.
+    """
+    key = str(path)
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
+    sections = parser.parse(path.read_text(errors="replace"))
+    cache[key] = sections
+    return sections
 
 
 def _concat_first_sentences(summaries: list[str], *, max_chars: int) -> str:

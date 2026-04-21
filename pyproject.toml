@@ -62,10 +62,8 @@ include = [
     "contextd/default_config.toml",
     "contextd/ontology/base.json",
     "contextd/docker_compose.yml",
+    "contextd/prompts/*.md",
 ]
-
-[tool.hatch.build.targets.wheel.force-include]
-"prompts" = "prompts"
 
 [tool.ruff]
 line-length = 100
