@@ -22,4 +22,8 @@ def build_graph_store(cfg: Config) -> GraphStore:
         from contextd.storage.kuzu import KuzuBackend
 
         return KuzuBackend(cfg.storage.kuzu)
+    if backend == "neo4j":
+        from contextd.storage.neo4j import Neo4jBackend
+
+        return Neo4jBackend(cfg.storage.neo4j)
     raise StorageFactoryError(f"Unknown backend: {backend!r}")

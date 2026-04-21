@@ -9,10 +9,11 @@ per call, which is the idiomatic pattern for the neo4j-python-driver.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from neo4j import Driver, GraphDatabase
 
+from contextd.config import Neo4jConfig
 from contextd.storage._identifiers import (
     validate_identifier,
     validate_search_k,
@@ -21,13 +22,6 @@ from contextd.storage._identifiers import (
 from contextd.storage._keys import primary_key_for
 from contextd.storage.base import BackendCapabilities, GraphStore, Origin
 from contextd.storage.migration import Migration, MigrationRunner
-
-if TYPE_CHECKING:
-    # Neo4jConfig lands in contextd.config in Task 11.5; until then the
-    # annotation is type-only and the tests pass a pydantic shim with the
-    # same shape. Once 11.5 lands, move this to an unconditional import
-    # and drop the type: ignore directives on __init__.
-    from contextd.config import Neo4jConfig  # type: ignore[attr-defined]
 
 _CAPABILITIES = BackendCapabilities(
     name="neo4j",
@@ -41,7 +35,7 @@ _CAPABILITIES = BackendCapabilities(
 
 
 class Neo4jBackend(GraphStore):
-    def __init__(self, config: Neo4jConfig) -> None:  # type: ignore[no-any-unimported]
+    def __init__(self, config: Neo4jConfig) -> None:
         self._cfg = config
         self._driver: Driver | None = None
 

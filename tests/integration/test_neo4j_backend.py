@@ -3,23 +3,9 @@
 from __future__ import annotations
 
 import pytest
-from pydantic import BaseModel, ConfigDict
 from testcontainers.neo4j import Neo4jContainer
 
-# Temporary shim until Task 11.5 adds the real Neo4jConfig.
-# Delete this block in Task 11.5.
-
-
-class Neo4jConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    host: str = "127.0.0.1"
-    port: int = 7687
-    user: str = "neo4j"
-    password: str = "neo4j"
-    docker_compose_file: str = "~/.contextd/docker-compose.yml"
-    memory_limit_gb: float = 1.0
-    cpu_limit: float = 1.0
-
+from contextd.config import Neo4jConfig
 
 pytestmark = pytest.mark.integration
 

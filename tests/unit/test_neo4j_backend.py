@@ -4,20 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-# Temporary shim until Task 11.5 adds the real Neo4jConfig.
-# Delete this block in Task 11.5.
-from pydantic import BaseModel, ConfigDict
-
-
-class Neo4jConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    host: str = "127.0.0.1"
-    port: int = 7687
-    user: str = "neo4j"
-    password: str = "neo4j"
-    docker_compose_file: str = "~/.contextd/docker-compose.yml"
-    memory_limit_gb: float = 1.0
-    cpu_limit: float = 1.0
+from contextd.config import Neo4jConfig
 
 
 def test_capabilities_shape() -> None:

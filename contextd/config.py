@@ -14,7 +14,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-BackendName = Literal["memgraph", "kuzu"]
+BackendName = Literal["memgraph", "kuzu", "neo4j"]
 SafetyBlock = Literal[
     "BLOCK_NONE", "BLOCK_ONLY_HIGH", "BLOCK_MEDIUM_AND_ABOVE", "BLOCK_LOW_AND_ABOVE"
 ]
@@ -64,14 +64,26 @@ class KuzuConfig(BaseModel):
     max_threads: int = 4
 
 
+class Neo4jConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    host: str = "127.0.0.1"
+    port: int = 7687
+    user: str = "neo4j"
+    password: str = "neo4j"
+    docker_compose_file: str = "~/.contextd/docker-compose.yml"
+    memory_limit_gb: float = 1.0
+    cpu_limit: float = 1.0
+
+
 class StorageConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    backend: BackendName = "memgraph"
+    backend: BackendName = "memgraph"  # default flip to "neo4j" happens in M11.8
     memgraph: MemgraphConfig = Field(default_factory=MemgraphConfig)
     kuzu: KuzuConfig = Field(default_factory=KuzuConfig)
-    # The `Literal["memgraph", "kuzu"]` type constraint on BackendName above
-    # is enforced by pydantic v2 before any @field_validator runs — a manual
-    # validator was redundant and has been removed. Adding a new backend
+    neo4j: Neo4jConfig = Field(default_factory=Neo4jConfig)
+    # The `Literal["memgraph", "kuzu", "neo4j"]` type constraint on BackendName
+    # above is enforced by pydantic v2 before any @field_validator runs — a
+    # manual validator was redundant and has been removed. Adding a new backend
     # requires updating BackendName + the factory + the migrations dirs.
 
 
