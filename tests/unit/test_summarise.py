@@ -1,6 +1,8 @@
 import json
 from unittest.mock import MagicMock
 
+import pytest
+
 from contextd.inference.summarise import FileSummary, Summariser
 
 
@@ -53,3 +55,61 @@ def test_handles_code_fences_in_provider_response() -> None:
     summariser = Summariser(provider=mock_provider, renderer=mock_renderer)
     result = summariser.summarise("content")
     assert result.summary == "x"
+
+
+def test_handles_yaml_language_tagged_fence() -> None:
+    """Some LLMs emit non-json language tags; extractor should still work."""
+    mock_provider = MagicMock()
+    mock_provider.generate.return_value = """```yaml
+{"summary": "yaml-tagged", "key_points": [], "entities_mentioned": []}
+```"""
+    mock_renderer = MagicMock()
+    mock_renderer.render.return_value = "rendered-prompt"
+    summariser = Summariser(provider=mock_provider, renderer=mock_renderer)
+    result = summariser.summarise("content")
+    assert result.summary == "yaml-tagged"
+
+
+def test_handles_prose_wrapper_around_json() -> None:
+    """Provider occasionally prefixes JSON with prose despite instruction."""
+    mock_provider = MagicMock()
+    mock_provider.generate.return_value = (
+        "Here is the JSON you requested:\n\n"
+        '{"summary": "prose-wrapped", "key_points": [], "entities_mentioned": []}\n\n'
+        "I hope this helps!"
+    )
+    mock_renderer = MagicMock()
+    mock_renderer.render.return_value = "rendered-prompt"
+    summariser = Summariser(provider=mock_provider, renderer=mock_renderer)
+    result = summariser.summarise("content")
+    assert result.summary == "prose-wrapped"
+
+
+def test_non_list_optional_field_falls_back_to_empty() -> None:
+    """If provider returns a string where a list is expected, drop it
+    silently rather than storing chars-as-list under the typed field."""
+    mock_provider = MagicMock()
+    mock_provider.generate.return_value = json.dumps(
+        {
+            "summary": "x",
+            "key_points": "not a list at all",
+            "entities_mentioned": None,
+        }
+    )
+    mock_renderer = MagicMock()
+    mock_renderer.render.return_value = "rendered-prompt"
+    summariser = Summariser(provider=mock_provider, renderer=mock_renderer)
+    result = summariser.summarise("content")
+    assert result.key_points == []
+    assert result.entities_mentioned == []
+
+
+def test_no_json_object_raises_valueerror() -> None:
+    """If the response contains no { or }, extractor surfaces a clear error."""
+    mock_provider = MagicMock()
+    mock_provider.generate.return_value = "I cannot summarise this file."
+    mock_renderer = MagicMock()
+    mock_renderer.render.return_value = "rendered-prompt"
+    summariser = Summariser(provider=mock_provider, renderer=mock_renderer)
+    with pytest.raises(ValueError, match="no JSON object"):
+        summariser.summarise("content")

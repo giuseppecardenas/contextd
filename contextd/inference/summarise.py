@@ -3,14 +3,37 @@
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass
 from typing import Any, cast
 
 from contextd.inference.prompts import PromptRenderer
 from contextd.providers.base import InferenceProvider, PromptRequest
 
-_FENCE = re.compile(r"^```(?:json)?\s*|\s*```\s*$", re.MULTILINE)
+
+def _extract_json_body(response: str) -> str:
+    """Return the substring from the first '{' to the last '}' inclusive.
+
+    Tolerates language-tagged code fences (```json, ```yaml, ...) and
+    prose around the JSON block, which Gemini occasionally emits despite
+    the prompt instructing JSON-only output.
+    """
+    start = response.find("{")
+    end = response.rfind("}")
+    if start == -1 or end == -1 or end < start:
+        raise ValueError(f"Provider response contains no JSON object; got {response!r}")
+    return response[start : end + 1]
+
+
+def _as_str_list(raw: object) -> list[str]:
+    """Return ``raw`` as a list of strings, or empty list if shape is wrong.
+
+    Silent empty-list-on-bad-shape mirrors the plan's tolerant approach for
+    optional fields (``key_points``, ``entities_mentioned``). The required
+    ``summary`` field still raises KeyError on absence.
+    """
+    if not isinstance(raw, list):
+        return []
+    return [str(item) for item in raw]
 
 
 @dataclass
@@ -41,10 +64,9 @@ class Summariser:
         response = self._provider.generate(
             PromptRequest(system="", prompt=prompt, call_site="summary")
         )
-        cleaned = _FENCE.sub("", response).strip()
-        data = cast(dict[str, Any], json.loads(cleaned))
+        data = cast(dict[str, Any], json.loads(_extract_json_body(response)))
         return FileSummary(
             summary=cast(str, data["summary"]),
-            key_points=list(data.get("key_points", [])),
-            entities_mentioned=list(data.get("entities_mentioned", [])),
+            key_points=_as_str_list(data.get("key_points")),
+            entities_mentioned=_as_str_list(data.get("entities_mentioned")),
         )
