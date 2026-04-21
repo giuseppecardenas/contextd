@@ -60,15 +60,18 @@ class RelationshipInferrer:
                 continue
             edge_type = row.get("type")
             target_type = row.get("target_type")
+            target_name = row.get("target_name")
             if edge_type not in self._onto.edge_types:
                 continue
             if target_type not in self._onto.node_types:
+                continue
+            if not isinstance(target_name, str) or not target_name:
                 continue
             valid.append(
                 InferredRelationship(
                     edge_type=cast(str, edge_type),
                     target_type=cast(str, target_type),
-                    target_name=cast(str, row["target_name"]),
+                    target_name=target_name,
                     confidence=float(row.get("confidence", 0.0)),
                     reason=cast(str, row.get("reason", "")),
                 )

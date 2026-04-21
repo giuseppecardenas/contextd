@@ -139,3 +139,39 @@ def test_no_json_object_raises_valueerror() -> None:
     inferrer = RelationshipInferrer(mock_provider, mock_renderer, ontology)
     with pytest.raises(ValueError, match="no JSON object"):
         inferrer.infer("content", known_entities=[])
+
+
+def test_missing_or_empty_target_name_is_silently_discarded() -> None:
+    """Rows that pass ontology checks but lack target_name are dropped
+    silently — consistent with the tolerant-parsing pattern the rest of
+    this module uses. Previously a missing target_name raised KeyError
+    mid-loop and aborted the whole batch."""
+    ontology = Ontology.load_base()
+    mock_provider = MagicMock()
+    mock_provider.generate.return_value = json.dumps(
+        {
+            "relationships": [
+                {"type": "REFERENCES", "target_type": "File", "confidence": 0.9, "reason": "r"},
+                {
+                    "type": "REFERENCES",
+                    "target_type": "File",
+                    "target_name": "",
+                    "confidence": 0.9,
+                    "reason": "r",
+                },
+                {
+                    "type": "REFERENCES",
+                    "target_type": "File",
+                    "target_name": "ok.md",
+                    "confidence": 0.9,
+                    "reason": "r",
+                },
+            ]
+        }
+    )
+    mock_renderer = MagicMock()
+    mock_renderer.render.return_value = "prompt"
+    inferrer = RelationshipInferrer(mock_provider, mock_renderer, ontology)
+    result = inferrer.infer("content", known_entities=[])
+    assert len(result) == 1
+    assert result[0].target_name == "ok.md"
