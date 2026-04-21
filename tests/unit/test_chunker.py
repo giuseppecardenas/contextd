@@ -1,3 +1,5 @@
+import pytest
+
 from contextd.indexer.chunker import TokenChunker
 
 
@@ -23,3 +25,12 @@ def test_preserves_paragraph_boundaries_when_possible() -> None:
     text = "para one here.\n\npara two here."
     chunks = chunker.chunk(text)
     assert "para one here." in chunks[0]
+
+
+def test_init_rejects_overlap_ge_max() -> None:
+    # overlap_tokens >= max_tokens would make step <= 0 → infinite loop
+    # in chunk(). Validate at construction instead.
+    with pytest.raises(ValueError, match="must be <"):
+        TokenChunker(max_tokens=100, overlap_tokens=100)
+    with pytest.raises(ValueError, match="must be <"):
+        TokenChunker(max_tokens=50, overlap_tokens=99)

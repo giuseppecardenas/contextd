@@ -1,4 +1,7 @@
+import json
 from pathlib import Path
+
+import pytest
 
 from contextd.indexer.hasher import FileHasher
 
@@ -29,3 +32,17 @@ def test_is_changed_uses_persistent_state(tmp_path: Path) -> None:
     assert hasher.is_changed(f) is False  # unchanged
     f.write_text("world")
     assert hasher.is_changed(f) is True  # content change
+
+
+def test_load_state_rejects_non_dict_json(tmp_path: Path) -> None:
+    state = tmp_path / "index-state.json"
+    state.write_text(json.dumps(["not", "a", "dict"]))
+    with pytest.raises(ValueError, match="must be a JSON object"):
+        FileHasher(state_path=state)
+
+
+def test_load_state_rejects_non_string_values(tmp_path: Path) -> None:
+    state = tmp_path / "index-state.json"
+    state.write_text(json.dumps({"path/to/file": 42}))
+    with pytest.raises(ValueError, match="must be str→str"):
+        FileHasher(state_path=state)

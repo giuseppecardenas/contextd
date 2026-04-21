@@ -11,6 +11,11 @@ from __future__ import annotations
 
 class TokenChunker:
     def __init__(self, max_tokens: int, overlap_tokens: int) -> None:
+        if overlap_tokens >= max_tokens:
+            raise ValueError(
+                f"overlap_tokens ({overlap_tokens}) must be < max_tokens ({max_tokens}); "
+                "otherwise step <= 0 and the chunk loop never advances."
+            )
         self._max = max_tokens
         self._overlap = overlap_tokens
 

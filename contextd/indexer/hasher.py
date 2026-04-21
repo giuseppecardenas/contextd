@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import cast
 
 
 class FileHasher:
@@ -26,9 +25,22 @@ class FileHasher:
         self._persist()
 
     def _load_state(self) -> dict[str, str]:
-        if self._state_path and self._state_path.exists():
-            return cast(dict[str, str], json.loads(self._state_path.read_text()))
-        return {}
+        if not (self._state_path and self._state_path.exists()):
+            return {}
+        raw = json.loads(self._state_path.read_text())
+        if not isinstance(raw, dict):
+            raise ValueError(
+                f"Hasher state file {self._state_path} must be a JSON object; got {type(raw).__name__}"
+            )
+        out: dict[str, str] = {}
+        for k, v in raw.items():
+            if not isinstance(k, str) or not isinstance(v, str):
+                raise ValueError(
+                    f"Hasher state file {self._state_path} entries must be str→str; "
+                    f"got {type(k).__name__}→{type(v).__name__}"
+                )
+            out[k] = v
+        return out
 
     def _persist(self) -> None:
         if self._state_path:
