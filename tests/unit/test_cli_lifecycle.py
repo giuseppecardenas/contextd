@@ -16,12 +16,14 @@ def _setup_contextd_home(tmp_path: Path, backend: str = "kuzu") -> Path:
     home = tmp_path / ".contextd"
     home.mkdir()
     if backend == "kuzu":
+        # Use a nested path so the parent dir does NOT pre-exist — lets
+        # `test_up_kuzu_creates_db_path` assert that `up` actually created it.
         config = f"""
 [storage]
 backend = "kuzu"
 
 [storage.kuzu]
-db_path = "{home}/graph"
+db_path = "{home}/nested/graph"
 """
     else:
         config = f"""
@@ -69,9 +71,8 @@ def test_up_kuzu_creates_db_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     reload(contextd.cli)
     result = CliRunner().invoke(contextd.cli.cli, ["up"])
     assert result.exit_code == 0, result.output
-    # Parent directory must exist after `up`; db file created by Kuzu on connect.
-    db_parent = home  # db_path is "{home}/graph", parent is home itself (already created).
-    assert db_parent.exists()
+    # Parent dir did NOT pre-exist — `up` must have created it. Falsifiable.
+    assert (home / "nested").is_dir()
     assert "kuzu database directory" in result.output
 
 
