@@ -45,6 +45,10 @@ def apply_overrides(
         raise OntologyOverridesError(
             f"overrides file not readable: {overrides_path} ({exc})"
         ) from exc
+    except UnicodeDecodeError as exc:
+        raise OntologyOverridesError(
+            f"overrides file is not valid UTF-8: {overrides_path} ({exc})"
+        ) from exc
     try:
         data: Any = json.loads(raw_text)
     except json.JSONDecodeError as exc:

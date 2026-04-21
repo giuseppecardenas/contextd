@@ -151,3 +151,18 @@ def test_apply_overrides_unknown_edge_target_surfaces_ontology_error(tmp_path: P
     )
     with pytest.raises(OntologyError, match="Edge alias 'CITES' targets unknown edge type"):
         apply_overrides(_base(), overrides_file)
+
+
+def test_apply_overrides_non_utf8_file(tmp_path: Path) -> None:
+    """Non-UTF-8 overrides file raises OntologyOverridesError with UTF-8 naming.
+
+    The error must not be a raw UnicodeDecodeError — CLI wrapping depends
+    on our error class. Message names 'UTF-8' so users can disambiguate
+    from the 'not readable' (OSError) path.
+    """
+    path = tmp_path / "overrides.json"
+    # bytes that are not valid UTF-8: incomplete multi-byte sequence,
+    # then a stray continuation byte.
+    path.write_bytes(b'\xff\xfe{"edge_label_aliases": {}}')
+    with pytest.raises(OntologyOverridesError, match="UTF-8"):
+        apply_overrides(Ontology.load_base(), path)
