@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
-BackendName = Literal["memgraph", "kuzu"]
+BackendName = Literal["memgraph", "kuzu", "neo4j"]
 Origin = Literal["inferred", "structural", "manual"]
 
 

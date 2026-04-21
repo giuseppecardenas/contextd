@@ -29,6 +29,7 @@ dependencies = [
     "watchdog>=4.0",
     "markdown-it-py>=3.0",
     "mcp>=0.9",
+    "neo4j>=5.15",
     "gqlalchemy>=1.5",
     "kuzu>=0.4",
     "google-genai>=0.3",
