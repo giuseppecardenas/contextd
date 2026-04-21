@@ -69,7 +69,10 @@ class Neo4jConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 7687
     user: str = "neo4j"
-    password: str = "neo4j"
+    # Must match NEO4J_AUTH in `contextd/docker_compose.yml` (neo4j/contextd).
+    # Neo4j's image rejects the default `neo4j/neo4j` credential — it forces
+    # a password change on first login — so we ship a non-default here.
+    password: str = "contextd"
     docker_compose_file: str = "~/.contextd/docker-compose.yml"
     memory_limit_gb: float = 1.0
     cpu_limit: float = 1.0

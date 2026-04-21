@@ -19,7 +19,7 @@ def test_neo4j_config_defaults() -> None:
     assert cfg.host == "127.0.0.1"
     assert cfg.port == 7687
     assert cfg.user == "neo4j"
-    assert cfg.password == "neo4j"
+    assert cfg.password == "contextd"
     assert cfg.docker_compose_file == "~/.contextd/docker-compose.yml"
     assert cfg.memory_limit_gb == 1.0
     assert cfg.cpu_limit == 1.0

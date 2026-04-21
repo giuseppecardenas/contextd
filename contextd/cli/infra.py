@@ -17,20 +17,35 @@ from contextd.cli._shared import _load_cfg, console
 def up() -> None:
     """Start the storage backend and the indexer daemon."""
     cfg = _load_cfg()
+    backend = cfg.storage.backend
 
-    if cfg.storage.backend == "memgraph":
+    if backend == "kuzu":
+        # Kuzu is embedded — no container needed. Ensure the DB parent
+        # directory exists; KuzuBackend.connect() creates the file itself.
+        db_path = Path(cfg.storage.kuzu.db_path).expanduser()
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        console.print(f"[green]✓[/] kuzu database directory: {db_path}")
+    else:
         if not shutil.which("docker"):
             raise click.ClickException(
                 "docker not on PATH. Install Docker, or set [storage] backend = 'kuzu' "
                 "in ~/.contextd/config.toml to run without it."
             )
-        compose_file = Path(cfg.storage.memgraph.docker_compose_file).expanduser()
-        subprocess.run(["docker", "compose", "-f", str(compose_file), "up", "-d"], check=True)
-        console.print("[green]✓[/] memgraph container up at 127.0.0.1:7687")
-    else:
-        db_path = Path(cfg.storage.kuzu.db_path).expanduser()
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        console.print(f"[green]✓[/] kuzu database directory: {db_path}")
+        compose_file = contextd_home() / "docker-compose.yml"
+        cmd = [
+            "docker",
+            "compose",
+            "-f",
+            str(compose_file),
+            "--profile",
+            backend,
+            "up",
+            "-d",
+        ]
+        result = subprocess.run(cmd, check=False)
+        if result.returncode != 0:
+            raise click.ClickException(f"docker compose up failed (exit {result.returncode})")
+        console.print(f"[green]✓[/] {backend} container up at 127.0.0.1:7687")
 
     # Apply migrations against the configured backend.
     from contextd.storage.factory import build_graph_store
@@ -38,8 +53,12 @@ def up() -> None:
     store = build_graph_store(cfg)
     store.connect()
     try:
-        if cfg.storage.backend == "memgraph":
+        if backend == "memgraph":
             from contextd.migrations.memgraph import ALL_MIGRATIONS
+
+            store.apply_migrations(ALL_MIGRATIONS)
+        elif backend == "neo4j":
+            from contextd.migrations.neo4j import ALL_MIGRATIONS
 
             store.apply_migrations(ALL_MIGRATIONS)
         else:
@@ -56,9 +75,21 @@ def up() -> None:
 def down() -> None:
     """Stop the storage backend and indexer."""
     cfg = _load_cfg()
-    if cfg.storage.backend == "memgraph":
-        compose_file = Path(cfg.storage.memgraph.docker_compose_file).expanduser()
-        subprocess.run(["docker", "compose", "-f", str(compose_file), "down"], check=False)
+    backend = cfg.storage.backend
+    if backend in ("memgraph", "neo4j"):
+        compose_file = contextd_home() / "docker-compose.yml"
+        subprocess.run(
+            [
+                "docker",
+                "compose",
+                "-f",
+                str(compose_file),
+                "--profile",
+                backend,
+                "down",
+            ],
+            check=False,
+        )
     console.print("[green]✓[/] stopped")
 
 

@@ -1,17 +1,31 @@
-version: "3.9"
+# Docker Compose template deployed by `contextd init` to ~/.contextd/docker-compose.yml.
+# Both services declared; `contextd up` starts only the service matching
+# [storage] backend in config.toml via `docker compose up -d <service>`.
 services:
   memgraph:
     image: memgraph/memgraph:latest
-    container_name: contextd-memgraph
-    restart: unless-stopped
+    profiles: ["memgraph"]
     ports:
-      - "127.0.0.1:7687:7687"
+      - "7687:7687"
     volumes:
       - contextd_memgraph_data:/var/lib/memgraph
-    deploy:
-      resources:
-        limits:
-          cpus: "1.0"
-          memory: "1G"
+    restart: unless-stopped
+
+  neo4j:
+    image: neo4j:5.15-community
+    profiles: ["neo4j"]
+    ports:
+      - "7687:7687"
+      - "7474:7474"
+    environment:
+      NEO4J_AUTH: "neo4j/contextd"
+      NEO4J_PLUGINS: '["apoc"]'
+    volumes:
+      - contextd_neo4j_data:/data
+      - contextd_neo4j_logs:/logs
+    restart: unless-stopped
+
 volumes:
   contextd_memgraph_data:
+  contextd_neo4j_data:
+  contextd_neo4j_logs:
