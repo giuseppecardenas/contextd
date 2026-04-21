@@ -21,6 +21,18 @@ def test_init_creates_layout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     assert (home / "prompts" / "summarise.md").exists()
 
 
+def test_init_writes_neo4j_default_backend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """After the M11.8 flip, fresh ``contextd init`` writes neo4j as default backend."""
+    monkeypatch.setenv("CONTEXTD_HOME", str(tmp_path / ".contextd"))
+    monkeypatch.setenv("GEMINI_API_KEY", "x")
+    monkeypatch.setenv("VOYAGE_API_KEY", "y")
+    runner = CliRunner()
+    result = runner.invoke(contextd.cli.cli, ["init", "--yes"])
+    assert result.exit_code == 0
+    config = (tmp_path / ".contextd" / "config.toml").read_text()
+    assert 'backend = "neo4j"' in config
+
+
 def test_init_is_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CONTEXTD_HOME", str(tmp_path / ".contextd"))
     monkeypatch.setenv("GEMINI_API_KEY", "x")

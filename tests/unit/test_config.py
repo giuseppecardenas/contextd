@@ -9,7 +9,7 @@ def test_load_default_returns_valid_config() -> None:
     cfg = Config.load_default()
     assert cfg.providers.inference == "gemini"
     assert cfg.providers.embedding == "voyage"
-    assert cfg.storage.backend == "memgraph"
+    assert cfg.storage.backend == "neo4j"
     assert cfg.storage.memgraph.port == 7687
     assert cfg.storage.kuzu.db_path.endswith("/graph/")
     assert cfg.inference.summary_max_words == 100

@@ -15,7 +15,7 @@ model = "voyage-3"
 max_batch_size = 128
 
 [storage]
-backend = "memgraph"
+backend = "neo4j"
 
 [storage.memgraph]
 host = "127.0.0.1"

@@ -80,7 +80,9 @@ class Neo4jConfig(BaseModel):
 
 class StorageConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    backend: BackendName = "memgraph"  # default flip to "neo4j" happens in M11.8
+    backend: BackendName = (
+        "neo4j"  # was "memgraph"; flipped in M11.8 for reference-Cypher reliability
+    )
     memgraph: MemgraphConfig = Field(default_factory=MemgraphConfig)
     kuzu: KuzuConfig = Field(default_factory=KuzuConfig)
     neo4j: Neo4jConfig = Field(default_factory=Neo4jConfig)
