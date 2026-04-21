@@ -8,11 +8,18 @@ The home-directory accessor ``contextd_home()`` is imported from
 ``contextd._paths`` rather than ``contextd.cli`` so the MCP process
 doesn't pull in click/rich — SD #69 fixed the Delta-C import coupling
 that existed in the initial M7.3 implementation.
+
+Per-corpus tools are registered at startup by scanning
+``~/.contextd/corpora/*.toml`` for ``[mcp.tools]`` entries.  Each
+entry maps a tool name to a Cypher file; the resulting tools are
+namespaced ``<corpus>.<tool>`` to avoid collisions with the 8 generic
+tools (which never contain a dot in their names).
 """
 
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 from mcp.server import Server
@@ -22,10 +29,15 @@ from mcp.types import Tool
 from contextd._paths import contextd_home
 from contextd.config import Config
 from contextd.mcp import tools
+from contextd.mcp.corpus_tools import (
+    CorpusTool,
+    build_tool_descriptors,
+    dispatch_corpus_tool,
+)
 from contextd.storage.base import GraphStore
 from contextd.storage.factory import build_graph_store
 
-TOOL_DESCRIPTORS: list[Tool] = [
+_GENERIC_TOOL_DESCRIPTORS: list[Tool] = [
     Tool(
         name="describe_project",
         description="Compact project primer — top-N most-cited File nodes with summaries.",
@@ -110,6 +122,13 @@ TOOL_DESCRIPTORS: list[Tool] = [
     ),
 ]
 
+# Backward-compatible alias so any external code that references
+# ``contextd.mcp_server.TOOL_DESCRIPTORS`` (e.g. older tests) still works.
+# NOTE: this is the *generic* list only — per-corpus tools are not included
+# here because they require a live home-directory scan.  Tests that need the
+# full surface should call ``build_tool_descriptors(home)`` directly.
+TOOL_DESCRIPTORS = _GENERIC_TOOL_DESCRIPTORS
+
 
 def _text(obj: Any) -> list[dict[str, str]]:
     """MCP tool result shape — JSON-serialised payload under 'text'.
@@ -122,12 +141,27 @@ def _text(obj: Any) -> list[dict[str, str]]:
     return [{"type": "text", "text": json.dumps(obj, default=str)}]
 
 
-def _dispatch_tool(name: str, arguments: dict[str, Any], store: GraphStore) -> Any:
+def _dispatch_tool(
+    name: str,
+    arguments: dict[str, Any],
+    store: GraphStore,
+    corpus_registry: dict[str, CorpusTool] | None = None,
+) -> Any:
     """Route a tool-call to the right tools.X body.
 
     Extracted from _call so tests can assert dispatch behaviour without
     spinning up the full async stdio loop.
+
+    Per-corpus tools are dispatched when ``name`` contains a dot (the
+    ``<corpus>.<tool>`` namespace separator).  The ``corpus_registry``
+    must be provided for those calls; if it is None or the name is not
+    registered, a ValueError is raised.
     """
+    if "." in name:
+        reg = corpus_registry or {}
+        result = dispatch_corpus_tool(name, arguments, reg, store.exec_read)
+        return _text(result)
+
     match name:
         case "describe_project":
             ov = tools.describe_project(
@@ -166,14 +200,21 @@ async def run() -> None:
     try:
         server: Server[Any] = Server("contextd")
 
+        # Build the full tool list (generic 8 + per-corpus) and the
+        # corpus-tool dispatch registry.  Done after store.connect() so
+        # that the home-directory is accessible and any per-corpus TOML
+        # parse failures are surfaced before the server loop starts.
+        corpus_descriptors, corpus_registry = build_tool_descriptors(home)
+        all_descriptors: list[Tool] = _GENERIC_TOOL_DESCRIPTORS + corpus_descriptors
+
         @server.list_tools()  # type: ignore[no-untyped-call,untyped-decorator]
         async def _list() -> list[Tool]:
-            return TOOL_DESCRIPTORS
+            return all_descriptors
 
         @server.call_tool()  # type: ignore[untyped-decorator]
         async def _call(name: str, arguments: dict[str, Any]) -> Any:
             try:
-                return _dispatch_tool(name, arguments, store)
+                return _dispatch_tool(name, arguments, store, corpus_registry)
             except Exception as exc:
                 # Render the error as the tool's text payload so the MCP
                 # client sees a structured response instead of a protocol
@@ -195,3 +236,14 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+def _build_all_tool_descriptors(home: Path) -> tuple[list[Tool], dict[str, CorpusTool]]:
+    """Public helper: generic tools + per-corpus tools from *home*.
+
+    Intended for tests and tooling that need the full surface without
+    running the async server.
+    """
+    corpus_descriptors, corpus_registry = build_tool_descriptors(home)
+    all_descriptors = _GENERIC_TOOL_DESCRIPTORS + corpus_descriptors
+    return all_descriptors, corpus_registry
