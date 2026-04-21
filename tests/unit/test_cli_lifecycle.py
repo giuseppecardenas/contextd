@@ -113,3 +113,19 @@ def test_down_memgraph_calls_docker_compose_down(
         result = CliRunner().invoke(contextd.cli.cli, ["down"])
     assert result.exit_code == 0
     assert any("down" in c.args[0] for c in mock_run.call_args_list)
+
+
+def test_up_memgraph_without_docker_raises_clickexception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When docker is absent and backend=memgraph, `up` must surface a
+    clean ClickException instead of a FileNotFoundError traceback."""
+    home = _setup_contextd_home(tmp_path, backend="memgraph")
+    monkeypatch.setenv("CONTEXTD_HOME", str(home))
+    reload(contextd.cli)
+    with patch("shutil.which", return_value=None):
+        result = CliRunner().invoke(contextd.cli.cli, ["up"])
+    assert result.exit_code != 0
+    assert "docker not on PATH" in result.output
+    # ClickException renders via "Error: ..." — not a bare Python traceback.
+    assert "Traceback" not in result.output

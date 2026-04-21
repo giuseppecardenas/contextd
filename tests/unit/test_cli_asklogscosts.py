@@ -121,3 +121,48 @@ def test_ask_help_works(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
     result = CliRunner().invoke(contextd.cli.cli, ["ask", "--help"])
     assert result.exit_code == 0
     assert "QUESTION" in result.output
+
+
+def test_ask_translation_failure_raises_clickexception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When QueryTranslator.translate raises (e.g. Gemini 500, empty
+    response), `ask` must surface a ClickException not a traceback."""
+    home = _setup_home(tmp_path)
+    (home / "prompts").mkdir(exist_ok=True)
+    monkeypatch.setenv("CONTEXTD_HOME", str(home))
+    reload(contextd.cli)
+    with (
+        patch("contextd.inference.translate.QueryTranslator") as mock_translator_cls,
+        patch("contextd.providers.factory.build_inference_provider"),
+        patch("contextd.storage.factory.build_graph_store"),
+    ):
+        mock_translator_cls.return_value.translate.side_effect = RuntimeError("gemini 500")
+        result = CliRunner().invoke(contextd.cli.cli, ["ask", "what is X?"])
+    assert result.exit_code != 0
+    assert "translation failed" in result.output
+    assert "gemini 500" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_ask_exec_read_failure_raises_clickexception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the backend rejects the Cypher, `ask` must render a clean error."""
+    home = _setup_home(tmp_path)
+    (home / "prompts").mkdir(exist_ok=True)
+    monkeypatch.setenv("CONTEXTD_HOME", str(home))
+    reload(contextd.cli)
+    with (
+        patch("contextd.inference.translate.QueryTranslator") as mock_translator_cls,
+        patch("contextd.providers.factory.build_inference_provider"),
+        patch("contextd.storage.factory.build_graph_store") as mock_build,
+    ):
+        mock_translator_cls.return_value.translate.return_value = "MATCH (n) RETURN n"
+        fake_store = mock_build.return_value
+        fake_store.exec_read.side_effect = RuntimeError("bad Cypher")
+        result = CliRunner().invoke(contextd.cli.cli, ["ask", "anything"])
+    assert result.exit_code != 0
+    assert "query failed" in result.output
+    assert "bad Cypher" in result.output
+    assert "Traceback" not in result.output

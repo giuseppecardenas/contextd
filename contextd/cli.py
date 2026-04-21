@@ -98,6 +98,11 @@ def up() -> None:
     cfg = _load_cfg()
 
     if cfg.storage.backend == "memgraph":
+        if not shutil.which("docker"):
+            raise click.ClickException(
+                "docker not on PATH. Install Docker, or set [storage] backend = 'kuzu' "
+                "in ~/.contextd/config.toml to run without it."
+            )
         compose_file = Path(cfg.storage.memgraph.docker_compose_file).expanduser()
         subprocess.run(["docker", "compose", "-f", str(compose_file), "up", "-d"], check=True)
         console.print("[green]✓[/] memgraph container up at 127.0.0.1:7687")
@@ -291,12 +296,18 @@ def ask(question: str, corpus: str | None) -> None:
         renderer=PromptRenderer(CONTEXTD_HOME / "prompts"),
         ontology=Ontology.load_base(),
     )
-    cypher = translator.translate(question, corpus=corpus)
+    try:
+        cypher = translator.translate(question, corpus=corpus)
+    except Exception as exc:
+        raise click.ClickException(f"translation failed: {exc}") from exc
     console.print(f"[dim]cypher:[/] {cypher}")
     store = build_graph_store(cfg)
     store.connect()
     try:
-        rows = store.exec_read(cypher, {})
+        try:
+            rows = store.exec_read(cypher, {})
+        except Exception as exc:
+            raise click.ClickException(f"query failed: {exc}") from exc
         console.print(json.dumps(rows, indent=2, default=str))
     finally:
         store.close()
