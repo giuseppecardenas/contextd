@@ -14,9 +14,10 @@ relationship types.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from importlib import resources
-from typing import Any
+from types import MappingProxyType
 
 
 class OntologyError(ValueError):
@@ -25,30 +26,31 @@ class OntologyError(ValueError):
 
 @dataclass(frozen=True)
 class Ontology:
-    node_types: dict[str, list[str]]
-    edge_types: set[str]
-    edge_origin_values: set[str]
-    aliases: dict[str, str] = field(default_factory=dict)
+    node_types: Mapping[str, tuple[str, ...]]
+    edge_types: frozenset[str]
+    edge_origin_values: frozenset[str]
+    aliases: Mapping[str, str] = field(default_factory=dict)
 
     @classmethod
     def load_base(cls) -> Ontology:
         raw = json.loads(resources.files("contextd.ontology").joinpath("base.json").read_text())
+        node_types: dict[str, tuple[str, ...]] = {k: tuple(v) for k, v in raw["node_types"].items()}
         return cls(
-            node_types=dict(raw["node_types"]),
-            edge_types=set(raw["edge_types"]),
-            edge_origin_values=set(raw["edge_origin_values"]),
+            node_types=MappingProxyType(node_types),
+            edge_types=frozenset(raw["edge_types"]),
+            edge_origin_values=frozenset(raw["edge_origin_values"]),
         )
 
-    def with_aliases(self, aliases: dict[str, str]) -> Ontology:
+    def with_aliases(self, aliases: Mapping[str, str]) -> Ontology:
         for alias, target in aliases.items():
             if target not in self.node_types:
                 raise OntologyError(f"Alias '{alias}' targets unknown node type '{target}'")
-        return replace(self, aliases=dict(aliases))
+        return replace(self, aliases=MappingProxyType(dict(aliases)))
 
     def resolve_alias(self, name: str) -> str:
         return self.aliases.get(name, name)
 
-    def validate_node(self, node_type: str, properties: dict[str, Any]) -> None:
+    def validate_node(self, node_type: str) -> None:
         resolved = self.resolve_alias(node_type)
         if resolved not in self.node_types:
             raise OntologyError(f"Unknown node type '{node_type}'")

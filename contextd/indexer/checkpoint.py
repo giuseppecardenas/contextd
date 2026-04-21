@@ -16,7 +16,6 @@ import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-
 _INVALID_CORPUS_CHARS = frozenset({"/", "\\", "\0"})
 
 
