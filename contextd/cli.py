@@ -280,7 +280,7 @@ def index(corpus_name: str, bootstrap: bool, incremental: bool, estimate_only: b
 def ask(question: str, corpus: str | None) -> None:
     """Natural-language query — translates to Cypher and runs it."""
     from contextd.inference.prompts import PromptRenderer
-    from contextd.inference.translate import QueryTranslator  # type: ignore[import-untyped]
+    from contextd.inference.translate import QueryTranslator
     from contextd.ontology.schema import Ontology
     from contextd.providers.factory import build_inference_provider
     from contextd.storage.factory import build_graph_store
