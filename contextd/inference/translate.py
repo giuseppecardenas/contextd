@@ -9,7 +9,11 @@ from contextd.mcp.readonly_guard import assert_read_only
 from contextd.ontology.schema import Ontology
 from contextd.providers.base import InferenceProvider, PromptRequest
 
-_CYPHER_FENCE = re.compile(r"```(?:cypher)?\s*(.*?)\s*```", re.DOTALL)
+# Accept fences with any language tag (```cypher, ```sql, ```gremlin, ```)
+# — some LLMs mis-identify the output but the body is still Cypher. The
+# tag capture is non-greedy and up to the first newline so we don't swallow
+# the Cypher body.
+_CYPHER_FENCE = re.compile(r"```[a-zA-Z0-9_-]*\s*(.*?)\s*```", re.DOTALL)
 
 
 class QueryTranslator:
@@ -44,10 +48,19 @@ class QueryTranslator:
         return cypher
 
     def _extract_cypher(self, text: str) -> str:
+        """Extract Cypher from an LLM response.
+
+        Strategy: try the ``` fenced block first (any language tag). If no
+        fence, slice from the first Cypher keyword to end-of-text — this
+        preserves multi-line continuation lines (``-[:REFERENCES]->`` etc.)
+        that a line-by-line keyword filter would drop.
+        """
         match = _CYPHER_FENCE.search(text)
         if match:
             return match.group(1).strip()
-        # Strip prose lines — keep only lines that start with a Cypher keyword.
+        # Fallback: find the first line starting with a Cypher read-only
+        # keyword and keep everything from there. This handles both
+        # single-line Cypher and multi-line blocks with continuation.
         keywords = {
             "MATCH",
             "OPTIONAL",
@@ -60,15 +73,17 @@ class QueryTranslator:
             "SKIP",
             "CALL",
         }
-        lines = [
-            line
-            for line in text.splitlines()
-            if line.strip() and line.strip().split()[0].upper() in keywords
-        ]
-        cypher = " ".join(lines)
-        if not cypher:
+        lines = text.splitlines()
+        start: int | None = None
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped and stripped.split()[0].upper() in keywords:
+                start = i
+                break
+        if start is None:
             raise ValueError(
                 "Translator returned no Cypher-like content; "
                 "provider response was empty or contained no recognised keywords"
             )
+        cypher = "\n".join(lines[start:]).strip()
         return cypher

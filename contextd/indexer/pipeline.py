@@ -20,13 +20,32 @@ class BootstrapResult:
     phases: list[phases.PhaseResult]
 
 
+_DEFAULT_EXCLUDE_DIRS = frozenset({".git", ".venv", "__pycache__", "node_modules"})
+
+
 def enumerate_corpus_files(corpus: CorpusConfig) -> list[Path]:
+    """Expand the corpus's include globs into a list of files.
+
+    Defence against accidental walk-into-.git / node_modules / venv:
+    any file whose path contains a `_DEFAULT_EXCLUDE_DIRS` component
+    is dropped unless the user's `include` glob names it explicitly.
+    Symlinks are skipped to avoid cycles. Users who actually need
+    those paths indexed can still use an explicit glob pattern.
+    """
     root = Path(corpus.corpus.root).expanduser()
     hits: list[Path] = []
     for pattern in corpus.corpus.include:
         hits.extend(root.glob(pattern))
     excl = {root / e for e in corpus.corpus.exclude}
-    return [p for p in hits if p.is_file() and p not in excl]
+
+    def _allowed(p: Path) -> bool:
+        if p in excl or not p.is_file() or p.is_symlink():
+            return False
+        # Drop anything under a conventional exclude directory unless the
+        # include glob explicitly named that directory in its path prefix.
+        return not any(part in _DEFAULT_EXCLUDE_DIRS for part in p.parts)
+
+    return [p for p in hits if _allowed(p)]
 
 
 def run_bootstrap(

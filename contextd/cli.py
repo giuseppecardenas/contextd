@@ -359,9 +359,14 @@ def logs(follow: bool) -> None:
         console.print(f"no log at {log_path}")
         return
     if follow:
-        subprocess.run(["tail", "-f", str(log_path)], check=False)
+        try:
+            subprocess.run(["tail", "-f", str(log_path)], check=False)
+        except KeyboardInterrupt:
+            # Ctrl-C is the normal way to end `--follow`; render a clean
+            # exit instead of Click's "Aborted!" output.
+            console.print("")
     else:
-        console.print(log_path.read_text())
+        console.print(log_path.read_text(encoding="utf-8"))
 
 
 @cli.command()
