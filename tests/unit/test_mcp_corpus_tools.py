@@ -4,6 +4,7 @@ descriptor builder, and dispatch helper.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -124,24 +125,23 @@ def test_build_tool_descriptors_loads_cypher_from_relative_path_resolves_against
 
 
 def test_build_tool_descriptors_skips_missing_cypher_file(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     corpora_dir = tmp_path / "corpora"
     corpora_dir.mkdir()
     missing = tmp_path / "nonexistent.cypher"  # does NOT exist
     _write_corpus_toml(corpora_dir, "corp", {"ghost": missing})
 
-    descriptors, registry = build_tool_descriptors(tmp_path)
+    with caplog.at_level(logging.WARNING):
+        descriptors, registry = build_tool_descriptors(tmp_path)
 
     assert descriptors == []
     assert registry == {}
-    captured = capsys.readouterr()
-    assert "WARNING" in captured.err
-    assert "ghost" in captured.err
+    assert any("ghost" in rec.message for rec in caplog.records)
 
 
 def test_build_tool_descriptors_rejects_write_cypher(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     corpora_dir = tmp_path / "corpora"
     corpora_dir.mkdir()
@@ -149,14 +149,15 @@ def test_build_tool_descriptors_rejects_write_cypher(
     bad_cypher.write_text("CREATE (n:File {path: $path}) RETURN n")
     _write_corpus_toml(corpora_dir, "corp", {"dangerous": bad_cypher})
 
-    descriptors, registry = build_tool_descriptors(tmp_path)
+    with caplog.at_level(logging.WARNING):
+        descriptors, registry = build_tool_descriptors(tmp_path)
 
     assert descriptors == []
     assert registry == {}
-    captured = capsys.readouterr()
-    assert "SECURITY" in captured.err
-    assert "dangerous" in captured.err
-    assert "corp" in captured.err
+    assert any(
+        "SECURITY" in rec.message and "dangerous" in rec.message and "corp" in rec.message
+        for rec in caplog.records
+    )
 
 
 def test_build_tool_descriptors_namespaces_tool_names(tmp_path: Path) -> None:
@@ -191,9 +192,10 @@ def test_build_tool_descriptors_schema_has_required_placeholders(
 
 
 def test_build_tool_descriptors_skips_malformed_corpus_toml(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """A malformed TOML does not crash the loader; valid corpora still load."""
+    """A structurally-malformed TOML (valid syntax, missing required fields)
+    does not crash the loader; valid corpora still load."""
     corpora_dir = tmp_path / "corpora"
     corpora_dir.mkdir()
 
@@ -205,15 +207,43 @@ def test_build_tool_descriptors_skips_malformed_corpus_toml(
     cypher_file.write_text("MATCH (n:File) RETURN n.path")
     _write_corpus_toml(corpora_dir, "good-corpus", {"ok": cypher_file})
 
-    descriptors, registry = build_tool_descriptors(tmp_path)
+    with caplog.at_level(logging.WARNING):
+        descriptors, registry = build_tool_descriptors(tmp_path)
 
     # Only the valid corpus's tool is registered.
     assert len(descriptors) == 1
     assert "good-corpus.ok" in registry
     # Bad corpus produced a warning.
-    captured = capsys.readouterr()
-    assert "WARNING" in captured.err
-    assert "bad.toml" in captured.err
+    assert any("bad.toml" in rec.message for rec in caplog.records)
+
+
+def test_build_tool_descriptors_skips_syntactically_invalid_toml(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A syntactically invalid TOML (tokenizer error) does not crash the
+    loader; valid corpora still load.  This exercises the Fix 1 path where
+    tomllib.TOMLDecodeError is wrapped as CorpusConfigError inside
+    CorpusConfig.load, so build_tool_descriptors' except CorpusConfigError
+    catches it correctly."""
+    corpora_dir = tmp_path / "corpora"
+    corpora_dir.mkdir()
+
+    # Guaranteed tokenizer error — unclosed bracket.
+    (corpora_dir / "syntax-error.toml").write_text("[unclosed bracket\n")
+
+    # Also write a valid corpus with one tool.
+    cypher_file = tmp_path / "ok.cypher"
+    cypher_file.write_text("MATCH (n:File) RETURN n.path")
+    _write_corpus_toml(corpora_dir, "good-corpus", {"ok": cypher_file})
+
+    with caplog.at_level(logging.WARNING):
+        descriptors, registry = build_tool_descriptors(tmp_path)
+
+    # Only the valid corpus's tool is registered.
+    assert len(descriptors) == 1
+    assert "good-corpus.ok" in registry
+    # The bad corpus produced a warning mentioning the file.
+    assert any("syntax-error.toml" in rec.message for rec in caplog.records)
 
 
 def test_build_tool_descriptors_empty_corpora_dir(tmp_path: Path) -> None:

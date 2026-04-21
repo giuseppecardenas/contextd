@@ -13,7 +13,6 @@ from contextd.mcp.corpus_tools import CorpusTool
 from contextd.mcp.readonly_guard import ReadOnlyGuardError
 from contextd.mcp_server import (
     _GENERIC_TOOL_DESCRIPTORS,
-    TOOL_DESCRIPTORS,
     _build_all_tool_descriptors,
     _dispatch_tool,
 )
@@ -34,17 +33,17 @@ def test_mcp_server_main_is_sync_wrapper() -> None:
     assert inspect.iscoroutinefunction(contextd.mcp_server.run)
 
 
-# -- TOOL_DESCRIPTORS surface (SD #77) ------------------------------------
+# -- _GENERIC_TOOL_DESCRIPTORS surface (SD #77) ---------------------------
 
 
-def test_tool_descriptors_registers_expected_eight() -> None:
+def test_generic_tool_descriptors_registers_expected_eight() -> None:
     """Directly-inspectable registry means tests can assert the MCP surface
     without running the async server. Previously _list was closure-bound.
 
-    TOOL_DESCRIPTORS is a backward-compatible alias for the generic 8;
-    per-corpus tools appear only via build_tool_descriptors / _build_all_tool_descriptors.
+    Per-corpus tools appear only via build_tool_descriptors /
+    _build_all_tool_descriptors — they are not in _GENERIC_TOOL_DESCRIPTORS.
     """
-    names = [t.name for t in TOOL_DESCRIPTORS]
+    names = [t.name for t in _GENERIC_TOOL_DESCRIPTORS]
     assert set(names) == {
         "describe_project",
         "search",
@@ -57,14 +56,9 @@ def test_tool_descriptors_registers_expected_eight() -> None:
     }
 
 
-def test_generic_tool_descriptors_is_alias_for_tool_descriptors() -> None:
-    """_GENERIC_TOOL_DESCRIPTORS and TOOL_DESCRIPTORS are the same object."""
-    assert _GENERIC_TOOL_DESCRIPTORS is TOOL_DESCRIPTORS
-
-
 def test_related_descriptor_depth_clamped_1_to_5() -> None:
     """Depth clamp (SD #32) is enforced in the tool descriptor's JSON schema."""
-    related = next(t for t in TOOL_DESCRIPTORS if t.name == "related")
+    related = next(t for t in _GENERIC_TOOL_DESCRIPTORS if t.name == "related")
     depth_schema = related.inputSchema["properties"]["depth"]
     assert depth_schema["minimum"] == 1
     assert depth_schema["maximum"] == 5

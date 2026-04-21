@@ -31,8 +31,8 @@ eliminate all false positives.
 
 from __future__ import annotations
 
+import logging
 import re
-import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,6 +42,8 @@ from mcp.types import Tool
 
 from contextd.corpus_config import CorpusConfig, CorpusConfigError
 from contextd.mcp.readonly_guard import ReadOnlyGuardError, assert_read_only
+
+logger = logging.getLogger(__name__)
 
 _PLACEHOLDER_RE = re.compile(r"\$([a-zA-Z_][a-zA-Z0-9_]*)")
 
@@ -112,10 +114,7 @@ def build_tool_descriptors(
         try:
             corpus_cfg = CorpusConfig.load(toml_path)
         except CorpusConfigError as exc:
-            print(
-                f"[contextd] WARNING: skipping {toml_path.name} — {exc}",
-                file=sys.stderr,
-            )
+            logger.warning("skipping %s — %s", toml_path.name, exc)
             continue
 
         corpus_name = corpus_cfg.corpus.name
@@ -126,10 +125,11 @@ def build_tool_descriptors(
                 cypher_path = toml_path.parent / cypher_path
 
             if not cypher_path.exists():
-                print(
-                    f"[contextd] WARNING: corpus '{corpus_name}', tool '{tool_name}' "
-                    f"— Cypher file not found: {cypher_path}",
-                    file=sys.stderr,
+                logger.warning(
+                    "corpus '%s', tool '%s' — Cypher file not found: %s",
+                    corpus_name,
+                    tool_name,
+                    cypher_path,
                 )
                 continue
 
@@ -138,10 +138,12 @@ def build_tool_descriptors(
             try:
                 assert_read_only(cypher_text)
             except ReadOnlyGuardError as exc:
-                print(
-                    f"[contextd] WARNING: corpus '{corpus_name}', tool '{tool_name}' "
-                    f"— SECURITY: Cypher contains write keyword, tool skipped: {exc}",
-                    file=sys.stderr,
+                logger.warning(
+                    "corpus '%s', tool '%s' — SECURITY: Cypher contains write keyword, "
+                    "tool skipped: %s",
+                    corpus_name,
+                    tool_name,
+                    exc,
                 )
                 continue
 

@@ -98,11 +98,11 @@ def _add_corpus_from_template(
     from contextd.corpus_config import CorpusConfig, CorpusConfigError
 
     # Step 1: validate via CorpusConfig.load (catches both bad TOML and bad schema).
-    # CorpusConfig.load wraps pydantic errors in CorpusConfigError but lets
-    # tomllib.TOMLDecodeError propagate unwrapped — catch both.
+    # CorpusConfig.load wraps tomllib.TOMLDecodeError as CorpusConfigError, so
+    # only CorpusConfigError needs to be caught here.
     try:
         template_cfg = CorpusConfig.load(template)
-    except (CorpusConfigError, tomllib.TOMLDecodeError) as exc:
+    except CorpusConfigError as exc:
         raise click.ClickException(f"template invalid: {exc}") from exc
 
     # Double read: first via CorpusConfig.load for typed validation +

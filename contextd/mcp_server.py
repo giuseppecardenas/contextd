@@ -122,13 +122,6 @@ _GENERIC_TOOL_DESCRIPTORS: list[Tool] = [
     ),
 ]
 
-# Backward-compatible alias so any external code that references
-# ``contextd.mcp_server.TOOL_DESCRIPTORS`` (e.g. older tests) still works.
-# NOTE: this is the *generic* list only — per-corpus tools are not included
-# here because they require a live home-directory scan.  Tests that need the
-# full surface should call ``build_tool_descriptors(home)`` directly.
-TOOL_DESCRIPTORS = _GENERIC_TOOL_DESCRIPTORS
-
 
 def _text(obj: Any) -> list[dict[str, str]]:
     """MCP tool result shape — JSON-serialised payload under 'text'.
