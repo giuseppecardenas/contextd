@@ -44,7 +44,7 @@ def run_bootstrap(
         # Section-granular path (spec §5.11).
         # Spec-delta (M9.1-A): embedder passed to phase_enumerate_sections so that
         # Section.embedding is included at CREATE time (IMMUTABLE_AFTER_CREATE on Kuzu).
-        results.append(phases.phase_enumerate_sections(files, corpus, store, embedder))
+        results.append(phases.phase_enumerate_sections(files, corpus, store, embedder, hasher))
         # M9.2 stubs — real implementations land in Task 9.2.
         results.append(phases.phase_embed_sections(corpus, store))
         results.append(phases.phase_summarise_sections(corpus, summariser, store))

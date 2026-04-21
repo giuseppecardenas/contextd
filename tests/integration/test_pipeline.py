@@ -199,6 +199,14 @@ def test_section_granular_bootstrap(backend, tmp_path: Path) -> None:
     assert file_rows[0]["summary"] is not None
     assert file_rows[0]["summary"] != ""
 
+    # SD #73: File.hash is now a real MD5 (32 hex chars), not "__pending__".
+    hash_rows = backend.exec_read("MATCH (f:File {corpus: 'sec'}) RETURN f.hash AS hash")
+    assert len(hash_rows) == 1
+    stored_hash = hash_rows[0]["hash"]
+    assert stored_hash != "__pending__"
+    assert len(stored_hash) == 32
+    assert all(c in "0123456789abcdef" for c in stored_hash)
+
 
 def test_section_granular_inferred_edges(backend, tmp_path: Path) -> None:
     """Exercise phase_relate_sections' delete_edges + upsert_edge with the

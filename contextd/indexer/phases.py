@@ -193,6 +193,7 @@ def phase_enumerate_sections(
     corpus_cfg: CorpusConfig,
     store: GraphStore,
     embedder: EmbeddingProvider,
+    hasher: FileHasher,
     batch_size: int = 128,
 ) -> PhaseResult:
     """Section-granular enumeration — emits Section nodes + structural edges.
@@ -205,12 +206,9 @@ def phase_enumerate_sections(
     Spec-delta (M9.1-B): upsert_edge calls supply src_label/dst_label kwargs
     because Kuzu requires them for schema-first REL tables.
 
-    Spec-delta (M9.1-E): File.hash is set to "__pending__" as a sentinel
-    placeholder. The hasher is not threaded through the section pipeline in
-    this task. Incremental re-index cannot compare hashes reliably in section
-    mode until hasher is wired here.
-    TODO(M9-followup or M11): compute real MD5 via FileHasher instead of
-    "__pending__" so incremental re-index works in section granularity mode.
+    SD #73 (follow-up to M9.1-E): FileHasher is now threaded through so
+    File.hash records the real MD5 of the file. Previously a "__pending__"
+    sentinel blocked incremental re-index in section mode.
     """
     parser = HeadingParser(
         min_level=corpus_cfg.corpus.heading_min_level,
@@ -240,14 +238,14 @@ def phase_enumerate_sections(
     processed = 0
     for f, sections in parsed_by_file:
         file_path = str(f)
-        # Upsert the parent File node (hash sentinel — see TODO above).
+        # Upsert the parent File node with a real MD5 hash (SD #73).
         store.upsert_node(
             "File",
             {
                 "path": file_path,
                 "name": f.name,
                 "type": f.suffix.lstrip(".") or "unknown",
-                "hash": "__pending__",
+                "hash": hasher.hash(f),
                 "size": f.stat().st_size,
                 "corpus": corpus_cfg.corpus.name,
             },
