@@ -115,3 +115,23 @@ def test_upsert_edge_and_delete_edges(neo4j_backend) -> None:
 def test_delete_edges_unfiltered_raises(neo4j_backend) -> None:
     with pytest.raises(ValueError, match="requires at least one of"):
         neo4j_backend.delete_edges("/a.md", src_label="File")
+
+
+def test_upsert_edge_requires_labels(neo4j_backend) -> None:
+    """Both endpoint labels must be supplied on Neo4j — omitting either
+    silently binds zero rows (schema-free MATCH) and loses writes."""
+    with pytest.raises(ValueError, match="requires both src_label and dst_label"):
+        neo4j_backend.upsert_edge("/a.md", "/b.md", "REFERENCES", origin="inferred")
+    with pytest.raises(ValueError, match="requires both src_label and dst_label"):
+        neo4j_backend.upsert_edge(
+            "/a.md", "/b.md", "REFERENCES", origin="inferred", src_label="File"
+        )
+    with pytest.raises(ValueError, match="requires both src_label and dst_label"):
+        neo4j_backend.upsert_edge(
+            "/a.md", "/b.md", "REFERENCES", origin="inferred", dst_label="File"
+        )
+
+
+def test_delete_edges_requires_src_label(neo4j_backend) -> None:
+    with pytest.raises(ValueError, match="requires src_label"):
+        neo4j_backend.delete_edges("/a.md", origin="inferred")

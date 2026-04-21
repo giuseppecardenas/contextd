@@ -85,22 +85,25 @@ class Neo4jBackend(GraphStore):
         src_label: str | None = None,
         dst_label: str | None = None,
     ) -> None:
+        # Both labels required: a MERGE without the endpoint label match silently
+        # binds zero rows on schema-free Neo4j (unlike Memgraph's OR-across-PKs
+        # fallback), which would fail to create the edge with no visible error.
+        # Matches KuzuBackend's strict-labels contract.
+        if src_label is None or dst_label is None:
+            raise ValueError(
+                "Neo4jBackend.upsert_edge requires both src_label and dst_label; "
+                f"got src_label={src_label!r}, dst_label={dst_label!r}"
+            )
         assert self._driver is not None
+        validate_identifier(src_label, kind="src_label")
+        validate_identifier(dst_label, kind="dst_label")
         validate_identifier(edge_type, kind="edge_type")
         props = {**(properties or {}), "origin": origin}
-
-        # src_label / dst_label are advisory on Neo4j (schema-free). When
-        # provided they narrow the MATCH. When omitted, we MATCH any label
-        # with the corresponding PK — slower but correct. Primary key lookup
-        # uses the canonical label->PK map.
-        src_key = primary_key_for(src_label) if src_label else "path"
-        dst_key = primary_key_for(dst_label) if dst_label else "path"
-        src_pattern = f"(a:{src_label})" if src_label else "(a)"
-        dst_pattern = f"(b:{dst_label})" if dst_label else "(b)"
-
+        src_key = primary_key_for(src_label)
+        dst_key = primary_key_for(dst_label)
         cypher = (
-            f"MATCH {src_pattern} WHERE a.{src_key} = $src "
-            f"MATCH {dst_pattern} WHERE b.{dst_key} = $dst "
+            f"MATCH (a:{src_label}), (b:{dst_label}) "
+            f"WHERE a.{src_key} = $src AND b.{dst_key} = $dst "
             f"MERGE (a)-[r:{edge_type}]->(b) "
             f"SET r += $props"
         )
@@ -120,21 +123,30 @@ class Neo4jBackend(GraphStore):
                 "delete_edges requires at least one of origin or edge_type — "
                 "an unfiltered delete would wipe structural and manual edges."
             )
+        # src_label required: without it the MATCH would silently bind zero rows
+        # on schema-free Neo4j when the endpoint is not a File (Section/Artifact/
+        # Pattern/etc. have non-"path" PKs). Matches KuzuBackend's strict-labels
+        # contract.
+        if src_label is None:
+            raise ValueError(
+                "Neo4jBackend.delete_edges requires src_label; node tables "
+                "do not share a common set of key properties."
+            )
         assert self._driver is not None
+        validate_identifier(src_label, kind="src_label")
         if edge_type is not None:
             validate_identifier(edge_type, kind="edge_type")
-        src_key = primary_key_for(src_label) if src_label else "path"
-        src_pattern = f"(a:{src_label})" if src_label else "(a)"
-        conditions: list[str] = []
+        src_key = primary_key_for(src_label)
+        conditions: list[str] = [f"a.{src_key} = $src"]
         params: dict[str, Any] = {"src": src_id}
         if origin is not None:
             conditions.append("r.origin = $origin")
             params["origin"] = origin
-        where_clause = f"WHERE {' AND '.join(conditions)} " if conditions else ""
         edge_fragment = f":{edge_type}" if edge_type else ""
         cypher = (
-            f"MATCH {src_pattern} WHERE a.{src_key} = $src "
-            f"WITH a MATCH (a)-[r{edge_fragment}]->() {where_clause}DELETE r"
+            f"MATCH (a:{src_label})-[r{edge_fragment}]->() "
+            f"WHERE {' AND '.join(conditions)} "
+            f"DELETE r"
         )
         with self._driver.session() as session:
             session.run(cypher, **params)
