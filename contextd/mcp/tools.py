@@ -1,0 +1,104 @@
+"""MCP tool implementations — each is a thin wrapper over the GraphStore."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+from contextd.mcp.readonly_guard import assert_read_only
+from contextd.storage.base import GraphStore
+
+
+@dataclass
+class Overview:
+    nodes: list[dict[str, Any]]
+
+
+def describe_project(store: GraphStore, *, corpus: str | None = None, n: int = 40) -> Overview:
+    """Top-N nodes by inbound-citation count with summaries (spec §7.2).
+
+    Delta A applied: merged the two WHERE clauses that the plan rendered
+    as consecutive WHEREs (a Cypher parse error). Predicates are now joined
+    with AND in a single WHERE clause.
+    """
+    filters = ["n.summary IS NOT NULL"]
+    params: dict[str, Any] = {}
+    if corpus:
+        filters.append("n.corpus = $corpus")
+        params["corpus"] = corpus
+    where = "WHERE " + " AND ".join(filters)
+    cypher = f"""
+    MATCH (n)
+    {where}
+    OPTIONAL MATCH ()-[r]->(n)
+    WITH n, count(r) AS inbound
+    RETURN n.path AS path, n.id AS id, n.name AS name, n.title AS title,
+           n.summary AS summary, n.key_points AS key_points, inbound
+    ORDER BY inbound DESC
+    LIMIT {n}
+    """
+    rows = store.exec_read(cypher, params)
+    return Overview(nodes=rows)
+
+
+def search(
+    store: GraphStore, query: str, *, kind: str | None = None, limit: int = 20
+) -> list[dict[str, Any]]:
+    """Hybrid search — full-text over summaries first, fall back to vector."""
+    label = kind or "File"
+    rows = store.full_text_search(label, "summary", query, k=limit)
+    return rows
+
+
+def related(store: GraphStore, node_id: str, *, depth: int = 2) -> list[dict[str, Any]]:
+    """Outbound+inbound traversal within N hops."""
+    cypher = f"""
+    MATCH (a)-[r*1..{depth}]-(b)
+    WHERE (a.path = $id OR a.id = $id OR a.name = $id)
+    RETURN DISTINCT b.path AS path, b.id AS id, b.name AS name, b.summary AS summary
+    LIMIT 50
+    """
+    return store.exec_read(cypher, {"id": node_id})
+
+
+def inbound(store: GraphStore, node_id: str) -> list[dict[str, Any]]:
+    cypher = """
+    MATCH (a)-[r]->(b)
+    WHERE (b.path = $id OR b.id = $id OR b.name = $id)
+    RETURN a.path AS path, a.id AS id, a.name AS name, type(r) AS edge_type
+    """
+    return store.exec_read(cypher, {"id": node_id})
+
+
+def outbound(store: GraphStore, node_id: str) -> list[dict[str, Any]]:
+    cypher = """
+    MATCH (a)-[r]->(b)
+    WHERE (a.path = $id OR a.id = $id OR a.name = $id)
+    RETURN b.path AS path, b.id AS id, b.name AS name, type(r) AS edge_type
+    """
+    return store.exec_read(cypher, {"id": node_id})
+
+
+def get_file_summary(store: GraphStore, path: str) -> dict[str, Any] | None:
+    rows = store.exec_read(
+        "MATCH (n:File {path: $path}) RETURN n.summary AS summary, n.key_points AS key_points",
+        {"path": path},
+    )
+    return rows[0] if rows else None
+
+
+def query_graph(store: GraphStore, cypher: str) -> list[dict[str, Any]]:
+    """Raw Cypher read — guarded against writes."""
+    assert_read_only(cypher)
+    return store.exec_read(cypher, {})
+
+
+def section_tree(store: GraphStore, file_path: str) -> list[dict[str, Any]]:
+    """Hierarchical outline of a file — section-granular corpora only."""
+    cypher = """
+    MATCH (f:File {path: $path})-[:CONTAINS]->(s:Section)
+    RETURN s.id AS id, s.title AS title, s.level AS level,
+           s.ordinal AS ordinal, s.summary AS summary
+    ORDER BY s.level, s.ordinal
+    """
+    return store.exec_read(cypher, {"path": file_path})
