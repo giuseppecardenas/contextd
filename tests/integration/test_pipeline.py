@@ -125,10 +125,16 @@ def test_bootstrap_on_sample_corpus(backend, tmp_path: Path) -> None:
     assert result.phases[2].processed == 2  # two files summarised
 
     corpus_nodes = backend.exec_read(
-        "MATCH (n:Corpus {name: $c}) RETURN n.name AS name", {"c": "test"}
+        "MATCH (n:Corpus {name: $c}) RETURN n.name AS name, "
+        "n.node_count AS node_count, n.edge_count AS edge_count",
+        {"c": "test"},
     )
     assert len(corpus_nodes) == 1
     assert corpus_nodes[0]["name"] == "test"
+    # SD #70: phase_close now persists node_count / edge_count on Corpus.
+    # 2 Files expected; edge_count >= 0 (no inferred edges in this test).
+    assert corpus_nodes[0]["node_count"] == 2
+    assert corpus_nodes[0]["edge_count"] is not None
 
 
 def test_section_granular_bootstrap(backend, tmp_path: Path) -> None:

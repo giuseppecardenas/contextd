@@ -175,14 +175,20 @@ def phase_close(
     # Spec-delta (d): replaced "__now__" placeholder with datetime.now(timezone.utc).
     # Kuzu's TIMESTAMP column rejects the string "__now__" — no backend code performed
     # the substitution. Using a real UTC datetime at the call site is the correct fix.
-    # Spec-delta (f-extended): node_count / edge_count not persisted on the
-    # Corpus node because Kuzu's Corpus schema does not declare those columns.
-    # Adding them requires a migration; deferred until the MCP server needs them.
+    # SD #70: Corpus.node_count + Corpus.edge_count now persisted. Migration 2
+    # (_0002_corpus_stats) adds the columns on Kuzu; Memgraph is schema-free
+    # and accepted the properties without DDL.
+    count_files = store.exec_read(
+        "MATCH (n:File {corpus: $c}) RETURN count(n) AS c", {"c": corpus}
+    )[0]["c"]
+    count_edges = store.exec_read("MATCH ()-[r]->() RETURN count(r) AS c")[0]["c"]
     store.upsert_node(
         "Corpus",
         {
             "name": corpus,
             "registered_at": dt.datetime.now(dt.UTC),
+            "node_count": count_files,
+            "edge_count": count_edges,
         },
     )
     return PhaseResult(name="close", processed=1, skipped=0)
