@@ -204,6 +204,6 @@ Items 1–24 (M1–M5 deviations: Memgraph/Kuzu connection quirks, vector-index 
     - **M11.7** — Integration suite fixture `conftest.py` parametrized on `["memgraph", "neo4j"]` (replacing the prior `["memgraph", "kuzu"]` pair). Tests that only one backend supports can still skip via `pytest.mark.memgraph_only` / `pytest.mark.neo4j_only`.
     - **M11.8** — `StorageConfig.backend` default flipped from `"memgraph"` to `"neo4j"`. Closing commit `9125fd0`. All unit + integration tests updated to reflect new default.
     - **M11.9** — Kuzu fully excised: `contextd/storage/kuzu.py` deleted, `contextd/migrations/kuzu/` deleted, `KuzuConfig` removed from `config.py`, `IMMUTABLE_AFTER_CREATE_BY_LABEL` removed from `_keys.py`, `kuzu` dep removed from `pyproject.toml`. Closing commit `88ace34`.
-    - **M11.10** — Docs propagation (this entry). Closing commit `53fa647` + follow-up fixes in `b29e5c8` (pending).
+    - **M11.10** — Docs propagation (this entry). Closing commits `53fa647` + `f11b9fe` (review-gap fixes).
 
     Test suite: 250 unit + 68 integration = 318 collected, 317 executed (1 backend-specific skip). All four CI gates + abstraction-invariant grep green throughout.
