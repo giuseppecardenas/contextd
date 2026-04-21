@@ -303,21 +303,15 @@ def phase_enumerate_sections(
     return PhaseResult(name="enumerate_sections", processed=processed, skipped=0)
 
 
-def phase_embed_sections(
-    corpus_cfg: CorpusConfig,
-    embedder: EmbeddingProvider,
-    store: GraphStore,
-    batch_size: int = 128,
-) -> PhaseResult:
+def phase_embed_sections(corpus_cfg: CorpusConfig, store: GraphStore) -> PhaseResult:
     """Accounting phase: Section embeddings are written at CREATE time in
     phase_enumerate_sections (spec-delta #21 — Kuzu's Section.embedding is
     IMMUTABLE_AFTER_CREATE). This phase counts rows and returns.
 
-    Spec-delta (M9.2-A): plan's body did ``SET s.embedding = $vec`` which
-    fails on Kuzu because Section.embedding is IMMUTABLE_AFTER_CREATE
-    (contextd/storage/_keys.py). M9.1's phase_enumerate_sections already
-    pre-computes Section embeddings at CREATE time. This phase is retained
-    as a named accounting stub so pipeline.py's phase list is stable.
+    Signature shrunk in follow-up to SD #81: the ``embedder`` and
+    ``batch_size`` params that mirrored the plan's pre-delta shape were
+    unused — dropping them to match the M5.4 cleanup pattern from
+    `1591925` (file-mode ``phase_embed(files)`` also lost dead params).
 
     TODO(M9-followup): if incremental re-index needs to refresh stale
     embeddings, implement a DETACH-DELETE + re-CREATE pattern here.
@@ -504,21 +498,3 @@ def _concat_first_sentences(summaries: list[str], *, max_chars: int) -> str:
         out.append(sentence)
         total += len(sentence) + 1
     return " ".join(out)
-
-
-def _centroid(vectors: list[list[float]]) -> list[float]:
-    """Return the L2-normalised centroid of a list of embedding vectors.
-
-    Retained for future use when File.embedding can be set in section mode
-    (spec-delta M9.2-C). Not currently called by phase_derive_file_level.
-    """
-    import math
-
-    dim = len(vectors[0])
-    summed = [0.0] * dim
-    for v in vectors:
-        for i, x in enumerate(v):
-            summed[i] += x
-    avg = [x / len(vectors) for x in summed]
-    norm = math.sqrt(sum(x * x for x in avg))
-    return [x / norm for x in avg] if norm > 0 else avg

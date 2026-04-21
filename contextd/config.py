@@ -12,7 +12,7 @@ from importlib import resources
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 BackendName = Literal["memgraph", "kuzu"]
 SafetyBlock = Literal[
@@ -69,13 +69,10 @@ class StorageConfig(BaseModel):
     backend: BackendName = "memgraph"
     memgraph: MemgraphConfig = Field(default_factory=MemgraphConfig)
     kuzu: KuzuConfig = Field(default_factory=KuzuConfig)
-
-    @field_validator("backend")
-    @classmethod
-    def _backend_known(cls, v: str) -> str:
-        if v not in ("memgraph", "kuzu"):
-            raise ValueError("backend must be 'memgraph' or 'kuzu'")
-        return v
+    # The `Literal["memgraph", "kuzu"]` type constraint on BackendName above
+    # is enforced by pydantic v2 before any @field_validator runs — a manual
+    # validator was redundant and has been removed. Adding a new backend
+    # requires updating BackendName + the factory + the migrations dirs.
 
 
 class InferenceConfig(BaseModel):

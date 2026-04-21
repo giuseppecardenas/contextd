@@ -46,7 +46,7 @@ def run_bootstrap(
         # Section.embedding is included at CREATE time (IMMUTABLE_AFTER_CREATE on Kuzu).
         results.append(phases.phase_enumerate_sections(files, corpus, store, embedder))
         # M9.2 stubs — real implementations land in Task 9.2.
-        results.append(phases.phase_embed_sections(corpus, embedder, store))
+        results.append(phases.phase_embed_sections(corpus, store))
         results.append(phases.phase_summarise_sections(corpus, summariser, store))
         results.append(phases.phase_relate_sections(corpus, inferrer, store, entity_sampler))
         results.append(phases.phase_derive_file_level(corpus, store))
