@@ -160,6 +160,6 @@ def test_up_neo4j_calls_compose_with_profile(
         result = CliRunner().invoke(contextd.cli.cli, ["up"])
 
     assert result.exit_code == 0, result.output
-    # At least one docker compose call with --profile neo4j.
+    # At least one docker compose call with --profile neo4j and `up`.
     compose_calls = [c for c in calls if "compose" in c]
-    assert any("--profile" in c and "neo4j" in c for c in compose_calls)
+    assert any("--profile" in c and "neo4j" in c and "up" in c for c in compose_calls)

@@ -6,23 +6,33 @@ services:
     image: memgraph/memgraph:latest
     profiles: ["memgraph"]
     ports:
-      - "7687:7687"
+      - "127.0.0.1:7687:7687"
     volumes:
       - contextd_memgraph_data:/var/lib/memgraph
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: "1G"
     restart: unless-stopped
 
   neo4j:
     image: neo4j:5.15-community
     profiles: ["neo4j"]
     ports:
-      - "7687:7687"
-      - "7474:7474"
+      - "127.0.0.1:7687:7687"
+      - "127.0.0.1:7474:7474"
     environment:
       NEO4J_AUTH: "neo4j/contextd"
       NEO4J_PLUGINS: '["apoc"]'
     volumes:
       - contextd_neo4j_data:/data
       - contextd_neo4j_logs:/logs
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: "1G"
     restart: unless-stopped
 
 volumes:
