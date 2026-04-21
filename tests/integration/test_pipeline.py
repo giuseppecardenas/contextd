@@ -129,3 +129,60 @@ def test_bootstrap_on_sample_corpus(backend, tmp_path: Path) -> None:
     )
     assert len(corpus_nodes) == 1
     assert corpus_nodes[0]["name"] == "test"
+
+
+def test_section_granular_bootstrap(backend, tmp_path: Path) -> None:
+    """Run a full section-granular bootstrap on both backends (spec §5.11.3)."""
+    from contextd.corpus_config import CorpusConfig
+    from contextd.indexer.hasher import FileHasher
+    from contextd.indexer.pipeline import run_bootstrap
+    from contextd.inference.summarise import FileSummary
+
+    corpus_root = tmp_path / "corpus"
+    corpus_root.mkdir()
+    (corpus_root / "doc.md").write_text(
+        "# Title\n\n## §1 First\n\nbody 1\n\n### §1.1 Sub\n\nbody 1.1\n\n## §2 Second\n\nbody 2\n"
+    )
+
+    cfg = CorpusConfig.model_validate(
+        {
+            "corpus": {
+                "name": "sec",
+                "root": str(corpus_root),
+                "include": ["*.md"],
+                "granularity": "section",
+                "heading_min_level": 2,
+                "heading_max_level": 4,
+            },
+        }
+    )
+
+    fake_embedder = MagicMock()
+    fake_embedder.embed.return_value = [[0.1] * 1024] * 3
+    fake_summariser = MagicMock()
+    fake_summariser.summarise.return_value = FileSummary(
+        summary="s", key_points=[], entities_mentioned=[]
+    )
+    fake_inferrer = MagicMock()
+    fake_inferrer.infer.return_value = []
+
+    result = run_bootstrap(
+        corpus=cfg,
+        store=backend,
+        embedder=fake_embedder,
+        summariser=fake_summariser,
+        inferrer=fake_inferrer,
+        hasher=FileHasher(),
+        entity_sampler=lambda _s: [],
+    )
+
+    phase_names = [p.name for p in result.phases]
+    assert phase_names[0] == "enumerate_sections"
+    assert "derive_file_level" in phase_names
+
+    # Three sections emitted (§1 First, §1.1 Sub, §2 Second).
+    sections = backend.exec_read("MATCH (s:Section) RETURN s.title AS title ORDER BY s.ordinal")
+    titles = [r["title"] for r in sections]
+    assert "§1 First" in titles
+    assert "§1.1 Sub" in titles
+    assert "§2 Second" in titles

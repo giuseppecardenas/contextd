@@ -299,12 +299,26 @@ def phase_embed_sections(
     corpus_cfg: CorpusConfig,
     embedder: EmbeddingProvider,
     store: GraphStore,
+    batch_size: int = 128,
 ) -> PhaseResult:
-    """M9.2 placeholder — section embedding is done at CREATE time in phase_enumerate_sections.
+    """Accounting phase: Section embeddings are written at CREATE time in
+    phase_enumerate_sections (spec-delta #21 — Kuzu's Section.embedding is
+    IMMUTABLE_AFTER_CREATE). This phase counts rows and returns.
 
-    TODO(M9.2): implement if a separate embed-update pass is needed for incremental mode.
+    Spec-delta (M9.2-A): plan's body did ``SET s.embedding = $vec`` which
+    fails on Kuzu because Section.embedding is IMMUTABLE_AFTER_CREATE
+    (contextd/storage/_keys.py). M9.1's phase_enumerate_sections already
+    pre-computes Section embeddings at CREATE time. This phase is retained
+    as a named accounting stub so pipeline.py's phase list is stable.
+
+    TODO(M9-followup): if incremental re-index needs to refresh stale
+    embeddings, implement a DETACH-DELETE + re-CREATE pattern here.
     """
-    return PhaseResult(name="embed_sections", processed=0, skipped=0)
+    rows = store.exec_read(
+        "MATCH (s:Section {corpus: $c}) RETURN s.id AS id",
+        {"c": corpus_cfg.corpus.name},
+    )
+    return PhaseResult(name="embed_sections", processed=len(rows), skipped=0)
 
 
 def phase_summarise_sections(
@@ -312,11 +326,46 @@ def phase_summarise_sections(
     summariser: Summariser,
     store: GraphStore,
 ) -> PhaseResult:
-    """M9.2 placeholder — summarise each Section node via LLM.
+    """Summarise each Section node via LLM (spec §5.11.3).
 
-    TODO(M9.2): implement per-section summarisation (mirrors phase_summarise for files).
+    Reads the section body by re-parsing the source file and locating the
+    section by anchor. On any exception (provider error, parse failure) the
+    section is skipped and counted in skipped.
+
+    Spec-delta (M9.2-F): each section requires a full file re-parse; for an
+    N-section file that is N parses per phase. Deferred: cache
+    ParsedSection-by-anchor in-memory or store body as a graph property.
     """
-    return PhaseResult(name="summarise_sections", processed=0, skipped=0)
+    rows = store.exec_read(
+        "MATCH (s:Section {corpus: $c}) RETURN s.id AS id, s.path AS path",
+        {"c": corpus_cfg.corpus.name},
+    )
+    parser = _build_parser(corpus_cfg)
+    processed, skipped = 0, 0
+    for r in rows:
+        path = Path(r["path"])
+        sections = parser.parse(path.read_text(errors="replace"))
+        anchor = r["id"].split("#", 1)[1]
+        sec = next((s for s in sections if s.anchor == anchor), None)
+        if not sec:
+            skipped += 1
+            continue
+        try:
+            result = summariser.summarise(sec.body)
+        except Exception:
+            skipped += 1
+            continue
+        store.exec_write(
+            "MATCH (s:Section {id: $id}) "
+            "SET s.summary = $summary, s.key_points = $key_points, s.summary_confidence = 1.0",
+            {
+                "id": r["id"],
+                "summary": result.summary,
+                "key_points": result.key_points,
+            },
+        )
+        processed += 1
+    return PhaseResult(name="summarise_sections", processed=processed, skipped=skipped)
 
 
 def phase_relate_sections(
@@ -325,22 +374,89 @@ def phase_relate_sections(
     store: GraphStore,
     entity_sampler: Callable[[GraphStore], list[str]],
 ) -> PhaseResult:
-    """M9.2 placeholder — infer typed edges between Section nodes.
+    """Infer typed edges from each Section node (spec §5.11.3).
 
-    TODO(M9.2): implement per-section relationship inference (mirrors phase_relate for files).
+    Wipe-and-replace inferred edges per section then upsert new ones.
+
+    Spec-delta (M9.2-B): delete_edges and upsert_edge both supply
+    src_label="Section" and dst_label=rel.target_type. Kuzu requires
+    explicit src/dst labels on REL-table operations; without them
+    KuzuBackend raises ValueError.
+
+    Spec-delta (M9.2-F): each section re-parses its source file (see
+    phase_summarise_sections note).
+
+    Spec-delta (M9.2-G): inferred edges from Section to arbitrary target
+    types may not match Kuzu's REL-table declarations (e.g., only
+    REFERENCES(FROM Section TO Section) exists). If Kuzu raises on an
+    unsupported Section→X edge type, the caller will surface the error.
+    The integration test guards against this by using an inferrer that
+    returns no relations.
     """
-    return PhaseResult(name="relate_sections", processed=0, skipped=0)
+    rows = store.exec_read(
+        "MATCH (s:Section {corpus: $c}) RETURN s.id AS id, s.path AS path",
+        {"c": corpus_cfg.corpus.name},
+    )
+    parser = _build_parser(corpus_cfg)
+    known = entity_sampler(store)
+    processed, skipped = 0, 0
+    for r in rows:
+        path = Path(r["path"])
+        sections = parser.parse(path.read_text(errors="replace"))
+        anchor = r["id"].split("#", 1)[1]
+        sec = next((s for s in sections if s.anchor == anchor), None)
+        if not sec:
+            skipped += 1
+            continue
+        try:
+            relations = inferrer.infer(sec.body, known_entities=known)
+        except Exception:
+            skipped += 1
+            continue
+        # Wipe-and-replace inferred edges for this section (spec §5.5).
+        store.delete_edges(r["id"], origin="inferred", src_label="Section")
+        for rel in relations:
+            store.upsert_node(rel.target_type, {_infer_key(rel.target_type): rel.target_name})
+            store.upsert_edge(
+                r["id"],
+                rel.target_name,
+                rel.edge_type,
+                origin="inferred",
+                properties={"confidence": rel.confidence, "reason": rel.reason},
+                src_label="Section",
+                dst_label=rel.target_type,
+            )
+        processed += 1
+    return PhaseResult(name="relate_sections", processed=processed, skipped=skipped)
 
 
 def phase_derive_file_level(
     corpus_cfg: CorpusConfig,
     store: GraphStore,
 ) -> PhaseResult:
-    """M9.2 placeholder — roll up section summaries/embeddings to parent File node.
+    """Derive File.summary from child section summaries (spec §5.11.3).
 
-    TODO(M9.2): implement aggregation from Section → File (spec §5.11.3).
+    Spec-delta (M9.2-C): File.embedding is NOT derived in section mode
+    because Kuzu's File.embedding is IMMUTABLE_AFTER_CREATE (see
+    contextd/storage/_keys.py). SET f.embedding after node creation is
+    rejected by Kuzu. Centroid logic is retained via _centroid() for when a
+    migration to make embedding mutable (or a DETACH-DELETE + re-CREATE
+    pattern) lands. Known limitation: File.embedding is NULL in
+    section-mode corpora.
     """
-    return PhaseResult(name="derive_file_level", processed=0, skipped=0)
+    rows = store.exec_read(
+        "MATCH (f:File {corpus: $c})-[:CONTAINS]->(s:Section) "
+        "RETURN f.path AS path, collect(s.summary) AS summaries",
+        {"c": corpus_cfg.corpus.name},
+    )
+    for r in rows:
+        summaries = [s for s in r["summaries"] if s]
+        summary = _concat_first_sentences(summaries, max_chars=500)
+        store.exec_write(
+            "MATCH (f:File {path: $path}) SET f.summary = $summary",
+            {"path": r["path"], "summary": summary},
+        )
+    return PhaseResult(name="derive_file_level", processed=len(rows), skipped=0)
 
 
 def _infer_key(target_type: str) -> str:
@@ -354,3 +470,42 @@ def _infer_key(target_type: str) -> str:
     return {"File": "path", "Section": "id", "Artifact": "id", "Ticket": "id"}.get(
         target_type, "name"
     )
+
+
+def _build_parser(corpus_cfg: CorpusConfig) -> HeadingParser:
+    """Construct a HeadingParser from corpus config bounds."""
+    return HeadingParser(
+        min_level=corpus_cfg.corpus.heading_min_level,
+        max_level=corpus_cfg.corpus.heading_max_level,
+    )
+
+
+def _concat_first_sentences(summaries: list[str], *, max_chars: int) -> str:
+    """Concatenate the first sentence of each summary up to max_chars total."""
+    out: list[str] = []
+    total = 0
+    for s in summaries:
+        sentence = s.split(".", 1)[0] + "."
+        if total + len(sentence) + 1 > max_chars:
+            break
+        out.append(sentence)
+        total += len(sentence) + 1
+    return " ".join(out)
+
+
+def _centroid(vectors: list[list[float]]) -> list[float]:
+    """Return the L2-normalised centroid of a list of embedding vectors.
+
+    Retained for future use when File.embedding can be set in section mode
+    (spec-delta M9.2-C). Not currently called by phase_derive_file_level.
+    """
+    import math
+
+    dim = len(vectors[0])
+    summed = [0.0] * dim
+    for v in vectors:
+        for i, x in enumerate(v):
+            summed[i] += x
+    avg = [x / len(vectors) for x in summed]
+    norm = math.sqrt(sum(x * x for x in avg))
+    return [x / norm for x in avg] if norm > 0 else avg
