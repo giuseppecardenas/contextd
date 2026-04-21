@@ -7,6 +7,7 @@ The factory layer decides whether to stand up Memgraph or Kuzu based on
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -271,6 +272,65 @@ def index(corpus_name: str, bootstrap: bool, incremental: bool, estimate_only: b
             console.print("[yellow]⚠[/] incremental mode not yet implemented in this build")
     finally:
         store.close()
+
+
+@cli.command()
+@click.argument("question")
+@click.option("--corpus", default=None)
+def ask(question: str, corpus: str | None) -> None:
+    """Natural-language query — translates to Cypher and runs it."""
+    from contextd.inference.prompts import PromptRenderer
+    from contextd.inference.translate import QueryTranslator  # type: ignore[import-untyped]  # noqa: PGH003 — module built in M8
+    from contextd.ontology.schema import Ontology
+    from contextd.providers.factory import build_inference_provider
+    from contextd.storage.factory import build_graph_store
+
+    cfg = _load_cfg()
+    translator = QueryTranslator(
+        provider=build_inference_provider(cfg),
+        renderer=PromptRenderer(CONTEXTD_HOME / "prompts"),
+        ontology=Ontology.load_base(),
+    )
+    cypher = translator.translate(question, corpus=corpus)
+    console.print(f"[dim]cypher:[/] {cypher}")
+    store = build_graph_store(cfg)
+    store.connect()
+    try:
+        rows = store.exec_read(cypher, {})
+        console.print(json.dumps(rows, indent=2, default=str))
+    finally:
+        store.close()
+
+
+@cli.command()
+@click.option("--follow", is_flag=True)
+def logs(follow: bool) -> None:
+    """Tail the structured JSON log."""
+    log_path = CONTEXTD_HOME / "logs" / "contextd.log"
+    if not log_path.exists():
+        console.print(f"no log at {log_path}")
+        return
+    if follow:
+        subprocess.run(["tail", "-f", str(log_path)], check=False)
+    else:
+        console.print(log_path.read_text())
+
+
+@cli.command()
+@click.option("--since", default=None, help="YYYY-MM-DD lower bound (inclusive).")
+def costs(since: str | None) -> None:
+    """Aggregated provider token spend."""
+    from contextd.providers.cost_log import CostLog
+
+    log = CostLog(CONTEXTD_HOME / "state" / "session-log")
+    totals = log.aggregate(since=since)
+    if not totals:
+        console.print("no usage recorded yet.")
+        return
+    for provider, counts in totals.items():
+        console.print(
+            f"[bold]{provider}:[/] input={counts['input_tokens']} output={counts['output_tokens']}"
+        )
 
 
 def main() -> None:
