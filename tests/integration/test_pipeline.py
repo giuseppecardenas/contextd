@@ -381,19 +381,26 @@ def test_index_with_ontology_overrides_uses_canonical_edge_names(
     backend: object, tmp_path: Path
 ) -> None:
     """M10.4 integration test: ontology overrides JSON declaring CITES→REFERENCES
-    causes phase_relate to store REFERENCES edges (not CITES) in the graph.
+    causes RelationshipInferrer.infer() to resolve the alias and store REFERENCES
+    edges (not CITES) in the graph.
 
-    The inference provider stub emits ``edge_type="CITES"``; the overrides JSON
-    maps ``CITES → REFERENCES``; the pipeline must resolve the alias at write time
-    and produce a REFERENCES edge.  No CITES edges should exist after the run.
+    Uses the **real** RelationshipInferrer with a mocked InferenceProvider whose
+    .generate() returns raw JSON containing ``"type": "CITES"``.  The real
+    infer() calls resolve_edge_alias("CITES") → "REFERENCES" on the ontology
+    built from the overrides file, so alias resolution is actually exercised
+    end-to-end through the pipeline.  No CITES edges should exist after the run.
     """
+    import importlib.resources
+
     from contextd.corpus_config import CorpusConfig
     from contextd.indexer.hasher import FileHasher
     from contextd.indexer.pipeline import run_bootstrap
-    from contextd.inference.relate import InferredRelationship
+    from contextd.inference.prompts import PromptRenderer
+    from contextd.inference.relate import RelationshipInferrer
     from contextd.inference.summarise import FileSummary
     from contextd.ontology.overrides import apply_overrides
     from contextd.ontology.schema import Ontology
+    from contextd.providers.base import InferenceProvider, PromptRequest
 
     # Build a corpus with two markdown files.
     corpus_root = tmp_path / "corpus"
@@ -428,40 +435,47 @@ def test_index_with_ontology_overrides_uses_canonical_edge_names(
         summary="stub", key_points=[], entities_mentioned=[]
     )
 
-    # Inference provider emits CITES (the alias), not REFERENCES (the canonical name).
-    def infer(content: str, known_entities: list[str]) -> list[InferredRelationship]:
-        if content.startswith("alpha"):
-            return [
-                InferredRelationship(
-                    edge_type="CITES",
-                    target_type="File",
-                    target_name=str(b_path),
-                    confidence=0.9,
-                    reason="test",
-                )
-            ]
-        return [
-            InferredRelationship(
-                edge_type="CITES",
-                target_type="File",
-                target_name=str(a_path),
-                confidence=0.9,
-                reason="test",
-            )
-        ]
+    # Mock InferenceProvider: .generate() returns JSON with "type": "CITES".
+    # The prompt rendered by RelationshipInferrer contains the file content, so
+    # we inspect it to return the correct target (the *other* file's path).
+    fake_provider = MagicMock(spec=InferenceProvider)
 
-    fake_inferrer = MagicMock()
-    fake_inferrer.infer.side_effect = infer
-    # Attach the aliased ontology so RelationshipInferrer.infer (and the phase)
-    # resolves CITES → REFERENCES via validate_edge.
-    fake_inferrer._onto = ontology
+    def _generate(request: PromptRequest) -> str:
+        # The rendered prompt embeds the file content; use it to discriminate.
+        target = str(b_path) if "alpha cites beta" in request.prompt else str(a_path)
+        return json.dumps(
+            {
+                "relationships": [
+                    {
+                        "type": "CITES",
+                        "target_type": "File",
+                        "target_name": target,
+                        "confidence": 0.9,
+                        "reason": "stub",
+                    }
+                ]
+            }
+        )
+
+    fake_provider.generate.side_effect = _generate
+
+    # Real PromptRenderer pointing at the packaged prompts directory.
+    prompts_dir = Path(str(importlib.resources.files("contextd.prompts").joinpath("")))
+    renderer = PromptRenderer(prompts_dir)
+
+    # Real RelationshipInferrer — alias resolution in infer() is actually exercised.
+    real_inferrer = RelationshipInferrer(
+        provider=fake_provider,
+        renderer=renderer,
+        ontology=ontology,
+    )
 
     run_bootstrap(
         corpus=corpus_cfg,
         store=backend,  # type: ignore[arg-type]
         embedder=fake_embedder,
         summariser=fake_summariser,
-        inferrer=fake_inferrer,
+        inferrer=real_inferrer,
         hasher=FileHasher(),
         entity_sampler=lambda _s: [],
     )
