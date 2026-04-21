@@ -20,7 +20,16 @@ class PromptRenderer:
         self._dir = template_dir
 
     def render(self, template: str, **kwargs: str) -> str:
-        template_text = (self._dir / f"{template}.md").read_text()
+        # Path-traversal guard: template="../../etc/passwd" would escape
+        # the configured template_dir. Single-user threat model keeps this
+        # low-risk, but a one-line `is_relative_to` check closes the footgun.
+        template_path = (self._dir / f"{template}.md").resolve()
+        if not template_path.is_relative_to(self._dir.resolve()):
+            raise ValueError(
+                f"Template name {template!r} escapes template_dir {self._dir}; "
+                "templates must resolve inside the configured directory."
+            )
+        template_text = template_path.read_text()
 
         def _sub(match: re.Match[str]) -> str:
             key = match.group(1)

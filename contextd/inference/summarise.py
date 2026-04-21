@@ -52,8 +52,15 @@ class Summariser:
             PromptRequest(system="", prompt=prompt, call_site="summary")
         )
         data = cast(dict[str, Any], json.loads(extract_json_body(response)))
+        if "summary" not in data:
+            raise KeyError(f"Provider response missing 'summary'; got keys {list(data.keys())}")
+        summary = data["summary"]
+        if not isinstance(summary, str):
+            raise TypeError(
+                f"Provider response 'summary' must be a string; got {type(summary).__name__}"
+            )
         return FileSummary(
-            summary=cast(str, data["summary"]),
+            summary=summary,
             key_points=_as_str_list(data.get("key_points")),
             entities_mentioned=_as_str_list(data.get("entities_mentioned")),
         )

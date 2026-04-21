@@ -21,3 +21,16 @@ def test_missing_variable_raises(tmp_path: Path) -> None:
     renderer = PromptRenderer(template_dir)
     with pytest.raises(KeyError):
         renderer.render("greet")
+
+
+def test_template_name_cannot_escape_template_dir(tmp_path: Path) -> None:
+    """template='../../etc/passwd' must fail before read_text() touches it."""
+    template_dir = tmp_path / "prompts"
+    template_dir.mkdir()
+    (template_dir / "ok.md").write_text("hello")
+    # Plant a file outside template_dir to prove we would have read it if the
+    # guard were absent.
+    (tmp_path / "secret.md").write_text("SECRET")
+    renderer = PromptRenderer(template_dir)
+    with pytest.raises(ValueError, match="escapes template_dir"):
+        renderer.render("../secret")

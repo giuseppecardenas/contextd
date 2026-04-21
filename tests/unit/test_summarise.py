@@ -113,3 +113,29 @@ def test_no_json_object_raises_valueerror() -> None:
     summariser = Summariser(provider=mock_provider, renderer=mock_renderer)
     with pytest.raises(ValueError, match="no JSON object"):
         summariser.summarise("content")
+
+
+def test_missing_summary_key_includes_available_keys() -> None:
+    """Actionable error message instead of a bare KeyError — the user wants
+    to know what the provider did return, not just what's missing."""
+    mock_provider = MagicMock()
+    mock_provider.generate.return_value = json.dumps({"text": "some other key", "key_points": []})
+    mock_renderer = MagicMock()
+    mock_renderer.render.return_value = "rendered-prompt"
+    summariser = Summariser(provider=mock_provider, renderer=mock_renderer)
+    with pytest.raises(KeyError, match="got keys"):
+        summariser.summarise("content")
+
+
+def test_non_string_summary_raises_typeerror() -> None:
+    """A provider returning `summary: 42` previously flowed through via cast
+    and failed far from the source. Now it raises at the parse site."""
+    mock_provider = MagicMock()
+    mock_provider.generate.return_value = json.dumps(
+        {"summary": 42, "key_points": [], "entities_mentioned": []}
+    )
+    mock_renderer = MagicMock()
+    mock_renderer.render.return_value = "rendered-prompt"
+    summariser = Summariser(provider=mock_provider, renderer=mock_renderer)
+    with pytest.raises(TypeError, match="'summary' must be a string"):
+        summariser.summarise("content")
