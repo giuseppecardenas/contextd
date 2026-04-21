@@ -11,7 +11,7 @@ import json
 import os
 import shutil
 import subprocess
-import sys
+from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -21,9 +21,31 @@ from rich.console import Console
 
 if TYPE_CHECKING:
     from contextd.config import Config
+    from contextd.corpus_config import CorpusConfig
+    from contextd.indexer.hasher import FileHasher
+    from contextd.inference.relate import RelationshipInferrer
+    from contextd.inference.summarise import Summariser
+    from contextd.providers.base import EmbeddingProvider
+    from contextd.storage.base import GraphStore
 
 CONTEXTD_HOME = Path(os.environ.get("CONTEXTD_HOME", str(Path.home() / ".contextd")))
 console = Console()
+
+
+@dataclass
+class PipelineDeps:
+    """Collaborators `index --bootstrap` assembles per invocation.
+
+    Extracted so the wiring logic lives in a single function
+    (_build_pipeline_deps) rather than inlined in the `index` command body.
+    Keeps the `index` body focused on orchestration.
+    """
+
+    summariser: Summariser
+    inferrer: RelationshipInferrer
+    hasher: FileHasher
+    embedder: EmbeddingProvider
+    store: GraphStore
 
 
 def _load_cfg() -> Config:
@@ -205,6 +227,31 @@ def list_corpora() -> None:
         console.print(f"- {c.stem} ({c})")
 
 
+def _build_pipeline_deps(cfg: Config, corpus_cfg: CorpusConfig, corpus_name: str) -> PipelineDeps:
+    """Wire up the five collaborators the pipeline needs, honouring the
+    corpus→global→default override hierarchy for summary length."""
+    from contextd.indexer.hasher import FileHasher
+    from contextd.inference.prompts import PromptRenderer
+    from contextd.inference.relate import RelationshipInferrer
+    from contextd.inference.summarise import Summariser
+    from contextd.ontology.schema import Ontology
+    from contextd.providers.factory import build_embedding_provider, build_inference_provider
+    from contextd.storage.factory import build_graph_store
+
+    inference_provider = build_inference_provider(cfg)
+    embedding_provider = build_embedding_provider(cfg)
+    renderer = PromptRenderer(CONTEXTD_HOME / "prompts")
+    ontology = Ontology.load_base().with_aliases(corpus_cfg.ontology.aliases)
+    max_words = corpus_cfg.summarization.max_words or cfg.inference.summary_max_words
+    return PipelineDeps(
+        summariser=Summariser(inference_provider, renderer, max_words=max_words),
+        inferrer=RelationshipInferrer(inference_provider, renderer, ontology),
+        hasher=FileHasher(state_path=CONTEXTD_HOME / "state" / f"{corpus_name}-index-state.json"),
+        embedder=embedding_provider,
+        store=build_graph_store(cfg),
+    )
+
+
 @cli.command()
 @click.argument("corpus_name")
 @click.option("--bootstrap", is_flag=True)
@@ -213,59 +260,49 @@ def list_corpora() -> None:
 def index(corpus_name: str, bootstrap: bool, incremental: bool, estimate_only: bool) -> None:
     """Run an indexing pass on the named corpus."""
     from contextd.corpus_config import CorpusConfig
-    from contextd.indexer.hasher import FileHasher
     from contextd.indexer.pipeline import enumerate_corpus_files, run_bootstrap
-    from contextd.inference.prompts import PromptRenderer
-    from contextd.inference.relate import RelationshipInferrer
-    from contextd.inference.summarise import Summariser
-    from contextd.ontology.schema import Ontology
-    from contextd.providers.factory import build_embedding_provider, build_inference_provider
-    from contextd.storage.factory import build_graph_store
 
     cfg = _load_cfg()
     corpus_toml = CONTEXTD_HOME / "corpora" / f"{corpus_name}.toml"
     if not corpus_toml.exists():
-        console.print(
-            f"[red]✗[/] corpus {corpus_name!r} not registered."
+        raise click.ClickException(
+            f"corpus {corpus_name!r} not registered."
             f" Run `contextd add-corpus <path> --name {corpus_name}` first."
         )
-        sys.exit(1)
     corpus_cfg = CorpusConfig.load(corpus_toml)
 
     files = enumerate_corpus_files(corpus_cfg)
     console.print(f"found {len(files)} files in corpus {corpus_name!r}")
 
     if estimate_only:
-        total_chars = sum(p.stat().st_size for p in files)
+        # UTF-8 character count instead of byte count — multi-byte content
+        # (em-dashes, smart quotes, non-ASCII scripts) would otherwise
+        # inflate the estimate. Files are read once; this is the cost the
+        # estimate advertises.
+        total_chars = 0
+        for p in files:
+            try:
+                total_chars += len(p.read_text(encoding="utf-8", errors="replace"))
+            except OSError:
+                continue
         est_tokens = total_chars // 4  # rough: 4 chars per token
         console.print(f"~{est_tokens} input tokens projected (2 call types per file)")
         return
 
     if not (bootstrap or incremental):
-        console.print("[red]✗[/] specify --bootstrap or --incremental")
-        sys.exit(1)
+        raise click.ClickException("specify --bootstrap or --incremental")
 
-    inference_provider = build_inference_provider(cfg)
-    embedding_provider = build_embedding_provider(cfg)
-    renderer = PromptRenderer(CONTEXTD_HOME / "prompts")
-    ontology = Ontology.load_base().with_aliases(corpus_cfg.ontology.aliases)
-    # Override hierarchy for summary length: corpus → global → default.
-    max_words = corpus_cfg.summarization.max_words or cfg.inference.summary_max_words
-    summariser = Summariser(inference_provider, renderer, max_words=max_words)
-    inferrer = RelationshipInferrer(inference_provider, renderer, ontology)
-    hasher = FileHasher(state_path=CONTEXTD_HOME / "state" / f"{corpus_name}-index-state.json")
-
-    store = build_graph_store(cfg)
-    store.connect()
+    deps = _build_pipeline_deps(cfg, corpus_cfg, corpus_name)
+    deps.store.connect()
     try:
         if bootstrap:
             result = run_bootstrap(
                 corpus=corpus_cfg,
-                store=store,
-                embedder=embedding_provider,
-                summariser=summariser,
-                inferrer=inferrer,
-                hasher=hasher,
+                store=deps.store,
+                embedder=deps.embedder,
+                summariser=deps.summariser,
+                inferrer=deps.inferrer,
+                hasher=deps.hasher,
                 entity_sampler=lambda _s: [],
             )
             for phase in result.phases:
@@ -276,7 +313,7 @@ def index(corpus_name: str, bootstrap: bool, incremental: bool, estimate_only: b
         else:
             console.print("[yellow]⚠[/] incremental mode not yet implemented in this build")
     finally:
-        store.close()
+        deps.store.close()
 
 
 @cli.command()
