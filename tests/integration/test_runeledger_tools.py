@@ -151,6 +151,35 @@ def test_dangling_finds_missing_surfaces(backend: Any) -> None:
     assert row["has_fr"] is True
 
 
+def test_risk_merges_on_identical_description(backend: Any) -> None:
+    """Risk PK is ``description``; two upserts with identical description
+    + different severity/corpus MERGE into one node.  This is the
+    idempotent-re-index invariant documented in _keys.py.
+    """
+    backend.upsert_node(
+        "Risk",
+        {
+            "description": "SHA=pending for FR-001",
+            "severity": "low",
+            "corpus": "test",
+        },
+    )
+    backend.upsert_node(
+        "Risk",
+        {
+            "description": "SHA=pending for FR-001",
+            "severity": "high",  # different from first
+            "corpus": "test",
+        },
+    )
+    rows = backend.exec_read(
+        "MATCH (r:Risk {description: $desc}) RETURN r.severity AS severity",
+        {"desc": "SHA=pending for FR-001"},
+    )
+    assert len(rows) == 1, "identical descriptions must MERGE into one node"
+    assert rows[0]["severity"] == "high", "the second upsert's properties must overwrite the first"
+
+
 def test_stale_shas_filters_correctly(backend: Any) -> None:
     """stale_shas.cypher returns only Risk nodes whose description contains SHA=pending."""
     backend.upsert_node(
