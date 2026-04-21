@@ -65,4 +65,10 @@ class QueryTranslator:
             for line in text.splitlines()
             if line.strip() and line.strip().split()[0].upper() in keywords
         ]
-        return " ".join(lines)
+        cypher = " ".join(lines)
+        if not cypher:
+            raise ValueError(
+                "Translator returned no Cypher-like content; "
+                "provider response was empty or contained no recognised keywords"
+            )
+        return cypher
