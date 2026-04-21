@@ -50,10 +50,22 @@ def search(
     return rows
 
 
+_RELATED_MAX_DEPTH = 5
+_RELATED_MIN_DEPTH = 1
+
+
 def related(store: GraphStore, node_id: str, *, depth: int = 2) -> list[dict[str, Any]]:
-    """Outbound+inbound traversal within N hops."""
+    """Outbound+inbound traversal within N hops (1-5, inclusive).
+
+    Defence in depth: the MCP tool descriptor's JSON schema already clamps
+    via ``"minimum": 1, "maximum": 5`` (spec-delta #32), but a direct
+    function caller (tests, future CLI wiring) could still pass out-of-range
+    ints. We clamp here too so that Memgraph's unbounded `[r*1..100]` walk
+    and Kuzu's depth-30 cap are never reachable by accident.
+    """
+    clamped = min(max(depth, _RELATED_MIN_DEPTH), _RELATED_MAX_DEPTH)
     cypher = f"""
-    MATCH (a)-[r*1..{depth}]-(b)
+    MATCH (a)-[r*1..{clamped}]-(b)
     WHERE (a.path = $id OR a.id = $id OR a.name = $id)
     RETURN DISTINCT b.path AS path, b.id AS id, b.name AS name, b.summary AS summary
     LIMIT 50
