@@ -2,7 +2,14 @@
 
 Spec §7.4: all MCP tools are read-only. The guard is a thin keyword
 check — sufficient because Memgraph and Kuzu both tokenize identically,
-and the allow-list (MATCH, WITH, UNWIND, RETURN) is small.
+and the read-only surface (MATCH, WITH, UNWIND, RETURN, and read-only
+CALL procedures like db.labels() or text_search.search_all) is small.
+
+The leading negative-lookbehind ``(?<![.\\w])`` ensures we don't
+false-positive on dotted property access — ``RETURN n.set AS prop``
+used to trip the SET keyword because ``\\b`` fires between ``.`` and
+``s``; the lookbehind requires the keyword to NOT be preceded by a
+word char or a dot, which matches keyword positions exactly.
 """
 
 from __future__ import annotations
@@ -15,7 +22,7 @@ class ReadOnlyGuardError(ValueError):
 
 
 _FORBIDDEN = re.compile(
-    r"\b(CREATE|MERGE|DELETE|SET|REMOVE|DROP|DETACH)\b",
+    r"(?<![.\w])(CREATE|MERGE|DELETE|SET|REMOVE|DROP|DETACH|FOREACH)\b",
     re.IGNORECASE,
 )
 
