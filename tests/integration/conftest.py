@@ -1,9 +1,9 @@
-"""Parametrize integration tests across both storage backends.
+"""Parametrize integration tests across all storage backends.
 
-Every ``backend`` fixture in this directory runs twice: once with
-Memgraph via testcontainers, once with Kuzu via tmp_path. Tests that
-need one backend only can skip via ``pytest.mark.memgraph_only`` or
-``pytest.mark.kuzu_only``.
+Every ``backend`` fixture in this directory runs three times: once with
+Memgraph via testcontainers, once with Kuzu via tmp_path, once with
+Neo4j via testcontainers. Tests that need one backend only can branch on
+``backend.capabilities.name`` and ``pytest.skip(...)`` with justification.
 """
 
 from __future__ import annotations
@@ -14,16 +14,19 @@ from pathlib import Path
 import pytest
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.wait_strategies import LogMessageWaitStrategy
+from testcontainers.neo4j import Neo4jContainer
 
-from contextd.config import KuzuConfig, MemgraphConfig
+from contextd.config import KuzuConfig, MemgraphConfig, Neo4jConfig
 from contextd.migrations.kuzu import ALL_MIGRATIONS as KUZU_MIGRATIONS
 from contextd.migrations.memgraph import ALL_MIGRATIONS as MEMGRAPH_MIGRATIONS
+from contextd.migrations.neo4j import ALL_MIGRATIONS as NEO4J_MIGRATIONS
 from contextd.storage.base import GraphStore
 from contextd.storage.kuzu import KuzuBackend
 from contextd.storage.memgraph import MemgraphBackend
+from contextd.storage.neo4j import Neo4jBackend
 
 
-@pytest.fixture(params=["memgraph", "kuzu"])
+@pytest.fixture(params=["memgraph", "kuzu", "neo4j"])
 def backend(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[GraphStore]:
     name = request.param
     if name == "memgraph":
@@ -47,10 +50,25 @@ def backend(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[GraphSto
             store.close()
         finally:
             container.stop()
-    else:
-        cfg = KuzuConfig(db_path=str(tmp_path / "graph"))
-        store = KuzuBackend(cfg)
+    elif name == "kuzu":
+        cfg_kz = KuzuConfig(db_path=str(tmp_path / "graph"))
+        store = KuzuBackend(cfg_kz)
         store.connect()
         store.apply_migrations(KUZU_MIGRATIONS)
         yield store
         store.close()
+    else:
+        # Neo4j Community via testcontainers. 5.15-community supports vector
+        # indexes (added in 5.11). Container exposes 7687 (Bolt) ephemerally.
+        with Neo4jContainer("neo4j:5.15-community") as container:
+            cfg_n4 = Neo4jConfig(
+                host=container.get_container_host_ip(),
+                port=int(container.get_exposed_port(7687)),
+                user="neo4j",
+                password=container.password,
+            )
+            store = Neo4jBackend(cfg_n4)
+            store.connect()
+            store.apply_migrations(NEO4J_MIGRATIONS)
+            yield store
+            store.close()

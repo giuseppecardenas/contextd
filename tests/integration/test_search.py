@@ -110,15 +110,22 @@ def test_vector_search_rejects_non_finite_threshold(seeded_backend: GraphStore) 
 
 
 def test_vector_search_threshold_filters(seeded_backend: GraphStore) -> None:
-    """threshold=0.5 (cosine similarity) drops the orthogonal vector (cos=0)
-    and keeps the aligned (cos=1) and 45° (cos≈0.7071) results.
+    """A threshold above the orthogonal-vector score drops it and keeps the
+    aligned (cos=1) and 45° (cos≈0.7071) results.
 
-    The ABC normalises the contract as a similarity floor on [0, 1].
-    Kuzu's vector_search converts the threshold to an internal distance cap
-    and returns uniform ``score`` (cosine similarity) in the public result —
-    this test asserts the filtering is correct when the index uses cosine
-    metric and the vectors are unit-norm (which _basis_vector produces and
-    Voyage-3 guarantees).
+    The ABC normalises the contract as a similarity floor on [0, 1], but the
+    scoring origin differs by backend:
+
+    - Memgraph/Kuzu: raw cosine similarity (orthogonal = 0.0).
+    - Neo4j: (1 + dot) / 2 normalisation (orthogonal = 0.5, documented in
+      ``Neo4jBackend.vector_search``).
+
+    We pick ``threshold=0.6`` so the orthogonal vector is dropped on every
+    backend (0.0 < 0.6 on Memgraph/Kuzu; 0.5 < 0.6 on Neo4j) while the
+    45° vector (0.7071 raw / ≈0.854 Neo4j) and aligned vector still pass.
+    Threshold calibration is inherently backend-aware because of the
+    scoring-origin difference; picking a value that works under both
+    regimes is the portable shape.
     """
     query = _basis_vector(0)
     results = seeded_backend.vector_search(
@@ -126,7 +133,7 @@ def test_vector_search_threshold_filters(seeded_backend: GraphStore) -> None:
         property_name="embedding",
         query=query,
         k=3,
-        threshold=0.5,
+        threshold=0.6,
     )
     paths = {r["node"]["path"] for r in results}
     assert paths == {"a.md", "c.md"}
