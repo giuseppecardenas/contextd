@@ -15,6 +15,27 @@ from pathlib import Path
 _PLACEHOLDER = re.compile(r"\{\{(\w+)\}\}")
 
 
+def _substitute(text: str, label: str, **kwargs: str) -> str:
+    """Replace ``{{key}}`` placeholders in *text* using *kwargs*.
+
+    Unknown placeholders (i.e. ``{{key}}`` present in *text* but absent from
+    *kwargs*) raise :exc:`KeyError`.  Extra *kwargs* that have no placeholder
+    in *text* are silently ignored — a template that doesn't reference
+    ``max_words`` is valid.
+
+    *label* is used only in the KeyError message (typically the template name
+    or file path) to make failures actionable.
+    """
+
+    def _sub(match: re.Match[str]) -> str:
+        key = match.group(1)
+        if key not in kwargs:
+            raise KeyError(f"Template {label!r}: missing variable {key!r}")
+        return str(kwargs[key])
+
+    return _PLACEHOLDER.sub(_sub, text)
+
+
 class PromptRenderer:
     def __init__(self, template_dir: Path) -> None:
         self._dir = template_dir
@@ -30,11 +51,19 @@ class PromptRenderer:
                 "templates must resolve inside the configured directory."
             )
         template_text = template_path.read_text()
+        return _substitute(template_text, template, **kwargs)
 
-        def _sub(match: re.Match[str]) -> str:
-            key = match.group(1)
-            if key not in kwargs:
-                raise KeyError(f"Template {template!r}: missing variable {key!r}")
-            return str(kwargs[key])
+    def render_path(self, path: Path, **kwargs: str) -> str:
+        """Render a template from an explicit *path* (e.g. a per-corpus override).
 
-        return _PLACEHOLDER.sub(_sub, template_text)
+        *path* must be absolute — relative-path resolution is the caller's
+        responsibility (it needs the corpus TOML directory).  No path-traversal
+        guard is applied; callers that resolve paths from user-supplied config
+        should validate existence before calling this method.
+
+        Raises :exc:`OSError` if *path* is not readable, and
+        :exc:`UnicodeDecodeError` if the file is not valid UTF-8.  Both bubble
+        up to the CLI layer for wrapping into :exc:`click.ClickException`.
+        """
+        template_text = path.read_text(encoding="utf-8")
+        return _substitute(template_text, str(path), **kwargs)

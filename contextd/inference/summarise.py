@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, cast
 
 from contextd.inference._json_body import extract_json_body
@@ -37,17 +38,26 @@ class Summariser:
         renderer: PromptRenderer,
         *,
         max_words: int = 100,
+        prompt_path: Path | None = None,
     ) -> None:
         self._provider = provider
         self._renderer = renderer
         self._max_words = max_words
+        self._prompt_path = prompt_path
 
     def summarise(self, content: str) -> FileSummary:
-        prompt = self._renderer.render(
-            "summarise",
-            content=content,
-            max_words=str(self._max_words),
-        )
+        if self._prompt_path is not None:
+            prompt = self._renderer.render_path(
+                self._prompt_path,
+                content=content,
+                max_words=str(self._max_words),
+            )
+        else:
+            prompt = self._renderer.render(
+                "summarise",
+                content=content,
+                max_words=str(self._max_words),
+            )
         response = self._provider.generate(
             PromptRequest(system="", prompt=prompt, call_site="summary")
         )

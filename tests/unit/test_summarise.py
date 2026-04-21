@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -139,3 +140,109 @@ def test_non_string_summary_raises_typeerror() -> None:
     summariser = Summariser(provider=mock_provider, renderer=mock_renderer)
     with pytest.raises(TypeError, match="'summary' must be a string"):
         summariser.summarise("content")
+
+
+# ---------------------------------------------------------------------------
+# prompt_path override tests
+# ---------------------------------------------------------------------------
+
+
+def test_summariser_uses_default_template_when_no_override() -> None:
+    """With prompt_path=None the renderer's .render() method is called (not render_path)."""
+    mock_provider = MagicMock()
+    mock_provider.generate.return_value = json.dumps(
+        {"summary": "s", "key_points": [], "entities_mentioned": []}
+    )
+    mock_renderer = MagicMock()
+    mock_renderer.render.return_value = "default-prompt"
+    summariser = Summariser(provider=mock_provider, renderer=mock_renderer, max_words=50)
+    summariser.summarise("body text")
+    mock_renderer.render.assert_called_once_with("summarise", content="body text", max_words="50")
+    mock_renderer.render_path.assert_not_called()
+
+
+def test_summariser_uses_override_when_prompt_path_set(tmp_path: Path) -> None:
+    """With prompt_path set, render_path() is called instead of render()."""
+    override = tmp_path / "override.md"
+    override.write_text("Summarise: {{content}}", encoding="utf-8")
+
+    mock_provider = MagicMock()
+    mock_provider.generate.return_value = json.dumps(
+        {"summary": "x", "key_points": [], "entities_mentioned": []}
+    )
+    mock_renderer = MagicMock()
+    mock_renderer.render_path.return_value = "override-prompt"
+    summariser = Summariser(
+        provider=mock_provider, renderer=mock_renderer, max_words=75, prompt_path=override
+    )
+    summariser.summarise("some content")
+    mock_renderer.render_path.assert_called_once_with(
+        override, content="some content", max_words="75"
+    )
+    mock_renderer.render.assert_not_called()
+
+
+def test_summariser_override_template_substitutes_content(tmp_path: Path) -> None:
+    """Override template with {{content}} receives the actual content value."""
+    override = tmp_path / "tpl.md"
+    override.write_text("Please summarise: {{content}}", encoding="utf-8")
+
+    from contextd.inference.prompts import PromptRenderer
+
+    real_renderer = PromptRenderer(tmp_path)  # template_dir unused for render_path
+    mock_provider = MagicMock()
+    mock_provider.generate.return_value = json.dumps(
+        {"summary": "ok", "key_points": [], "entities_mentioned": []}
+    )
+    summariser = Summariser(
+        provider=mock_provider, renderer=real_renderer, max_words=100, prompt_path=override
+    )
+    summariser.summarise("my body text")
+    sent_prompt = mock_provider.generate.call_args[0][0].prompt
+    assert "my body text" in sent_prompt
+
+
+def test_summariser_override_template_substitutes_max_words(tmp_path: Path) -> None:
+    """Override template with {{max_words}} receives the max_words value."""
+    override = tmp_path / "tpl.md"
+    override.write_text("Limit: {{max_words}} words. Body: {{content}}", encoding="utf-8")
+
+    from contextd.inference.prompts import PromptRenderer
+
+    real_renderer = PromptRenderer(tmp_path)
+    mock_provider = MagicMock()
+    mock_provider.generate.return_value = json.dumps(
+        {"summary": "ok", "key_points": [], "entities_mentioned": []}
+    )
+    summariser = Summariser(
+        provider=mock_provider, renderer=real_renderer, max_words=42, prompt_path=override
+    )
+    summariser.summarise("content")
+    sent_prompt = mock_provider.generate.call_args[0][0].prompt
+    assert "42" in sent_prompt
+    assert "content" in sent_prompt
+
+
+def test_summariser_override_template_without_max_words_placeholder_works(tmp_path: Path) -> None:
+    """A template that only references {{content}} (no {{max_words}}) is valid.
+
+    Extra kwargs passed to render_path that have no matching placeholder are
+    silently ignored — the template contract allows this.
+    """
+    override = tmp_path / "simple.md"
+    override.write_text("Just: {{content}}", encoding="utf-8")
+
+    from contextd.inference.prompts import PromptRenderer
+
+    real_renderer = PromptRenderer(tmp_path)
+    mock_provider = MagicMock()
+    mock_provider.generate.return_value = json.dumps(
+        {"summary": "done", "key_points": [], "entities_mentioned": []}
+    )
+    summariser = Summariser(
+        provider=mock_provider, renderer=real_renderer, max_words=100, prompt_path=override
+    )
+    result = summariser.summarise("hello world")
+    assert result.summary == "done"
+    sent_prompt = mock_provider.generate.call_args[0][0].prompt
+    assert "hello world" in sent_prompt

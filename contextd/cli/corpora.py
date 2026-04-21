@@ -101,8 +101,21 @@ def _build_pipeline_deps(
         except (OntologyOverridesError, OntologyError) as exc:
             raise click.ClickException(str(exc)) from exc
     max_words = corpus_cfg.summarization.max_words or cfg.inference.summary_max_words
+    prompt_path: Path | None = None
+    if corpus_cfg.summarization.prompt_override is not None:
+        resolved_prompt = Path(corpus_cfg.summarization.prompt_override)
+        if not resolved_prompt.is_absolute():
+            resolved_prompt = corpus_toml_path.parent / resolved_prompt
+        resolved_prompt = resolved_prompt.resolve()
+        if not resolved_prompt.exists():
+            raise click.ClickException(
+                f"summarization.prompt_override file not found: {resolved_prompt}"
+            )
+        prompt_path = resolved_prompt
     return PipelineDeps(
-        summariser=Summariser(inference_provider, renderer, max_words=max_words),
+        summariser=Summariser(
+            inference_provider, renderer, max_words=max_words, prompt_path=prompt_path
+        ),
         inferrer=RelationshipInferrer(inference_provider, renderer, ontology),
         hasher=FileHasher(state_path=contextd_home() / "state" / f"{corpus_name}-index-state.json"),
         embedder=embedding_provider,

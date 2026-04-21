@@ -397,3 +397,166 @@ def test_index_surfaces_bad_edge_target_as_click_exception(
 
     assert result.exit_code == 1
     assert "NONEXISTENT_EDGE_TYPE" in result.output
+
+
+# ---------------------------------------------------------------------------
+# _build_pipeline_deps: summarization.prompt_override wiring
+# ---------------------------------------------------------------------------
+
+
+def _register_corpus_with_prompt_override(
+    home: Path,
+    name: str,
+    root: Path,
+    prompt_override: str,
+) -> Path:
+    """Write a corpus TOML that declares a [summarization] prompt_override."""
+    import tomli_w
+
+    corpus_toml = home / "corpora" / f"{name}.toml"
+    data = {
+        "corpus": {
+            "name": name,
+            "root": str(root),
+            "include": ["**/*.md"],
+            "granularity": "file",
+        },
+        "summarization": {
+            "prompt_override": prompt_override,
+        },
+    }
+    corpus_toml.write_bytes(tomli_w.dumps(data).encode())
+    return corpus_toml
+
+
+def test_build_pipeline_deps_no_prompt_override_is_noop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Corpus TOML with no [summarization] prompt_override → Summariser built with no
+    prompt_path (default template used at summarise time)."""
+    home = _setup_home(tmp_path, monkeypatch)
+    corpus_root = tmp_path / "docs"
+    corpus_root.mkdir()
+    (corpus_root / "a.md").write_text("hi")
+    _register_corpus(home, "docs", corpus_root)
+
+    from contextd.cli.corpora import _build_pipeline_deps
+    from contextd.config import Config
+    from contextd.corpus_config import CorpusConfig
+
+    corpus_toml = home / "corpora" / "docs.toml"
+    cfg = Config.load_default()
+    corpus_cfg = CorpusConfig.load(corpus_toml)
+
+    with (
+        patch("contextd.providers.factory.build_inference_provider"),
+        patch("contextd.providers.factory.build_embedding_provider"),
+        patch("contextd.storage.factory.build_graph_store"),
+    ):
+        deps = _build_pipeline_deps(cfg, corpus_cfg, "docs", corpus_toml)
+
+    from contextd.inference.summarise import Summariser
+
+    assert isinstance(deps.summariser, Summariser)
+    assert deps.summariser._prompt_path is None  # type: ignore[attr-defined]
+
+
+def test_build_pipeline_deps_resolves_relative_prompt_override_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Relative prompt_override path resolves relative to the corpus TOML's directory."""
+    home = _setup_home(tmp_path, monkeypatch)
+    corpus_root = tmp_path / "docs"
+    corpus_root.mkdir()
+    (corpus_root / "a.md").write_text("hi")
+
+    # Place the override template next to the TOML (inside corpora/).
+    override_file = home / "corpora" / "summary.md"
+    override_file.write_text("Custom: {{content}}", encoding="utf-8")
+    corpus_toml = _register_corpus_with_prompt_override(
+        home,
+        "docs",
+        corpus_root,
+        "summary.md",  # relative path
+    )
+
+    from contextd.cli.corpora import _build_pipeline_deps
+    from contextd.config import Config
+    from contextd.corpus_config import CorpusConfig
+
+    cfg = Config.load_default()
+    corpus_cfg = CorpusConfig.load(corpus_toml)
+
+    with (
+        patch("contextd.providers.factory.build_inference_provider"),
+        patch("contextd.providers.factory.build_embedding_provider"),
+        patch("contextd.storage.factory.build_graph_store"),
+    ):
+        deps = _build_pipeline_deps(cfg, corpus_cfg, "docs", corpus_toml)
+
+    prompt_path = deps.summariser._prompt_path  # type: ignore[attr-defined]
+    assert prompt_path is not None
+    assert prompt_path.is_absolute()
+    assert prompt_path == override_file.resolve()
+
+
+def test_build_pipeline_deps_absolute_prompt_override_path_respected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Absolute prompt_override path in the TOML is used verbatim (no prefix added)."""
+    home = _setup_home(tmp_path, monkeypatch)
+    corpus_root = tmp_path / "docs"
+    corpus_root.mkdir()
+    (corpus_root / "a.md").write_text("hi")
+
+    # Place the override template somewhere else entirely.
+    override_dir = tmp_path / "shared"
+    override_dir.mkdir()
+    override_file = override_dir / "summary.md"
+    override_file.write_text("Absolute: {{content}}", encoding="utf-8")
+    corpus_toml = _register_corpus_with_prompt_override(
+        home,
+        "docs",
+        corpus_root,
+        str(override_file),  # absolute path
+    )
+
+    from contextd.cli.corpora import _build_pipeline_deps
+    from contextd.config import Config
+    from contextd.corpus_config import CorpusConfig
+
+    cfg = Config.load_default()
+    corpus_cfg = CorpusConfig.load(corpus_toml)
+
+    with (
+        patch("contextd.providers.factory.build_inference_provider"),
+        patch("contextd.providers.factory.build_embedding_provider"),
+        patch("contextd.storage.factory.build_graph_store"),
+    ):
+        deps = _build_pipeline_deps(cfg, corpus_cfg, "docs", corpus_toml)
+
+    prompt_path = deps.summariser._prompt_path  # type: ignore[attr-defined]
+    assert prompt_path is not None
+    assert prompt_path == override_file.resolve()
+
+
+def test_build_pipeline_deps_missing_prompt_override_raises_clickexception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When prompt_override points at a nonexistent file, `contextd index --bootstrap`
+    surfaces a ClickException (exit code 1), not a Python traceback."""
+    home = _setup_home(tmp_path, monkeypatch)
+    corpus_root = tmp_path / "docs"
+    corpus_root.mkdir()
+    (corpus_root / "a.md").write_text("hi")
+    _register_corpus_with_prompt_override(home, "docs", corpus_root, "no_such_template.md")
+
+    with (
+        patch("contextd.providers.factory.build_inference_provider"),
+        patch("contextd.providers.factory.build_embedding_provider"),
+        patch("contextd.storage.factory.build_graph_store"),
+    ):
+        result = CliRunner().invoke(contextd.cli.cli, ["index", "docs", "--bootstrap"])
+
+    assert result.exit_code == 1
+    assert "summarization.prompt_override file not found" in result.output
