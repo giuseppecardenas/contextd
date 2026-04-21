@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 from importlib import resources
 from pathlib import Path
 
@@ -75,6 +76,83 @@ def init(yes: bool) -> None:
         )
 
     console.print("\n[bold]next:[/] `contextd up` to start the daemon.")
+
+
+@cli.command()
+def up() -> None:
+    """Start the storage backend and the indexer daemon."""
+    from contextd.config import Config
+
+    cfg = (
+        Config.load(CONTEXTD_HOME / "config.toml")
+        if (CONTEXTD_HOME / "config.toml").exists()
+        else Config.load_default()
+    )
+
+    if cfg.storage.backend == "memgraph":
+        compose_file = Path(cfg.storage.memgraph.docker_compose_file).expanduser()
+        subprocess.run(["docker", "compose", "-f", str(compose_file), "up", "-d"], check=True)
+        console.print("[green]✓[/] memgraph container up at 127.0.0.1:7687")
+    else:
+        db_path = Path(cfg.storage.kuzu.db_path).expanduser()
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        console.print(f"[green]✓[/] kuzu database directory: {db_path}")
+
+    # Apply migrations against the configured backend.
+    from contextd.storage.factory import build_graph_store
+
+    store = build_graph_store(cfg)
+    store.connect()
+    try:
+        if cfg.storage.backend == "memgraph":
+            from contextd.migrations.memgraph import ALL_MIGRATIONS
+
+            store.apply_migrations(ALL_MIGRATIONS)
+        else:
+            from contextd.migrations.kuzu import ALL_MIGRATIONS
+
+            store.apply_migrations(ALL_MIGRATIONS)
+        console.print("[green]✓[/] migrations applied")
+    finally:
+        store.close()
+    console.print("[bold]ready[/]")
+
+
+@cli.command()
+def down() -> None:
+    """Stop the storage backend and indexer."""
+    from contextd.config import Config
+
+    cfg = (
+        Config.load(CONTEXTD_HOME / "config.toml")
+        if (CONTEXTD_HOME / "config.toml").exists()
+        else Config.load_default()
+    )
+    if cfg.storage.backend == "memgraph":
+        compose_file = Path(cfg.storage.memgraph.docker_compose_file).expanduser()
+        subprocess.run(["docker", "compose", "-f", str(compose_file), "down"], check=False)
+    console.print("[green]✓[/] stopped")
+
+
+@cli.command()
+def status() -> None:
+    """Report daemon + backend + corpora state."""
+    from contextd.config import Config
+
+    cfg = (
+        Config.load(CONTEXTD_HOME / "config.toml")
+        if (CONTEXTD_HOME / "config.toml").exists()
+        else Config.load_default()
+    )
+    console.print(f"[bold]backend:[/] {cfg.storage.backend}")
+    corpora_dir = CONTEXTD_HOME / "corpora"
+    if corpora_dir.exists():
+        corpora = list(corpora_dir.glob("*.toml"))
+        console.print(f"[bold]corpora:[/] {len(corpora)} registered")
+        for c in corpora:
+            console.print(f"  - {c.stem}")
+    else:
+        console.print("[bold]corpora:[/] none (run `contextd init`)")
 
 
 def main() -> None:
