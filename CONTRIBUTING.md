@@ -64,8 +64,9 @@ These constraints are enforced in CI and are load-bearing for correctness:
 ## Pull requests
 
 - **One task, one commit.** Match the commit subject style:
-  `type(scope): summary` — e.g.
-  `feat(storage): GraphStore ABC with typed origin property`.
+  `type(scope): summary (spec §X.Y)` — e.g.
+  `feat(storage): GraphStore ABC with typed origin property (spec §2.5.1)`.
+  The `(spec §X.Y)` suffix cross-references the implementation plan when applicable.
 - **All four CI gates must pass** before a PR is mergeable (ruff check,
   ruff format --check, mypy --strict, pytest tests/unit).
 - **No amending pushed commits.** If a fix is needed post-push, land a new
