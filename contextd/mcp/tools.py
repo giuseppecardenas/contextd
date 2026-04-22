@@ -48,6 +48,9 @@ def describe_project(store: GraphStore, *, corpus: str | None = None, n: int = 4
     return Overview(nodes=rows)
 
 
+_SEARCH_STRIP_FIELDS = frozenset({"embedding"})
+
+
 def search(
     store: GraphStore, query: str, *, kind: str | None = None, limit: int = 20
 ) -> list[dict[str, Any]]:
@@ -57,10 +60,23 @@ def search(
     originally framed this as 'hybrid search'; today's implementation is
     full-text only). Callers needing vector-space matches should call
     ``GraphStore.vector_search`` directly for now.
+
+    Result shape: each row is ``{<node_field>: ..., "score": float}``. The
+    node's properties are flattened onto the row and the raw ``embedding``
+    vector (1024 floats ≈ 12 KB/row on the MCP wire) is dropped — a full
+    ``{node, score}`` nested payload from ``full_text_search`` would blow
+    past the MCP client's per-result token ceiling at even modest ``limit``
+    values.
     """
     label = kind or "File"
     rows = store.full_text_search(label, "summary", query, k=limit)
-    return rows
+    return [
+        {
+            **{k: v for k, v in r["node"].items() if k not in _SEARCH_STRIP_FIELDS},
+            "score": r["score"],
+        }
+        for r in rows
+    ]
 
 
 _RELATED_MAX_DEPTH = 5

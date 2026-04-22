@@ -48,3 +48,70 @@ def test_related_passes_node_id_as_param() -> None:
     cypher, params = store.exec_read.call_args[0]
     assert params == {"id": "file/with/slashes"}
     assert "file/with/slashes" not in cypher
+
+
+def test_search_strips_embedding_and_flattens_node() -> None:
+    """Regression: the raw backend row is ``{node: {..., embedding: [1024 floats]}, score}``.
+    That shape was blowing past the MCP client's per-result token ceiling at
+    limit>=3 because each row carried ~12KB of embedding noise. The tool must
+    (a) drop ``embedding``, (b) flatten the node onto the row so callers see
+    ``id``/``summary``/``score`` at the top level.
+    """
+    store = MagicMock()
+    store.full_text_search.return_value = [
+        {
+            "node": {
+                "id": "a.md#intro",
+                "path": "a.md",
+                "summary": "alpha",
+                "key_points": ["k1", "k2"],
+                "embedding": [0.1] * 1024,
+            },
+            "score": 3.14,
+        },
+        {
+            "node": {
+                "id": "b.md#main",
+                "path": "b.md",
+                "summary": "beta",
+                "embedding": [0.2] * 1024,
+            },
+            "score": 2.71,
+        },
+    ]
+
+    rows = tools.search(store, "alpha", kind="Section", limit=5)
+
+    store.full_text_search.assert_called_once_with("Section", "summary", "alpha", k=5)
+    assert len(rows) == 2
+    for row in rows:
+        assert "embedding" not in row
+        assert "node" not in row
+        assert "score" in row
+    assert rows[0] == {
+        "id": "a.md#intro",
+        "path": "a.md",
+        "summary": "alpha",
+        "key_points": ["k1", "k2"],
+        "score": 3.14,
+    }
+    assert rows[1]["id"] == "b.md#main"
+    assert rows[1]["score"] == 2.71
+
+
+def test_search_defaults_to_file_label() -> None:
+    store = MagicMock()
+    store.full_text_search.return_value = []
+    tools.search(store, "query text")
+    store.full_text_search.assert_called_once_with("File", "summary", "query text", k=20)
+
+
+def test_search_handles_rows_without_embedding() -> None:
+    """Not every node label carries an embedding (e.g., Pattern). The strip
+    filter must be a no-op for rows that never had one."""
+    store = MagicMock()
+    store.full_text_search.return_value = [
+        {"node": {"name": "target1", "summary": "s"}, "score": 1.0},
+    ]
+    rows = tools.search(store, "q", kind="Pattern")
+    assert rows == [{"name": "target1", "summary": "s", "score": 1.0}]
