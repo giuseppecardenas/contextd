@@ -165,3 +165,36 @@ def test_full_text_search_matches_content_word(backend: GraphStore) -> None:
 
     empty = backend.full_text_search(label="File", property_name="summary", query="quantum", k=5)
     assert empty == []
+
+
+def test_full_text_search_section_summary(backend: GraphStore) -> None:
+    """Section.summary must be full-text-searchable on every backend.
+
+    Section-granular corpora (spec §5.11) put the LLM's per-section summary on
+    ``:Section.summary`` rather than ``:File.summary``. The ``Section_summary_ft``
+    index (migration _0003 on both backends) exists so ``search(kind='Section')``
+    through the MCP tool stack doesn't crash with a missing-index error.
+    """
+    sections = [
+        ("a.md#intro", "database migration forward only"),
+        ("b.md#unrelated", "unrelated foo bar text"),
+        ("c.md#schema", "migration of schema with indexes"),
+    ]
+    for sec_id, summary in sections:
+        backend.upsert_node(
+            "Section",
+            {"id": sec_id, "summary": summary, "corpus": "c"},
+        )
+    _rebuild_fts_index_if_needed(backend)
+
+    hits = backend.full_text_search(
+        label="Section", property_name="summary", query="migration", k=5
+    )
+    ids = {row["node"]["id"] for row in hits}
+    assert ids == {"a.md#intro", "c.md#schema"}
+    for row in hits:
+        assert isinstance(row["score"], int | float)
+        assert row["score"] > 0.0
+
+    empty = backend.full_text_search(label="Section", property_name="summary", query="quantum", k=5)
+    assert empty == []
