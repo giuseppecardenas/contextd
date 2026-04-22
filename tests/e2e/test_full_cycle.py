@@ -11,7 +11,7 @@ pytestmark = pytest.mark.e2e
 
 
 def test_full_bootstrap_then_mcp_query(backend, tmp_path: Path) -> None:
-    """Exercise: files → bootstrap → describe_project → inbound → outbound."""
+    """Exercise: files → bootstrap → describe_project."""
     from contextd.corpus_config import CorpusConfig
     from contextd.indexer.hasher import FileHasher
     from contextd.indexer.pipeline import run_bootstrap

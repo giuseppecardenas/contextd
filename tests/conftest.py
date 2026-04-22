@@ -1,6 +1,6 @@
-"""Parametrize integration tests across all storage backends.
+"""Parametrize integration and e2e tests across all storage backends.
 
-Every ``backend`` fixture in this directory runs twice: once with Memgraph
+Every ``backend`` fixture in this tree runs twice: once with Memgraph
 via testcontainers, once with Neo4j via testcontainers. Tests that need
 one backend only can branch on ``backend.capabilities.name`` and
 ``pytest.skip(...)`` with justification.
