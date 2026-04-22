@@ -52,6 +52,9 @@ def test_status_no_corpora(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
 def test_up_memgraph_calls_docker_compose(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     home = _setup_contextd_home(tmp_path, backend="memgraph")
     monkeypatch.setenv("CONTEXTD_HOME", str(home))
+    # Mock shutil.which so the test is deterministic regardless of whether
+    # the runner has docker on PATH — mirrors test_up_neo4j_calls_compose_with_profile.
+    monkeypatch.setattr("shutil.which", lambda _x: "/usr/bin/docker")
     with (
         patch("subprocess.run") as mock_run,
         patch("contextd.storage.factory.build_graph_store") as mock_build,
