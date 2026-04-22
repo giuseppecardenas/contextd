@@ -10,7 +10,7 @@ Contextd is a locally-hosted GraphRAG knowledge layer. It indexes markdown, code
 
 The project is mid-build against a detailed milestone plan. The plan drives build order deterministically — do not skip or reorder milestones.
 
-**As of 2026-04-21 (HEAD `f0077be`; all pushed to origin/main):**
+**As of 2026-04-22 (HEAD `9ed77ae`; all pushed to origin/main):**
 
 - **M0** (repo scaffold) — complete (`e752200`). CI green.
 - **M1** (config + ontology foundations) — complete 5/5. Closing commit `6551a71`.
@@ -31,7 +31,7 @@ The project is mid-build against a detailed milestone plan. The plan drives buil
 
 **Spec-delta cleanup:** between M9 close and M10, a 20-commit sweep resolved 25 of 27 deferred items logged across M1–M9 (safety-critical guards, mutation-defence tightening, CLI error-handling, MCP server hygiene, label-to-PK unification, CONTEXTD_HOME extraction, prompts repackaging, Corpus-stats migration, etc.). See the spec-delta log below for per-item details. Three items intentionally deferred at that point: **(#72)** real `QueryTranslator` corpus injection, **(#74)** stale Section garbage collection, **(#80)** `cli.py` module split — all three resolved in the pre-M11 session. SD #71 (Kuzu embedding mutability) — resolved by replacing Kuzu with Neo4j in M11 (M11.1–M11.9). Kuzu is fully excised.
 
-**Test suite:** 325 unit + 87 integration + 2 e2e = 414 collected (parametrized on both backends). `ruff check`, `ruff format --check`, `mypy --strict`, and the abstraction-invariant grep all clean. Integration + e2e suites run Memgraph via Docker (memgraph:latest v3.x) + Neo4j Community via Docker (`neo4j:5` image) and now also run in CI on every push/PR to main. Integration + e2e tests require Docker; they fail at fixture setup if the Docker daemon is unreachable (expected in dev shells without Docker — use `pytest tests/unit` for fast iteration).
+**Test suite:** 350 unit + ~89 integration + 2 e2e ≈ 441 collected (parametrized on both backends). `ruff check`, `ruff format --check`, `mypy --strict`, and the abstraction-invariant grep all clean. Integration + e2e suites run Memgraph via Docker (memgraph:latest v3.x) + Neo4j Community via Docker (`neo4j:5` image) and now also run in CI on every push/PR to main. Integration + e2e tests require Docker; they fail at fixture setup if the Docker daemon is unreachable (expected in dev shells without Docker — use `pytest tests/unit` for fast iteration).
 
 **Local CI discipline:** the four local gates (ruff check / ruff format --check / mypy --strict / pytest) do not cover every GitHub Actions job. Before pushing, also run the abstraction-invariant grep locally — the exact command is in `.github/workflows/ci.yml` under the `abstraction-invariant` job. A prior-session M3 push went out with the abstraction-invariant job red for 3 commits because the local check was skipped.
 
@@ -79,7 +79,7 @@ These constraints are enforced in CI and are load-bearing for correctness:
 - Dev env: `uv` (`uv venv`, `uv pip install -e ".[dev]"`)
 - CLI: `click` + `rich` for TUI output
 - MCP: `mcp` SDK (stdio transport to Claude Desktop / Cursor)
-- Inference: `google-genai` SDK, Gemini Flash tier by default
+- Inference: `google-genai` SDK, `gemma-4-31b-it` by default (Gemma family; 15 RPM free-tier quota is the typical binding constraint, not per-call latency)
 - Embeddings: `voyageai` SDK, `voyage-4-large` (1024-dim)
 - Storage: `gqlalchemy` (Memgraph Bolt) / `neo4j-driver` 5.x (Neo4j Community), behind `GraphStore` ABC
 - Parsing: `markdown-it-py` for section extraction
@@ -242,3 +242,15 @@ Items 1–24 (M1–M5 deviations: Memgraph/Kuzu connection quirks, vector-index 
 45. **M12.2 — `docker:dind` service block dropped from CI workflow (`f0077be`).** The plan §12.2 verbatim included `services: docker: image: docker:dind` on the `integration` job. On GitHub-hosted `ubuntu-24.04` runners this is a no-op: Docker is pre-installed on the host, testcontainers-python connects via `/var/run/docker.sock` by default, and `tests/conftest.py`'s `backend` fixture has no `DOCKER_HOST` override to redirect at a nested daemon. The DinD service block was a GitLab-CI-recipe copy-paste that adds a ghost container without helping. Dropped; M12.2 ships with plain `runs-on: ubuntu-24.04` on both the `integration` and `e2e` jobs. Plan should be updated when `docs/implementation-plan.md` next gets a maintenance pass.
 
 46. **M12.1 — `backend` fixture factored up from `tests/integration/conftest.py` to `tests/conftest.py` (`2fb77e4`).** M12.1 initially landed `tests/e2e/conftest.py` with `from tests.integration.conftest import backend as backend` to share the fixture across both test roots. Code-quality review flagged this as a pytest antipattern (conftest files aren't guaranteed importable via `sys.path`; pytest's docs discourage importing from them). Resolution: moved the fixture to the nearest common ancestor (`tests/conftest.py`), deleted `tests/integration/conftest.py` and `tests/e2e/conftest.py` entirely. Pytest's normal upward conftest discovery serves the fixture to both subdirectories without any explicit import. Side benefit: if future work adds `tests/` subdirectories (e.g., `tests/perf/`), they inherit `backend` automatically.
+
+47. **2026-04-22 post-M12 hardening wave (`730ec39..9ed77ae`, 4 commits).** Four out-of-plan fixes driven by real-world usage of the Runeledger corpus index:
+
+    - **`730ec39` — `[indexer] inference_concurrency` knob.** Threads a `ThreadPoolExecutor(max_workers=N)` through the four LLM-bound phases (`phase_summarise`, `phase_relate`, `phase_summarise_sections`, `phase_relate_sections`) via a new `_parallel_map` helper in `contextd/indexer/phases.py`. Default `N=1` preserves serial call ordering; higher values parallelise I/O-bound Gemini calls. Section phases pre-populate `_parse_cached` serially before dispatching workers (dict writes would race; reads are safe). Concurrency is useful to saturate API latency but the quota ceiling (~15 RPM for Gemma free tier) is the real cap — `N=5` is the practical sweet spot. 8 new unit tests + 3 config tests.
+
+    - **`468db33` — idempotent resume + `--refresh` scope.** Partial bootstraps now resume without re-doing completed work. `phase_summarise*` filters on `s.summary IS NULL`; `phase_relate*` filters on `s.inferred_at IS NULL` and writes the marker after a successful upsert loop (zero-edge sections still marked so they aren't retried every restart; error paths leave it unset for retry). New `--refresh <scope>` option on `contextd index` with four values: `inferred`, `summaries`, `llm`, `all` — each wiping a specific layer of the dependency stack. Helper `_wipe_for_refresh(corpus, store, scope)` in `pipeline.py`. 14 new unit tests.
+
+    - **`ea2c446` — migration `_0003` (Section full-text index).** Baseline only created `File_summary_ft`; `search(kind='Section')` crashed with `ProcedureCallFailed: no such fulltext schema index: Section_summary_ft`. New migration on both backends (Neo4j: `CREATE FULLTEXT INDEX ... ON EACH [s.summary]`; Memgraph: `CREATE TEXT INDEX ... ON :Section`). Idempotent via `IF NOT EXISTS` / name-idempotence. 1 new integration test parametrized on both backends.
+
+    - **`9ed77ae` — migration `_0004` (backfill `inferred_at` on existing graphs).** The marker code in `468db33` was forward-only; graphs bootstrapped before it landed had zero markers, so a plain resume would re-run relate on the entire corpus. Migration `_0004` marks any Section/File with ≥1 outgoing `origin='inferred'` edge as processed. Uses `coalesce(s.inferred_at, datetime())` for idempotence. Live runeledger Neo4j: 0 → 501 sections marked (155 remain as zero-edge / never-ran cases — re-attempted on next bootstrap). 1 new integration test.
+
+    Combined: 25 new unit tests (350 total), ~4 new integration tests (~89 total). All four CI gates + abstraction-invariant grep clean. The concurrency + idempotent + migration stack together means a partial run → user-kill → restart cycle costs only the un-processed remainder + quota delta, not a full corpus re-do.

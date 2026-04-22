@@ -185,11 +185,22 @@ To preview token cost without indexing:
 contextd index notes --estimate-only
 ```
 
-After the initial bootstrap, re-index only changed files with:
+**Resuming a partial run.** Re-running `contextd index <corpus> --bootstrap` is idempotent: nodes that already have a summary or an `inferred_at` marker (written by a prior successful `relate` pass) are skipped automatically. A killed-mid-run bootstrap only needs a plain `--bootstrap` restart to finish — no extra flag.
+
+**Wiping a layer for a fresh re-inference.** Use `--refresh <scope>`:
+
+| scope | wipes | preserves | re-costs |
+|---|---|---|---|
+| `inferred` | `origin='inferred'` edges + `inferred_at` markers | summaries, structural, embeddings | Gemini relate only |
+| `summaries` | `summary`/`key_points`/`summary_confidence` | inferred edges, structural, embeddings | Gemini summarise only |
+| `llm` | both of the above | structural, embeddings | all Gemini work |
+| `all` | DETACH DELETE every `Section`/`File`/`Corpus` node for this corpus | nothing (structural + inferred edges cascade-deleted) | Voyage + Gemini from zero |
 
 ```bash
-contextd index notes --incremental
+contextd index notes --bootstrap --refresh llm       # e.g. after a prompt change
 ```
+
+(Hash-based incremental re-index — re-running only files whose content changed — is on the roadmap but not yet wired; `--incremental` currently prints a not-yet-implemented warning.)
 
 ### Step 5 — Query
 
@@ -253,7 +264,7 @@ If `contextd-mcp` is not on your PATH (e.g., when using a venv), use the absolut
 | Tool | What it does |
 |---|---|
 | `describe_project` | Top-N File nodes by inbound-citation count with summaries. Accepts `corpus` and `n` (default 40). |
-| `search` | Full-text search over summaries. Accepts `query`, optional `kind` (node label, default `File`), optional `limit` (default 20). |
+| `search` | Full-text search over summaries. Accepts `query`, optional `kind` (default `File`; `Section` also works in section-granular corpora), optional `limit` (default 20). |
 | `related` | Outbound + inbound traversal within N hops (1–5). Accepts `node_id` and `depth` (default 2). |
 | `inbound` | What cites this node? Accepts `node_id`. |
 | `outbound` | What does this node cite? Accepts `node_id`. |
@@ -306,6 +317,14 @@ embedding = "voyage"
 [inference]
 summary_max_words = 100
 
+[indexer]
+debounce_seconds = 30
+parallel_embedding_batches = 4
+inference_concurrency = 1   # ThreadPoolExecutor workers for summarise+relate;
+                            # raise to parallelise Gemini calls. The model's
+                            # RPM quota is usually the binding cap — e.g. 5
+                            # is a good default for Gemma free-tier (15 RPM).
+
 [logging]
 level = "info"
 format = "json"
@@ -318,7 +337,7 @@ Full corpus config schema and CLI reference live in [docs/cli.md](docs/cli.md).
 
 ## Cost analysis
 
-Each file triggers two Gemini Flash API calls (summarise + relate) and one Voyage AI batch embedding call per bootstrap. At Gemini Flash and Voyage-3 pricing:
+Each file (or section, in section-granular mode) triggers two Gemini API calls (summarise + relate) and contributes to a batched Voyage AI embedding call per bootstrap. At `gemma-4-31b-it` and `voyage-4-large` pricing:
 
 - **Per file:** sub-cent in typical cases (short markdown files); files with dense content may run a few cents each.
 - **Typical 100-file corpus:** order of $0.10–$1.00 for a full bootstrap, depending on file sizes and summary length (`[inference] summary_max_words` is the main lever).
