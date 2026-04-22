@@ -28,6 +28,38 @@ def test_upsert_node_updates_non_pk_properties(backend: GraphStore) -> None:
     assert rows[0]["hash"] == "h2"
 
 
+def test_risk_merges_on_identical_description(backend: GraphStore) -> None:
+    """Risk PK is ``description``; two upserts with identical description
+    but different non-PK properties MERGE into one node. This is the
+    idempotent re-index invariant documented in contextd/storage/_keys.py:
+    the inferrer emits Risks by their description text, so identical text
+    means "the same Risk, updated" — not a duplicate."""
+    backend.upsert_node(
+        "Risk",
+        {
+            "description": "SHA=pending for FR-001",
+            "severity": "low",
+            "corpus": "test",
+        },
+    )
+    backend.upsert_node(
+        "Risk",
+        {
+            "description": "SHA=pending for FR-001",
+            "severity": "high",
+            "corpus": "test",
+        },
+    )
+    rows = backend.exec_read(
+        "MATCH (r:Risk {description: $desc}) RETURN r.severity AS severity",
+        {"desc": "SHA=pending for FR-001"},
+    )
+    assert len(rows) == 1, "identical descriptions must MERGE into one node"
+    assert rows[0]["severity"] == "high", (
+        "the second upsert's non-PK properties must overwrite the first"
+    )
+
+
 def test_upsert_edge_with_origin(backend: GraphStore) -> None:
     backend.upsert_node("File", {"path": "a.md", "hash": "h1", "corpus": "c"})
     backend.upsert_node("File", {"path": "b.md", "hash": "h2", "corpus": "c"})

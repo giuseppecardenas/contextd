@@ -55,7 +55,6 @@ Initial alpha release.
   discarded at write time
 - Natural-language-to-Cypher query translation (`contextd ask "<question>"`) via
   `QueryTranslator` + read-only guard
-- Runeledger-PRD example adapter (`examples/runeledger-prd/`)
 - Minimal-notes example adapter (`examples/minimal-notes/`)
 - PowerShell wrappers for Windows 11 + WSL2 users
 

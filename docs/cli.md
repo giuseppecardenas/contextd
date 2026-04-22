@@ -63,7 +63,7 @@ contextd status
 # backend: neo4j
 # corpora: 2 registered
 #   - my-notes
-#   - runeledger-prd
+#   - project-docs
 ```
 
 ---
@@ -88,15 +88,15 @@ contextd add-corpus ~/notes --name my-notes
 contextd add-corpus ~/notes --name my-notes --granularity section
 ```
 
-**From a template** (copies the full adapter config):
+**From a template** (copies the full adapter config — ontology aliases, prompt overrides, per-corpus MCP tools):
 
 ```bash
-contextd add-corpus /path/to/runeledger \
-  --name runeledger-prd \
-  --from examples/runeledger-prd/corpus.toml
+contextd add-corpus /path/to/project \
+  --name project-docs \
+  --from /path/to/project/.contextd/corpus.toml
 ```
 
-When `--from` is provided, relative paths in the template (`ontology.json`, `prompts/summary.md`, `tools/*.cypher`) are rewritten to absolute paths anchored at the template's directory. The `--granularity` flag is ignored when `--from` is used; the template's `[corpus] granularity` value is used instead.
+When `--from` is provided, relative paths in the template (`ontology.json`, `prompts/summary.md`, any `[mcp.tools]` entries) are rewritten to absolute paths anchored at the template's directory. The `--granularity` flag is ignored when `--from` is used; the template's `[corpus] granularity` value is used instead.
 
 ---
 
@@ -109,7 +109,7 @@ Lists all registered corpus names and their TOML paths.
 ```bash
 contextd list-corpora
 # - my-notes (/home/user/.contextd/corpora/my-notes.toml)
-# - runeledger-prd (/home/user/.contextd/corpora/runeledger-prd.toml)
+# - project-docs (/home/user/.contextd/corpora/project-docs.toml)
 ```
 
 ---
@@ -157,8 +157,8 @@ The token estimate is based on UTF-8 character count ÷ 4 (rough heuristic). The
 Translates `QUESTION` to a Cypher query via `QueryTranslator` (uses the Gemini API), prints the generated Cypher, executes it against the backend, and prints the results as JSON.
 
 ```bash
-contextd ask "which files reference the economy subsystem?"
-contextd ask "what are the riskiest gap entries?" --corpus runeledger-prd
+contextd ask "which files reference the auth module?"
+contextd ask "what are the riskiest gap entries?" --corpus project-docs
 ```
 
 Translation failures and backend errors are rendered as `Error: ...` messages rather than Python tracebacks.

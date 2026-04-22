@@ -274,11 +274,11 @@ If `contextd-mcp` is not on your PATH (e.g., when using a venv), use the absolut
 
 ### Per-corpus tools
 
-Corpus adapters can register additional Cypher-backed tools in their corpus TOML under `[mcp.tools]`. These appear in the tool list namespaced as `<corpus>.<tool>` so they never collide with the generic tools.
+Corpus adapters can register additional Cypher-backed tools in their corpus TOML under `[mcp.tools]`. These appear in the tool list namespaced as `<corpus>.<tool>` so they never collide with the generic tools. An AI assistant calling a registered tool runs the pre-authored Cypher with `$placeholder` parameters bound, all through the same read-only guard.
 
-For example, the `runeledger-prd` adapter registers `runeledger-prd.four_surface`, `runeledger-prd.find_dangling_registrations`, and `runeledger-prd.audit_stale_shas`. An AI assistant calling `runeledger-prd.four_surface(registry_name="economy")` runs the pre-authored Cypher with `$registry_name` bound, all through the same read-only guard.
+Most adapters do fine without this — `query_graph` + the generic tools compose into the same queries and are tunable in-session without a server restart. Reach for `[mcp.tools]` when a query is called often enough that baking it in pays back the loss of tunability.
 
-See `examples/runeledger-prd/` for a working adapter and [docs/mcp.md](docs/mcp.md) for the full tool reference.
+See [docs/mcp.md](docs/mcp.md) for the full tool reference.
 
 ---
 
@@ -290,7 +290,7 @@ The base ontology is intentionally general. Domain-specific corpora map their vo
 
 2. **Override file** (`[ontology] overrides = "ontology.json"`) — a JSON file that adds domain-specific edge-type aliases. All aliases are validated against the base ontology at index time; unrecognised types are silently discarded, not stored.
 
-The `examples/runeledger-prd/` adapter is the reference implementation. It maps four domain node types (`Registry`, `FRRow`, `LuaFile`, `GapEntry`) and five domain edge types (`CITES`, `CONSUMES`, `SCHEMA_FOR`, `REGISTERS`, `CLOSES_GAP`) to canonical equivalents, uses a custom summary prompt, and registers three MCP tools. See [docs/ontology.md](docs/ontology.md) for the full customisation reference.
+Adapter configs live next to the corpus they describe (by convention, a `.contextd/` directory at the corpus root containing `corpus.toml`, `ontology.json`, and `prompts/`). `contextd add-corpus <path> --from <path>/.contextd/corpus.toml` rewrites relative paths in the template to absolute paths anchored at the template's directory, so the adapter stays portable. See [docs/ontology.md](docs/ontology.md) for the full customisation reference.
 
 ---
 

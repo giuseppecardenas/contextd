@@ -76,9 +76,9 @@ def _rewrite_template_path(p: str, anchor: Path) -> str:
     Absolute paths are returned unchanged.  Relative paths are joined to
     *anchor* and resolved to a canonical absolute string — this is the correct
     behaviour for templates, which must be self-contained and portable: a user
-    who copies ``examples/runeledger-prd/`` to a different location should have
-    all relative paths continue to work because they are anchored to the
-    template's own directory, not to the repo root.
+    who copies an adapter's ``.contextd/`` directory to a different location
+    should have all relative paths continue to work because they are anchored
+    to the template's own directory, not to the invoking process's cwd.
     """
     maybe_path = Path(p)
     if maybe_path.is_absolute():
