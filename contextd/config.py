@@ -26,9 +26,9 @@ class ConfigError(ValueError):
 
 class GeminiConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    model_summary: str = "gemini-flash-latest"
-    model_inference: str = "gemini-flash-latest"
-    model_translation: str = "gemini-flash-latest"
+    model_summary: str = "gemma-4-31b-it"
+    model_inference: str = "gemma-4-31b-it"
+    model_translation: str = "gemma-4-31b-it"
     max_retries: int = 5
     safety_block: SafetyBlock = "BLOCK_NONE"
     daily_budget: str | int = "unlimited"

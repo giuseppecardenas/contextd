@@ -10,9 +10,9 @@ from contextd.providers.gemini import GeminiProvider
 @pytest.fixture
 def gemini_cfg() -> GeminiConfig:
     return GeminiConfig(
-        model_summary="gemini-flash-latest",
-        model_inference="gemini-flash-latest",
-        model_translation="gemini-flash-latest",
+        model_summary="gemma-4-31b-it",
+        model_inference="gemma-4-31b-it",
+        model_translation="gemma-4-31b-it",
         max_retries=3,
         safety_block="BLOCK_NONE",
     )
@@ -52,7 +52,7 @@ def test_generate_returns_text_and_records_usage(gemini_cfg: GeminiConfig) -> No
     usage = provider.last_usage()
     assert usage is not None
     assert usage.provider == "gemini"
-    assert usage.model == "gemini-flash-latest"
+    assert usage.model == "gemma-4-31b-it"
     assert usage.call_site == "summary"
     assert usage.input_tokens == 100
     assert usage.output_tokens == 20

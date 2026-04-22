@@ -3,9 +3,9 @@ inference = "gemini"
 embedding = "voyage"
 
 [providers.gemini]
-model_summary = "gemini-flash-latest"
-model_inference = "gemini-flash-latest"
-model_translation = "gemini-flash-latest"
+model_summary = "gemma-4-31b-it"
+model_inference = "gemma-4-31b-it"
+model_translation = "gemma-4-31b-it"
 max_retries = 5
 safety_block = "BLOCK_NONE"
 daily_budget = "unlimited"

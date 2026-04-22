@@ -44,7 +44,7 @@ def test_prompt_request_fields() -> None:
 def test_usage_record_is_frozen() -> None:
     record = UsageRecord(
         provider="gemini",
-        model="gemini-flash-latest",
+        model="gemma-4-31b-it",
         call_site="summary",
         input_tokens=100,
         output_tokens=20,

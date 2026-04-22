@@ -22,8 +22,9 @@ class PromptRequest:
     """A single inference call bundled with its call-site metadata.
 
     The call_site drives model selection per spec §4.2 (summary →
-    gemini-flash-latest; inference → gemini-flash-latest; translation
-    → gemini-flash-latest or user-overridden to gemini-pro-latest).
+    gemma-4-31b-it; inference → gemma-4-31b-it; translation →
+    gemma-4-31b-it or user-overridden to gemini-pro-latest for higher
+    translation quality).
     """
 
     system: str

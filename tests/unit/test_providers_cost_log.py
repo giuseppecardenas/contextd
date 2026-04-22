@@ -9,7 +9,7 @@ def test_append_and_read(tmp_path: Path) -> None:
     log = CostLog(tmp_path / "session-log")
     record = UsageRecord(
         provider="gemini",
-        model="gemini-flash-latest",
+        model="gemma-4-31b-it",
         call_site="summary",
         input_tokens=100,
         output_tokens=20,
