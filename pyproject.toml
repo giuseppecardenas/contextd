@@ -111,4 +111,5 @@ filterwarnings = [
 ]
 markers = [
     "integration: tests that require Docker (Memgraph) or other external services",
+    "e2e: end-to-end tests that run a full bootstrap pipeline against a real graph backend",
 ]
