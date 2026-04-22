@@ -42,9 +42,20 @@ class GeminiProvider(InferenceProvider):
     def generate(self, request: PromptRequest) -> str:
         model = self._model_for(request.call_site)
         safety = self._safety_settings()
+        # Translation — NL question → Cypher — benefits from extended reasoning:
+        # the model must consult the ontology, map the user's phrasing to the
+        # right node/edge types, and emit syntactically correct Cypher inside
+        # a read-only-guard allow-list. Summary and inference are bounded
+        # classification / summarisation tasks and don't need thinking budget.
+        thinking_config = (
+            genai_types.ThinkingConfig(thinking_level=genai_types.ThinkingLevel.HIGH)
+            if request.call_site == "translation"
+            else None
+        )
         config = genai_types.GenerateContentConfig(
             system_instruction=request.system,
             safety_settings=safety,
+            thinking_config=thinking_config,
         )
 
         attempt = 0

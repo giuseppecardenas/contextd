@@ -80,6 +80,34 @@ def test_safety_settings_applied(gemini_cfg: GeminiConfig) -> None:
     assert cfg_obj is not None
 
 
+def test_thinking_config_only_applied_for_translation(gemini_cfg: GeminiConfig) -> None:
+    """NL→Cypher translation benefits from extended reasoning; summary and
+    inference are bounded tasks that don't need it. Verifies thinking_config
+    is set to HIGH for translation calls and absent for the other two
+    call sites.
+    """
+    from google.genai.types import ThinkingLevel
+
+    for call_site, expected_thinking in [
+        ("summary", None),
+        ("inference", None),
+        ("translation", ThinkingLevel.HIGH),
+    ]:
+        mock_client = _mock_client_with_response("x")
+        with patch("contextd.providers.gemini.genai.Client", return_value=mock_client):
+            provider = GeminiProvider(gemini_cfg, api_key="test-key")
+            provider.generate(PromptRequest(system="s", prompt="p", call_site=call_site))
+        cfg_obj = mock_client.models.generate_content.call_args.kwargs["config"]
+        actual = cfg_obj.thinking_config
+        if expected_thinking is None:
+            assert actual is None, f"{call_site}: expected no thinking_config, got {actual}"
+        else:
+            assert actual is not None, f"{call_site}: expected thinking_config, got None"
+            assert actual.thinking_level == expected_thinking, (
+                f"{call_site}: expected thinking_level={expected_thinking}, got {actual.thinking_level}"
+            )
+
+
 def test_retries_on_resource_exhausted(gemini_cfg: GeminiConfig) -> None:
     """On RESOURCE_EXHAUSTED (429), backoff-retry up to max_retries."""
     mock_client = MagicMock()

@@ -11,7 +11,10 @@ Initial alpha release.
 
 - Hybrid graph + vector storage with pluggable Neo4j Community / Memgraph backends
   (Bolt driver; vector + full-text indexes; forward-only migration runner)
-- Google Gemini inference provider (`gemma-4-31b-it` default, configurable via `[inference] model_summary|model_inference|model_translation`)
+- Google Gemini inference provider (`gemma-4-31b-it` default, configurable via
+  `[providers.gemini] model_summary|model_inference|model_translation`).
+  Translation calls request `thinkingLevel = HIGH` via the Gemini API's
+  `generationConfig.thinkingConfig`; summary and inference calls do not.
   with retry, BLOCK_NONE safety settings, and append-only cost log
 - Voyage AI embedding provider (`voyage-3`, 1024-dim) with batched embedding and retry
 - Five-phase bootstrap pipeline for file-granular corpora (`enumerate` → `embed` →
