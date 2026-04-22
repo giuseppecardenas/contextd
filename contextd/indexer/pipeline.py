@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from contextd.corpus_config import CorpusConfig
 from contextd.indexer import phases
@@ -13,6 +14,8 @@ from contextd.inference.relate import RelationshipInferrer
 from contextd.inference.summarise import Summariser
 from contextd.providers.base import EmbeddingProvider
 from contextd.storage.base import GraphStore
+
+RefreshScope = Literal["inferred", "summaries", "llm", "all"]
 
 
 @dataclass
@@ -66,6 +69,51 @@ def enumerate_corpus_files(corpus: CorpusConfig) -> list[Path]:
     return [p for p in hits if _allowed(p)]
 
 
+def _wipe_for_refresh(corpus: CorpusConfig, store: GraphStore, scope: RefreshScope) -> None:
+    """Wipe a dependency layer of the corpus before bootstrap re-fills it.
+
+    Scopes:
+      - inferred:  DELETE origin='inferred' edges + REMOVE inferred_at markers.
+      - summaries: REMOVE summary + key_points + summary_confidence on nodes.
+      - llm:       union of inferred + summaries.
+      - all:       DETACH DELETE Section + File + Corpus for this corpus.
+                   Cascades to all attached edges (structural, inferred, manual).
+
+    REMOVE on a missing property is a no-op, so the helper is safe on corpora
+    at any state. Target-stub nodes created by relate (Pattern/Artifact/etc.
+    lacking a `corpus` property) are not touched by any scope — they may be
+    orphaned after `inferred` / `all` and will be gc'd by a future
+    --gc-orphans path, not by this helper.
+    """
+    c = corpus.corpus.name
+    if scope in ("inferred", "llm"):
+        store.exec_write(
+            "MATCH (a {corpus: $c})-[r]->() WHERE r.origin = 'inferred' DELETE r",
+            {"c": c},
+        )
+        store.exec_write(
+            "MATCH (n:Section {corpus: $c}) REMOVE n.inferred_at",
+            {"c": c},
+        )
+        store.exec_write(
+            "MATCH (n:File {corpus: $c}) REMOVE n.inferred_at",
+            {"c": c},
+        )
+    if scope in ("summaries", "llm"):
+        store.exec_write(
+            "MATCH (n:Section {corpus: $c}) REMOVE n.summary, n.key_points, n.summary_confidence",
+            {"c": c},
+        )
+        store.exec_write(
+            "MATCH (n:File {corpus: $c}) REMOVE n.summary, n.key_points, n.summary_confidence",
+            {"c": c},
+        )
+    if scope == "all":
+        store.exec_write("MATCH (n:Section {corpus: $c}) DETACH DELETE n", {"c": c})
+        store.exec_write("MATCH (n:File {corpus: $c}) DETACH DELETE n", {"c": c})
+        store.exec_write("MATCH (n:Corpus {name: $c}) DETACH DELETE n", {"c": c})
+
+
 def run_bootstrap(
     corpus: CorpusConfig,
     store: GraphStore,
@@ -76,7 +124,10 @@ def run_bootstrap(
     entity_sampler: Callable[[GraphStore], list[str]],
     *,
     inference_concurrency: int = 1,
+    refresh: RefreshScope | None = None,
 ) -> BootstrapResult:
+    if refresh is not None:
+        _wipe_for_refresh(corpus, store, refresh)
     files = enumerate_corpus_files(corpus)
     results: list[phases.PhaseResult] = []
     if corpus.corpus.granularity == "section":

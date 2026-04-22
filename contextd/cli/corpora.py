@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import tomllib
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import click
 
@@ -15,6 +15,7 @@ from contextd.cli._shared import PipelineDeps, _load_cfg, console
 if TYPE_CHECKING:
     from contextd.config import Config
     from contextd.corpus_config import CorpusConfig
+    from contextd.indexer.pipeline import RefreshScope
 
 
 @cli.command("add-corpus")
@@ -229,7 +230,26 @@ def _build_pipeline_deps(
 @click.option("--bootstrap", is_flag=True)
 @click.option("--incremental", is_flag=True)
 @click.option("--estimate-only", is_flag=True)
-def index(corpus_name: str, bootstrap: bool, incremental: bool, estimate_only: bool) -> None:
+@click.option(
+    "--refresh",
+    type=click.Choice(["inferred", "summaries", "llm", "all"]),
+    default=None,
+    help=(
+        "Wipe a dependency layer before bootstrap and re-fill it. "
+        "'inferred': origin='inferred' edges + inferred_at markers. "
+        "'summaries': summary/key_points/summary_confidence. "
+        "'llm': both of the above. "
+        "'all': DETACH DELETE every Section/File/Corpus node for this corpus. "
+        "Default (no --refresh): idempotent resume skipping already-processed nodes."
+    ),
+)
+def index(
+    corpus_name: str,
+    bootstrap: bool,
+    incremental: bool,
+    estimate_only: bool,
+    refresh: str | None,
+) -> None:
     """Run an indexing pass on the named corpus."""
     from contextd.corpus_config import CorpusConfig
     from contextd.indexer.pipeline import enumerate_corpus_files, run_bootstrap
@@ -277,6 +297,7 @@ def index(corpus_name: str, bootstrap: bool, incremental: bool, estimate_only: b
                 hasher=deps.hasher,
                 entity_sampler=lambda _s: [],
                 inference_concurrency=cfg.indexer.inference_concurrency,
+                refresh=cast("RefreshScope | None", refresh),
             )
             for phase in result.phases:
                 console.print(

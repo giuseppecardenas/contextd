@@ -151,6 +151,19 @@ def phase_summarise(
     *,
     concurrency: int = 1,
 ) -> PhaseResult:
+    # Idempotent resume: skip files whose File node already has a summary.
+    # One batch lookup against the store; set-subtracted from the input list.
+    if files:
+        already = {
+            r["path"]
+            for r in store.exec_read(
+                "MATCH (f:File) WHERE f.path IN $paths AND f.summary IS NOT NULL "
+                "RETURN f.path AS path",
+                {"paths": [str(f) for f in files]},
+            )
+        }
+        files = [f for f in files if str(f) not in already]
+
     def _worker(f: Path) -> tuple[int, int]:
         try:
             result = summariser.summarise(f.read_text(errors="replace"))
@@ -175,6 +188,20 @@ def phase_relate(
     *,
     concurrency: int = 1,
 ) -> PhaseResult:
+    # Idempotent resume: skip files whose File node carries an inferred_at
+    # marker (set by a prior successful relate pass). Zero-edge sections are
+    # still marked, so they are not re-attempted on every restart.
+    if files:
+        already = {
+            r["path"]
+            for r in store.exec_read(
+                "MATCH (f:File) WHERE f.path IN $paths AND f.inferred_at IS NOT NULL "
+                "RETURN f.path AS path",
+                {"paths": [str(f) for f in files]},
+            )
+        }
+        files = [f for f in files if str(f) not in already]
+
     known = entity_sampler(store)
 
     def _worker(f: Path) -> tuple[int, int]:
@@ -208,6 +235,13 @@ def phase_relate(
                 src_label="File",
                 dst_label=rel.target_type,
             )
+        # Mark processed so an interrupted run can resume without re-inferring.
+        # Marker set only after the upsert loop completes; exception paths
+        # return (0, 1) above and leave the marker unset.
+        store.exec_write(
+            "MATCH (f:File {path: $path}) SET f.inferred_at = datetime()",
+            {"path": str(f)},
+        )
         return (1, local_skipped)
 
     processed, skipped = _parallel_map(files, _worker, concurrency)
@@ -445,8 +479,9 @@ def phase_summarise_sections(
     before workers are dispatched; dict reads from multiple threads are
     safe, dict writes are not.
     """
+    # Idempotent resume: skip Section nodes that already have a summary.
     rows = store.exec_read(
-        "MATCH (s:Section {corpus: $c}) RETURN s.id AS id, s.path AS path",
+        "MATCH (s:Section {corpus: $c}) WHERE s.summary IS NULL RETURN s.id AS id, s.path AS path",
         {"c": corpus_cfg.corpus.name},
     )
     parser = _build_parser(corpus_cfg)
@@ -499,8 +534,12 @@ def phase_relate_sections(
     Under ``concurrency > 1`` the parse cache is pre-populated serially
     before workers are dispatched (see ``phase_summarise_sections``).
     """
+    # Idempotent resume: skip Sections that already carry an inferred_at
+    # marker. Zero-edge sections still get marked (see worker below) so
+    # they are not re-attempted on every restart.
     rows = store.exec_read(
-        "MATCH (s:Section {corpus: $c}) RETURN s.id AS id, s.path AS path",
+        "MATCH (s:Section {corpus: $c}) WHERE s.inferred_at IS NULL "
+        "RETURN s.id AS id, s.path AS path",
         {"c": corpus_cfg.corpus.name},
     )
     parser = _build_parser(corpus_cfg)
@@ -541,6 +580,12 @@ def phase_relate_sections(
                 src_label="Section",
                 dst_label=rel.target_type,
             )
+        # Mark processed so resume can skip. Only set after the upsert loop
+        # completes; exception paths above return (0, 1) unmarked.
+        store.exec_write(
+            "MATCH (s:Section {id: $id}) SET s.inferred_at = datetime()",
+            {"id": r["id"]},
+        )
         return (1, local_skipped)
 
     processed, skipped = _parallel_map(rows, _worker, concurrency)
