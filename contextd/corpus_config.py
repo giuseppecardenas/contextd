@@ -34,8 +34,8 @@ class CorpusSection(BaseModel):
 
 class EmbeddingSection(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    model: str = "voyage-3"
-    chunk_tokens: int = 8000
+    model: str = "voyage-4-large"
+    chunk_tokens: int = 32000
     chunk_overlap: int = 200
 
 

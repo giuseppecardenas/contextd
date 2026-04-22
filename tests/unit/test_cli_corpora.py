@@ -159,7 +159,7 @@ def _write_template(
         f'granularity = "{granularity}"',
         "",
         "[embedding]",
-        'model = "voyage-3"',
+        'model = "voyage-4-large"',
         "",
         "[ontology]",
         'base = "default"',
@@ -426,7 +426,7 @@ def test_add_corpus_from_runeledger_template(
         heading_max_level = 4
 
         [embedding]
-        model = "voyage-3"
+        model = "voyage-4-large"
 
         [ontology]
         base = "default"

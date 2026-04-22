@@ -5,7 +5,7 @@
 Contextd is a locally-hosted knowledge layer for your project files. It indexes markdown, code, and structured data into a hybrid graph + vector store (Neo4j Community or Memgraph, your choice), generates AI-inferred relationships and per-file summaries, and exposes the result to Claude Desktop, Cursor, and any MCP-speaking client through an MCP server. Cold-start any AI session with a compact, semantically-organised overview of your entire corpus.
 
 - **Storage:** Neo4j Community 5.x (default) or Memgraph 3.x — both run in Docker, both bind port 7687.
-- **Inference:** Google Gemini Flash for summarisation and relationship inference; Voyage AI `voyage-3` (1024-dim) for vector embeddings.
+- **Inference:** Google Gemma (`gemma-4-31b-it` default) via the Gemini API for summarisation, relationship inference, and NL→Cypher translation; Voyage AI `voyage-4-large` (1024-dim, 32k-token context) for vector embeddings.
 - **Interface:** stdio MCP server (`contextd-mcp`) and CLI (`contextd`).
 - **Privacy:** all state lives under `~/.contextd/`; no data is stored outside your machine beyond the per-file API calls.
 
@@ -48,7 +48,7 @@ After `contextd up` and a successful bootstrap, open Claude Desktop and call the
 
 ### File nodes vs Section nodes
 
-By default, each file in a corpus is indexed as a single `File` node with an AI-generated summary and a `voyage-3` embedding. This is **file-granular** mode.
+By default, each file in a corpus is indexed as a single `File` node with an AI-generated summary and a `voyage-4-large` embedding (1024-dim). This is **file-granular** mode.
 
 For heavily structured markdown corpora (long PRDs, specs, design docs), **section-granular** mode promotes each heading to a first-class `Section` node. Structural edges — `CONTAINS`, `PARENT_OF`, `NEXT_SIBLING` — model the document tree; AI infers semantic edges (`REFERENCES`, `DOCUMENTS`, `SUPERSEDES`, etc.) across section boundaries. Enable it with `--granularity section` in `add-corpus`.
 

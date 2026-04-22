@@ -36,7 +36,7 @@ class GeminiConfig(BaseModel):
 
 class VoyageConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    model: str = "voyage-3"
+    model: str = "voyage-4-large"
     max_batch_size: int = 128
 
 

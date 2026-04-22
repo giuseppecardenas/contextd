@@ -129,7 +129,7 @@ Migrations are forward-only; no rollback support.
 **Inference providers** (both via HTTPS):
 
 - `GeminiProvider` — Gemini Flash by default; used for file/section summarisation, relationship inference, and natural-language to Cypher translation. Configured via `GEMINI_API_KEY`.
-- `VoyageProvider` — Voyage AI `voyage-3` model (1024-dim); used for document and section embeddings. Configured via `VOYAGE_API_KEY`.
+- `VoyageProvider` — Voyage AI `voyage-4-large` model (1024-dim, 32k-token context per input; `voyage-3`, `voyage-3-large`, `voyage-code-3` are also registered for users who want to override via `[providers.voyage] model`). Used for document and section embeddings. Configured via `VOYAGE_API_KEY`.
 
 Both implement an ABC (`InferenceProvider` / `EmbeddingProvider`) defined in `contextd/providers/base.py`. Usage is logged to `~/.contextd/state/session-log/` via `CostLog`.
 

@@ -11,7 +11,7 @@ safety_block = "BLOCK_NONE"
 daily_budget = "unlimited"
 
 [providers.voyage]
-model = "voyage-3"
+model = "voyage-4-large"
 max_batch_size = 128
 
 [storage]

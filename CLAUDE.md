@@ -80,7 +80,7 @@ These constraints are enforced in CI and are load-bearing for correctness:
 - CLI: `click` + `rich` for TUI output
 - MCP: `mcp` SDK (stdio transport to Claude Desktop / Cursor)
 - Inference: `google-genai` SDK, Gemini Flash tier by default
-- Embeddings: `voyageai` SDK, `voyage-3` (1024-dim)
+- Embeddings: `voyageai` SDK, `voyage-4-large` (1024-dim)
 - Storage: `gqlalchemy` (Memgraph Bolt) / `neo4j-driver` 5.x (Neo4j Community), behind `GraphStore` ABC
 - Parsing: `markdown-it-py` for section extraction
 - Testing: `pytest` + `testcontainers-python` (Memgraph); VCR cassettes mock external APIs

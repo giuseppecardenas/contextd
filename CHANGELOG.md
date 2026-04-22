@@ -3,6 +3,19 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Changed
+
+- Default embedding model flipped `voyage-3` → `voyage-4-large` (still 1024-dim,
+  cosine, drop-in against the existing vector indexes). Higher Voyage free-tier
+  quota and 32k-token context per input (vs `voyage-3`'s 8k).
+- `[embedding] chunk_tokens` default raised `8000` → `32000` to match
+  `voyage-4-large`'s larger per-input context window — the chunker now only
+  splits genuinely very long inputs. Users who explicitly override to
+  `voyage-3` / `voyage-3-large` / `voyage-code-3` (still supported) should
+  lower `chunk_tokens` back to `8000` in their corpus TOML.
+
 ## [0.1.0] — 2026-04-21
 
 Initial alpha release.

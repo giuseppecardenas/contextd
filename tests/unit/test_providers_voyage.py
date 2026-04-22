@@ -5,7 +5,7 @@ from contextd.providers.voyage import VoyageProvider
 
 
 def test_embed_returns_vectors() -> None:
-    cfg = VoyageConfig(model="voyage-3", max_batch_size=128)
+    cfg = VoyageConfig(model="voyage-4-large", max_batch_size=128)
     mock_client = MagicMock()
     mock_result = MagicMock()
     mock_result.embeddings = [[0.1] * 1024, [0.2] * 1024]
@@ -20,7 +20,7 @@ def test_embed_returns_vectors() -> None:
 
 
 def test_batches_respect_max_batch_size() -> None:
-    cfg = VoyageConfig(model="voyage-3", max_batch_size=2)
+    cfg = VoyageConfig(model="voyage-4-large", max_batch_size=2)
     mock_client = MagicMock()
     mock_result = MagicMock()
     mock_result.embeddings = [[0.1] * 1024, [0.2] * 1024]
@@ -34,7 +34,7 @@ def test_batches_respect_max_batch_size() -> None:
 
 
 def test_retries_on_rate_limit() -> None:
-    cfg = VoyageConfig(model="voyage-3", max_batch_size=128)
+    cfg = VoyageConfig(model="voyage-4-large", max_batch_size=128)
     from voyageai.error import RateLimitError
 
     mock_client = MagicMock()
