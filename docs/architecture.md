@@ -66,6 +66,22 @@ The ABC surface:
 
 `src_label` and `dst_label` are advisory on both backends but are required for correct edge MERGE semantics on Neo4j.
 
+#### BackendCapabilities
+
+`BackendCapabilities` is a frozen dataclass returned by `GraphStore.capabilities`. Callers adapt behaviour via these flags rather than attempting an operation and reacting to failures.
+
+| Field | Type | Purpose |
+|---|---|---|
+| `name` | `BackendName` | `"memgraph"` or `"neo4j"` — identifies the active backend |
+| `concurrent_writers` | `int` | Maximum concurrent writers; `-1` means unlimited |
+| `supports_vector_index` | `bool` | Whether the backend exposes a native cosine-similarity vector index |
+| `supports_full_text_index` | `bool` | Whether the backend exposes a native full-text search index |
+| `supports_graph_algorithms` | `bool` | Whether built-in graph algorithm procedures (e.g. PageRank) are available |
+| `requires_docker` | `bool` | `True` for both current backends — they run as Docker containers |
+| `default_connection` | `str` | Default Bolt URI used by the factory when no config override is present |
+
+The `unlimited_writers` property returns `True` when `concurrent_writers == -1`.
+
 #### Primary-key map
 
 `contextd/storage/_keys.py` contains `PRIMARY_KEY_BY_LABEL` — the canonical label-to-PK-property mapping that mirrors the migration DDL for both backends. Both `upsert_node` and `delete_edges` implementations delegate PK lookups here. When a migration adds a new node label with a PK, this map must be updated in lock-step.

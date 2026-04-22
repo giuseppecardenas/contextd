@@ -62,13 +62,6 @@ overrides = "ontology.json"
 Points to `examples/runeledger-prd/ontology.json` for edge-label aliases (see below).
 
 ```toml
-[summarization]
-prompt_override = "prompts/summary.md"
-```
-
-Overrides the default summarise template with a Runeledger-specific prompt.
-
-```toml
 [mcp.tools]
 four_surface              = "tools/four_surface.cypher"
 find_dangling_registrations = "tools/dangling.cypher"
@@ -76,6 +69,13 @@ audit_stale_shas          = "tools/stale_shas.cypher"
 ```
 
 Registers three per-corpus MCP tools. After `contextd-mcp` starts, these appear as `runeledger-prd.four_surface`, `runeledger-prd.find_dangling_registrations`, and `runeledger-prd.audit_stale_shas`.
+
+```toml
+[summarization]
+prompt_override = "prompts/summary.md"
+```
+
+Overrides the default summarise template with a Runeledger-specific prompt.
 
 ---
 

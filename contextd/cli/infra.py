@@ -37,7 +37,7 @@ def _compose_file_for(cfg: Config) -> Path:
 
 @cli.command()
 def up() -> None:
-    """Start the storage backend and the indexer daemon."""
+    """Start the storage backend container and apply pending migrations."""
     cfg = _load_cfg()
     backend = cfg.storage.backend
 

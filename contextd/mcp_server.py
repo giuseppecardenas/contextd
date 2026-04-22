@@ -51,10 +51,21 @@ _GENERIC_TOOL_DESCRIPTORS: list[Tool] = [
     ),
     Tool(
         name="search",
-        description="Full-text search over summaries for ``kind`` (defaults to File).",
+        description="Full-text search over summaries for the given node kind (default: File).",
         inputSchema={
             "type": "object",
-            "properties": {"query": {"type": "string"}},
+            "properties": {
+                "query": {"type": "string"},
+                "kind": {
+                    "type": "string",
+                    "description": "Node label to search (default: File).",
+                },
+                "limit": {
+                    "type": "integer",
+                    "default": 20,
+                    "description": "Maximum rows to return.",
+                },
+            },
             "required": ["query"],
         },
     ),
