@@ -52,7 +52,7 @@ These are non-negotiable. Skipping them means working without context that's loa
 - **Remote:** `git@github.com:giuseppecardenas/contextd.git` (HTTPS form: `https://github.com/giuseppecardenas/contextd.git`)
 - **Local path:** `/home/giuseppe/src/contextd/`
 - **Branch:** `main` (single-branch project; all work lands here)
-- **Visibility:** currently private; flip to public at M13 per the plan
+- **Visibility:** currently private; public-flip intentionally **deferred past M13** (the v0.1.0 release ships on the private repo and is visible to collaborators only). See `docs/implementation-plan.md` §13.4's note for the one-shot `curl -X PATCH` invocation to apply when the flip actually happens.
 - **Auth:** global `credential.helper=store` reads `~/.git-credentials`; `git push origin main` / `git fetch origin` authenticate silently against github.com/giuseppecardenas. Rotate the PAT by editing that single line — git no longer consults `$GITHUB_PAT` (the env var is still exported in `~/.bashrc` for the `gh` CLI).
 
 ## Environment
