@@ -1,8 +1,9 @@
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
-from contextd.config import Config, ConfigError
+from contextd.config import Config, ConfigError, IndexerConfig
 
 
 def test_load_default_returns_valid_config() -> None:
@@ -14,6 +15,22 @@ def test_load_default_returns_valid_config() -> None:
     assert cfg.storage.neo4j.port == 7687
     assert cfg.inference.summary_max_words == 100
     assert cfg.indexer.debounce_seconds == 30
+    assert cfg.indexer.inference_concurrency == 1
+
+
+def test_inference_concurrency_override(tmp_path: Path) -> None:
+    user_cfg = tmp_path / "config.toml"
+    user_cfg.write_text("""
+[indexer]
+inference_concurrency = 7
+""")
+    cfg = Config.load(user_cfg)
+    assert cfg.indexer.inference_concurrency == 7
+
+
+def test_inference_concurrency_rejects_zero() -> None:
+    with pytest.raises(ValidationError):
+        IndexerConfig(inference_concurrency=0)
 
 
 def test_inference_summary_max_words_override(tmp_path: Path) -> None:

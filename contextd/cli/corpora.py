@@ -276,6 +276,7 @@ def index(corpus_name: str, bootstrap: bool, incremental: bool, estimate_only: b
                 inferrer=deps.inferrer,
                 hasher=deps.hasher,
                 entity_sampler=lambda _s: [],
+                inference_concurrency=cfg.indexer.inference_concurrency,
             )
             for phase in result.phases:
                 console.print(

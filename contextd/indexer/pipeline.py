@@ -74,6 +74,8 @@ def run_bootstrap(
     inferrer: RelationshipInferrer,
     hasher: FileHasher,
     entity_sampler: Callable[[GraphStore], list[str]],
+    *,
+    inference_concurrency: int = 1,
 ) -> BootstrapResult:
     files = enumerate_corpus_files(corpus)
     results: list[phases.PhaseResult] = []
@@ -96,8 +98,16 @@ def run_bootstrap(
         results.append(phases.phase_gc_sections(md_files, corpus, store))
         # Accounting phase: Section embeddings written at CREATE time.
         results.append(phases.phase_embed_sections(corpus, store))
-        results.append(phases.phase_summarise_sections(corpus, summariser, store))
-        results.append(phases.phase_relate_sections(corpus, inferrer, store, entity_sampler))
+        results.append(
+            phases.phase_summarise_sections(
+                corpus, summariser, store, concurrency=inference_concurrency
+            )
+        )
+        results.append(
+            phases.phase_relate_sections(
+                corpus, inferrer, store, entity_sampler, concurrency=inference_concurrency
+            )
+        )
         results.append(phases.phase_derive_file_level(corpus, store))
 
         # --- File-granular pipeline for non-.md files ---
@@ -106,8 +116,20 @@ def run_bootstrap(
                 phases.phase_enumerate(other_files, corpus.corpus.name, hasher, store, embedder)
             )
             results.append(phases.phase_embed(other_files))
-            results.append(phases.phase_summarise(other_files, summariser, store))
-            results.append(phases.phase_relate(other_files, inferrer, store, entity_sampler))
+            results.append(
+                phases.phase_summarise(
+                    other_files, summariser, store, concurrency=inference_concurrency
+                )
+            )
+            results.append(
+                phases.phase_relate(
+                    other_files,
+                    inferrer,
+                    store,
+                    entity_sampler,
+                    concurrency=inference_concurrency,
+                )
+            )
 
         results.append(phases.phase_close(corpus.corpus.name, store, results))
     else:
@@ -117,7 +139,13 @@ def run_bootstrap(
         results.append(phases.phase_enumerate(files, corpus.corpus.name, hasher, store, embedder))
         # phase_embed is an accounting-only pass (embedding already done in enumerate).
         results.append(phases.phase_embed(files))
-        results.append(phases.phase_summarise(files, summariser, store))
-        results.append(phases.phase_relate(files, inferrer, store, entity_sampler))
+        results.append(
+            phases.phase_summarise(files, summariser, store, concurrency=inference_concurrency)
+        )
+        results.append(
+            phases.phase_relate(
+                files, inferrer, store, entity_sampler, concurrency=inference_concurrency
+            )
+        )
         results.append(phases.phase_close(corpus.corpus.name, store, results))
     return BootstrapResult(phases=results)

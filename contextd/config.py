@@ -94,6 +94,7 @@ class IndexerConfig(BaseModel):
     debounce_seconds: int = 30
     git_lock_check: bool = True
     parallel_embedding_batches: int = 4
+    inference_concurrency: int = Field(default=1, ge=1)
 
 
 class McpConfig(BaseModel):

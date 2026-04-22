@@ -33,9 +33,11 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypeVar
 
 from contextd.corpus_config import CorpusConfig
 from contextd.indexer.hasher import FileHasher
@@ -48,12 +50,48 @@ from contextd.storage.base import GraphStore
 
 _log = logging.getLogger(__name__)
 
+_T = TypeVar("_T")
+
 
 @dataclass
 class PhaseResult:
     name: str
     processed: int
     skipped: int
+
+
+def _parallel_map(
+    items: Sequence[_T],
+    worker: Callable[[_T], tuple[int, int]],
+    concurrency: int,
+) -> tuple[int, int]:
+    """Run ``worker`` over ``items`` and sum the ``(processed, skipped)`` deltas.
+
+    When ``concurrency <= 1`` the iteration is sequential so call ordering
+    is preserved (matters for tests that assert on mock call order).
+    When ``concurrency > 1`` workers run in a ``ThreadPoolExecutor`` — the
+    inference-bound phases are I/O dominated (one HTTP round-trip to Gemini
+    per item) and both graph backends declare ``concurrent_writers=-1``, so
+    store writes in worker bodies are safe.
+
+    Exceptions from the inference call must be caught inside the worker
+    (matching the pre-existing "LLM error → skip, store error → fatal"
+    semantics); anything that escapes the worker here propagates.
+    """
+    processed = skipped = 0
+    if concurrency <= 1:
+        for item in items:
+            p, s = worker(item)
+            processed += p
+            skipped += s
+        return processed, skipped
+    with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        futures = [pool.submit(worker, item) for item in items]
+        for fut in as_completed(futures):
+            p, s = fut.result()
+            processed += p
+            skipped += s
+    return processed, skipped
 
 
 def phase_enumerate(
@@ -110,20 +148,22 @@ def phase_summarise(
     files: list[Path],
     summariser: Summariser,
     store: GraphStore,
+    *,
+    concurrency: int = 1,
 ) -> PhaseResult:
-    processed, skipped = 0, 0
-    for f in files:
+    def _worker(f: Path) -> tuple[int, int]:
         try:
             result = summariser.summarise(f.read_text(errors="replace"))
         except Exception:
-            skipped += 1
-            continue
+            return (0, 1)
         store.exec_write(
             "MATCH (n:File {path: $path}) "
             "SET n.summary = $summary, n.key_points = $key_points, n.summary_confidence = 1.0",
             {"path": str(f), "summary": result.summary, "key_points": result.key_points},
         )
-        processed += 1
+        return (1, 0)
+
+    processed, skipped = _parallel_map(files, _worker, concurrency)
     return PhaseResult(name="summarise", processed=processed, skipped=skipped)
 
 
@@ -132,20 +172,22 @@ def phase_relate(
     inferrer: RelationshipInferrer,
     store: GraphStore,
     entity_sampler: Callable[[GraphStore], list[str]],
+    *,
+    concurrency: int = 1,
 ) -> PhaseResult:
-    processed, skipped = 0, 0
     known = entity_sampler(store)
-    for f in files:
+
+    def _worker(f: Path) -> tuple[int, int]:
         try:
             relations = inferrer.infer(f.read_text(errors="replace"), known_entities=known)
         except Exception:
-            skipped += 1
-            continue
+            return (0, 1)
         # Wipe-and-replace inferred edges (spec §5.5).
         # src_label="File" required by GraphStore.delete_edges (see ABC
         # docstring) — a label-less MATCH is ambiguous when endpoints
         # have non-"path" PKs.
         store.delete_edges(str(f), origin="inferred", src_label="File")
+        local_skipped = 0
         for rel in relations:
             try:
                 pk = _infer_key(rel.target_type)
@@ -153,7 +195,7 @@ def phase_relate(
                 # Hallucinated target label — skip this edge rather than
                 # creating a malformed weak-entry node or aborting the
                 # whole batch.
-                skipped += 1
+                local_skipped += 1
                 continue
             store.upsert_node(rel.target_type, {pk: rel.target_name})
             # src_label/dst_label required by GraphStore.upsert_edge.
@@ -166,7 +208,9 @@ def phase_relate(
                 src_label="File",
                 dst_label=rel.target_type,
             )
-        processed += 1
+        return (1, local_skipped)
+
+    processed, skipped = _parallel_map(files, _worker, concurrency)
     return PhaseResult(name="relate", processed=processed, skipped=skipped)
 
 
@@ -387,6 +431,8 @@ def phase_summarise_sections(
     corpus_cfg: CorpusConfig,
     summariser: Summariser,
     store: GraphStore,
+    *,
+    concurrency: int = 1,
 ) -> PhaseResult:
     """Summarise each Section node via LLM (spec §5.11.3).
 
@@ -394,6 +440,10 @@ def phase_summarise_sections(
     section by anchor. On any exception (provider error, parse failure) the
     section is skipped and counted in skipped. Parse output is cached per
     file via ``_parse_cached`` so each file is parsed once per phase.
+
+    Under ``concurrency > 1`` the parse cache is pre-populated serially
+    before workers are dispatched; dict reads from multiple threads are
+    safe, dict writes are not.
     """
     rows = store.exec_read(
         "MATCH (s:Section {corpus: $c}) RETURN s.id AS id, s.path AS path",
@@ -401,20 +451,20 @@ def phase_summarise_sections(
     )
     parser = _build_parser(corpus_cfg)
     parse_cache: dict[str, list[ParsedSection]] = {}
-    processed, skipped = 0, 0
-    for r in rows:
+    for p in {Path(r["path"]) for r in rows}:
+        _parse_cached(parser, p, parse_cache)
+
+    def _worker(r: dict[str, str]) -> tuple[int, int]:
         path = Path(r["path"])
         sections = _parse_cached(parser, path, parse_cache)
         anchor = r["id"].split("#", 1)[1]
         sec = next((s for s in sections if s.anchor == anchor), None)
         if not sec:
-            skipped += 1
-            continue
+            return (0, 1)
         try:
             result = summariser.summarise(sec.body)
         except Exception:
-            skipped += 1
-            continue
+            return (0, 1)
         store.exec_write(
             "MATCH (s:Section {id: $id}) "
             "SET s.summary = $summary, s.key_points = $key_points, s.summary_confidence = 1.0",
@@ -424,7 +474,9 @@ def phase_summarise_sections(
                 "key_points": result.key_points,
             },
         )
-        processed += 1
+        return (1, 0)
+
+    processed, skipped = _parallel_map(rows, _worker, concurrency)
     return PhaseResult(name="summarise_sections", processed=processed, skipped=skipped)
 
 
@@ -433,6 +485,8 @@ def phase_relate_sections(
     inferrer: RelationshipInferrer,
     store: GraphStore,
     entity_sampler: Callable[[GraphStore], list[str]],
+    *,
+    concurrency: int = 1,
 ) -> PhaseResult:
     """Infer typed edges from each Section node (spec §5.11.3).
 
@@ -441,6 +495,9 @@ def phase_relate_sections(
     and ``dst_label=rel.target_type`` as required by ``GraphStore``. Parse
     output is cached per file via ``_parse_cached`` so each file is parsed
     once per phase.
+
+    Under ``concurrency > 1`` the parse cache is pre-populated serially
+    before workers are dispatched (see ``phase_summarise_sections``).
     """
     rows = store.exec_read(
         "MATCH (s:Section {corpus: $c}) RETURN s.id AS id, s.path AS path",
@@ -448,30 +505,31 @@ def phase_relate_sections(
     )
     parser = _build_parser(corpus_cfg)
     parse_cache: dict[str, list[ParsedSection]] = {}
+    for p in {Path(r["path"]) for r in rows}:
+        _parse_cached(parser, p, parse_cache)
     known = entity_sampler(store)
-    processed, skipped = 0, 0
-    for r in rows:
+
+    def _worker(r: dict[str, str]) -> tuple[int, int]:
         path = Path(r["path"])
         sections = _parse_cached(parser, path, parse_cache)
         anchor = r["id"].split("#", 1)[1]
         sec = next((s for s in sections if s.anchor == anchor), None)
         if not sec:
-            skipped += 1
-            continue
+            return (0, 1)
         try:
             relations = inferrer.infer(sec.body, known_entities=known)
         except Exception:
-            skipped += 1
-            continue
+            return (0, 1)
         # Wipe-and-replace inferred edges for this section (spec §5.5).
         store.delete_edges(r["id"], origin="inferred", src_label="Section")
+        local_skipped = 0
         for rel in relations:
             try:
                 pk = _infer_key(rel.target_type)
             except ValueError:
                 # Hallucinated target label — skip silently (see phase_relate
                 # for the same pattern in file-mode).
-                skipped += 1
+                local_skipped += 1
                 continue
             store.upsert_node(rel.target_type, {pk: rel.target_name})
             store.upsert_edge(
@@ -483,7 +541,9 @@ def phase_relate_sections(
                 src_label="Section",
                 dst_label=rel.target_type,
             )
-        processed += 1
+        return (1, local_skipped)
+
+    processed, skipped = _parallel_map(rows, _worker, concurrency)
     return PhaseResult(name="relate_sections", processed=processed, skipped=skipped)
 
 
