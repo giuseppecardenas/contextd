@@ -6,7 +6,7 @@ Contextd is a locally-hosted knowledge layer for your project files. It indexes 
 
 - **Storage:** Neo4j Community 5.x (default) or Memgraph 3.x — both run in Docker, both bind port 7687.
 - **Inference:** Google Gemini Flash for summarisation and relationship inference; Voyage AI `voyage-3` (1024-dim) for vector embeddings.
-- **Interface:** stdio MCP server (`contextd-mcp`), CLI (`contextd`), and an optional background indexer daemon (`contextd-indexer`).
+- **Interface:** stdio MCP server (`contextd-mcp`) and CLI (`contextd`).
 - **Privacy:** all state lives under `~/.contextd/`; no data is stored outside your machine beyond the per-file API calls.
 
 > **Status: alpha.** v0.1.0 is pre-PyPI. Use the dev install below. The repo is private while the final documentation milestone lands.
@@ -111,7 +111,7 @@ The `pipx` path is the intended production install once the package is published
 
 ## Usage walkthrough
 
-This walkthrough uses `examples/minimal-notes` — a 10-file personal-notes fixture included in the repo. The same steps apply to any corpus.
+This walkthrough uses `examples/minimal-notes` — a personal-notes fixture (10 note files + a README) included in the repo. The same steps apply to any corpus.
 
 ### Step 1 — First-run setup
 
@@ -171,11 +171,11 @@ Runs the five-phase bootstrap pipeline:
 Progress is printed per phase:
 
 ```
-found 10 files in corpus 'notes'
-  ✓ enumerate: processed=10 skipped=0
-  ✓ embed: processed=10 skipped=0
-  ✓ summarise: processed=10 skipped=0
-  ✓ relate: processed=10 skipped=0
+found 11 files in corpus 'notes'
+  ✓ enumerate: processed=11 skipped=0
+  ✓ embed: processed=11 skipped=0
+  ✓ summarise: processed=11 skipped=0
+  ✓ relate: processed=11 skipped=0
   ✓ close: processed=1 skipped=0
 ```
 
@@ -183,6 +183,12 @@ To preview token cost without indexing:
 
 ```bash
 contextd index notes --estimate-only
+```
+
+After the initial bootstrap, re-index only changed files with:
+
+```bash
+contextd index notes --incremental
 ```
 
 ### Step 5 — Query
@@ -195,7 +201,7 @@ Translates the question to Cypher via Gemini, runs the query, prints results as 
 
 ### Step 6 — Connect Claude Desktop
 
-Add `contextd-mcp` to your Claude Desktop config (see [MCP integration](#mcp-integration)). Once connected, call `describe_project` from the Claude Desktop interface. For a 10-note corpus you get something like:
+Add `contextd-mcp` to your Claude Desktop config (see [MCP integration](#mcp-integration)). Once connected, call `describe_project` from the Claude Desktop interface. For the minimal-notes corpus you get something like:
 
 ```json
 [
@@ -210,7 +216,9 @@ The tool returns up to 40 nodes ordered by inbound-citation count, each with its
 
 ## MCP integration
 
-Contextd exposes a stdio MCP server. Add it to your Claude Desktop config at `~/.config/claude-desktop/config.json` (Linux/WSL) or `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS):
+Contextd exposes a stdio MCP server. It works with any MCP-speaking client over stdio — Claude Desktop (macOS and Windows), Cursor (cross-platform), Zed, or your own MCP-compatible tooling. The `contextd-mcp` binary reads/writes JSON-RPC on stdin/stdout; consult your client's MCP config docs for how to register the server.
+
+**macOS (Claude Desktop)** — config at `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ```json
 {
@@ -223,7 +231,11 @@ Contextd exposes a stdio MCP server. Add it to your Claude Desktop config at `~/
 }
 ```
 
-If `contextd-mcp` is not on your PATH (e.g., in a venv), use the absolute path:
+**Windows (Claude Desktop)** — config at `%APPDATA%\Claude\claude_desktop_config.json` — same JSON structure as above.
+
+**Cursor / Zed / other clients** — register `contextd-mcp` as a stdio MCP server; consult your client's docs for the exact config format.
+
+If `contextd-mcp` is not on your PATH (e.g., when using a venv), use the absolute path to the binary:
 
 ```json
 {
@@ -241,7 +253,7 @@ If `contextd-mcp` is not on your PATH (e.g., in a venv), use the absolute path:
 | Tool | What it does |
 |---|---|
 | `describe_project` | Top-N File nodes by inbound-citation count with summaries. Accepts `corpus` and `n` (default 40). |
-| `search` | Full-text search over summaries. Accepts `query`. |
+| `search` | Full-text search over summaries. Accepts `query`, optional `kind` (node label, default `File`), optional `limit` (default 20). |
 | `related` | Outbound + inbound traversal within N hops (1–5). Accepts `node_id` and `depth` (default 2). |
 | `inbound` | What cites this node? Accepts `node_id`. |
 | `outbound` | What does this node cite? Accepts `node_id`. |
@@ -326,7 +338,7 @@ contextd costs --since 2026-04-01
 Contextd is a single-user local tool. Its security posture reflects that:
 
 - **API keys** (`GEMINI_API_KEY`, `VOYAGE_API_KEY`) are read from env vars at process startup. They are never written to disk by Contextd.
-- **Graph store** binds to `127.0.0.1:7687` only. Neither Neo4j nor Memgraph is exposed beyond the loophole interface in the default compose config.
+- **Graph store** binds to `127.0.0.1:7687` only. Neither Neo4j nor Memgraph is exposed beyond the loopback interface in the default compose config.
 - **MCP read-only guard.** The `query_graph` tool and all per-corpus Cypher tools pass through `assert_read_only` before execution. The guard rejects Cypher containing `CREATE`, `MERGE`, `DELETE`, `SET`, `REMOVE`, `DROP`, `DETACH`, `FOREACH`, and `CALL` with side-effecting procedures. This guards against prompt-injection attacks that attempt to write to the graph through the MCP surface.
 - **Do not expose Contextd's MCP server over a network.** It is designed for stdio transport to a locally-running MCP client. Running it as a shared network service is out of scope and untested.
 

@@ -50,7 +50,6 @@ dev = [
 [project.scripts]
 contextd = "contextd.cli:main"
 contextd-mcp = "contextd.mcp_server:main"
-contextd-indexer = "contextd.daemon:main"
 
 [project.urls]
 Homepage = "https://github.com/giuseppecardenas/contextd"
