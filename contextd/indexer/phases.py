@@ -186,6 +186,7 @@ def phase_relate(
     store: GraphStore,
     entity_sampler: Callable[[GraphStore], list[str]],
     *,
+    corpus: str,
     concurrency: int = 1,
 ) -> PhaseResult:
     # Idempotent resume: skip files whose File node carries an inferred_at
@@ -224,7 +225,11 @@ def phase_relate(
                 # whole batch.
                 local_skipped += 1
                 continue
-            store.upsert_node(rel.target_type, {pk: rel.target_name})
+            # Tag the auto-created destination with the current corpus so
+            # phase_gc_sections (and any future corpus-scoped cleanup) can
+            # see it. Without this, stubs MERGEd here carry only their PK
+            # and become untracked orphans with corpus=NULL.
+            store.upsert_node(rel.target_type, {pk: rel.target_name, "corpus": corpus})
             # src_label/dst_label required by GraphStore.upsert_edge.
             store.upsert_edge(
                 str(f),
@@ -570,7 +575,14 @@ def phase_relate_sections(
                 # for the same pattern in file-mode).
                 local_skipped += 1
                 continue
-            store.upsert_node(rel.target_type, {pk: rel.target_name})
+            # Tag the auto-created destination with the current corpus so
+            # phase_gc_sections (and any future corpus-scoped cleanup) can
+            # see it. Without this, stubs MERGEd here carry only their PK
+            # and become untracked orphans with corpus=NULL.
+            store.upsert_node(
+                rel.target_type,
+                {pk: rel.target_name, "corpus": corpus_cfg.corpus.name},
+            )
             store.upsert_edge(
                 r["id"],
                 rel.target_name,

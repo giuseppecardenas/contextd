@@ -129,7 +129,7 @@ def test_phase_relate_skips_files_with_inferred_at(tmp_path: Path) -> None:
     store = MagicMock()
     store.exec_read.return_value = [{"path": str(files[1])}]  # one already done
 
-    result = phase_relate(files, inferrer, store, entity_sampler=lambda _s: [])
+    result = phase_relate(files, inferrer, store, entity_sampler=lambda _s: [], corpus="c")
 
     assert result.processed == 3
     assert inferrer.infer.call_count == 3
@@ -142,12 +142,80 @@ def test_phase_relate_sets_inferred_at_after_successful_upsert(tmp_path: Path) -
     store = MagicMock()
     store.exec_read.return_value = []  # none already processed
 
-    phase_relate(files, inferrer, store, entity_sampler=lambda _s: [])
+    phase_relate(files, inferrer, store, entity_sampler=lambda _s: [], corpus="c")
 
     # Find the exec_write that set inferred_at.
     marker_calls = [c for c in store.exec_write.call_args_list if "SET f.inferred_at" in c.args[0]]
     assert len(marker_calls) == 1
     assert marker_calls[0].args[1]["path"] == str(files[0])
+
+
+def test_phase_relate_tags_auto_created_targets_with_corpus(tmp_path: Path) -> None:
+    """Regression: the inferrer-auto-created destination of each inferred edge
+    must carry the ``corpus`` property on MERGE so that it's reachable from
+    corpus-scoped queries. Previously the stub MERGE only set the PK, leaving
+    the destination untracked with corpus=NULL and invisible to
+    ``phase_gc_sections`` (which filters by corpus)."""
+    from contextd.inference.relate import InferredRelationship
+
+    files = _make_files(tmp_path, 1)
+    inferrer = MagicMock()
+    inferrer.infer.return_value = [
+        InferredRelationship(
+            edge_type="REFERENCES",
+            target_type="File",
+            target_name="other.md",
+            confidence=0.9,
+            reason="stub",
+        )
+    ]
+    store = MagicMock()
+    store.exec_read.return_value = []
+
+    phase_relate(files, inferrer, store, entity_sampler=lambda _s: [], corpus="runeledger")
+
+    # The upsert_node call for the auto-created target must include corpus.
+    target_upserts = [
+        c
+        for c in store.upsert_node.call_args_list
+        if c.args[0] == "File" and c.args[1].get("path") == "other.md"
+    ]
+    assert len(target_upserts) == 1, "auto-created target was not upserted"
+    assert target_upserts[0].args[1].get("corpus") == "runeledger", (
+        f"corpus property missing from auto-created stub: {target_upserts[0].args[1]}"
+    )
+
+
+def test_phase_relate_sections_tags_auto_created_targets_with_corpus(tmp_path: Path) -> None:
+    """Section-granular counterpart of the auto-created-target corpus-tag
+    regression. Same invariant: every inferred-edge target MERGEd here must
+    carry the current corpus name so GC and corpus-scoped queries can see it.
+    """
+    from contextd.inference.relate import InferredRelationship
+
+    corpus, rows = _make_section_corpus(tmp_path, 1, 1)
+    inferrer = MagicMock()
+    inferrer.infer.return_value = [
+        InferredRelationship(
+            edge_type="REFERENCES",
+            target_type="Pattern",
+            target_name="some_target",
+            confidence=0.9,
+            reason="stub",
+        )
+    ]
+    store = MagicMock()
+    store.exec_read.return_value = rows
+
+    phase_relate_sections(corpus, inferrer, store, entity_sampler=lambda _s: [])
+
+    target_upserts = [
+        c
+        for c in store.upsert_node.call_args_list
+        if c.args[0] == "Pattern" and c.args[1].get("name") == "some_target"
+    ]
+    assert len(target_upserts) == 1
+    assert target_upserts[0].args[1].get("corpus") == corpus.corpus.name
 
 
 def test_phase_relate_does_not_set_marker_on_llm_error(tmp_path: Path) -> None:
@@ -157,7 +225,7 @@ def test_phase_relate_does_not_set_marker_on_llm_error(tmp_path: Path) -> None:
     store = MagicMock()
     store.exec_read.return_value = []
 
-    result = phase_relate(files, inferrer, store, entity_sampler=lambda _s: [])
+    result = phase_relate(files, inferrer, store, entity_sampler=lambda _s: [], corpus="c")
 
     assert result.processed == 0
     assert result.skipped == 1

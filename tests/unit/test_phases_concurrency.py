@@ -119,7 +119,9 @@ def test_phase_relate_parallel_uses_multiple_threads(tmp_path: Path) -> None:
     inferrer, thread_ids = _tracking_inferrer(delay=0.05)
     store = MagicMock()
 
-    result = phase_relate(files, inferrer, store, entity_sampler=lambda _s: [], concurrency=4)
+    result = phase_relate(
+        files, inferrer, store, entity_sampler=lambda _s: [], corpus="c", concurrency=4
+    )
 
     assert result.processed == 6
     assert result.skipped == 0
@@ -131,7 +133,7 @@ def test_phase_relate_sequential_preserves_order(tmp_path: Path) -> None:
     inferrer, _ = _tracking_inferrer(delay=0)
     store = MagicMock()
 
-    phase_relate(files, inferrer, store, entity_sampler=lambda _s: [], concurrency=1)
+    phase_relate(files, inferrer, store, entity_sampler=lambda _s: [], corpus="c", concurrency=1)
 
     called = [c.args[0] for c in inferrer.infer.call_args_list]
     assert called == ["content-0", "content-1", "content-2"]

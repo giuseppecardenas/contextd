@@ -178,6 +178,7 @@ def run_bootstrap(
                     inferrer,
                     store,
                     entity_sampler,
+                    corpus=corpus.corpus.name,
                     concurrency=inference_concurrency,
                 )
             )
@@ -195,7 +196,12 @@ def run_bootstrap(
         )
         results.append(
             phases.phase_relate(
-                files, inferrer, store, entity_sampler, concurrency=inference_concurrency
+                files,
+                inferrer,
+                store,
+                entity_sampler,
+                corpus=corpus.corpus.name,
+                concurrency=inference_concurrency,
             )
         )
         results.append(phases.phase_close(corpus.corpus.name, store, results))
