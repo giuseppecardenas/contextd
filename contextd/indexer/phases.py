@@ -452,6 +452,40 @@ def phase_gc_sections(
     return PhaseResult(name="gc_sections", processed=len(stale), skipped=0)
 
 
+def _gc_sections_for_file(
+    path: Path,
+    corpus_cfg: CorpusConfig,
+    store: GraphStore,
+) -> int:
+    """GC stale Section nodes for a single file after incremental re-index.
+
+    Runs HeadingParser on *path*, queries Section nodes for this file, and
+    DETACH DELETEs any whose anchor is no longer produced by the parser
+    (renamed or deleted headings). Returns the count of deleted sections.
+
+    Called from run_incremental_file after phase_enumerate_sections so that
+    renamed headings are cleaned up without waiting for the next full bootstrap.
+    """
+    if path.suffix != ".md":
+        return 0
+    parser = _build_parser(corpus_cfg)
+    file_path = str(path)
+    current_ids: set[str] = {
+        f"{file_path}#{sec.anchor}" for sec in parser.parse(path.read_text(errors="replace"))
+    }
+    existing = store.exec_read(
+        "MATCH (s:Section {corpus: $corpus, path: $path}) RETURN s.id AS id",
+        {"corpus": corpus_cfg.corpus.name, "path": file_path},
+    )
+    stale = [r["id"] for r in existing if r["id"] not in current_ids]
+    for sid in stale:
+        store.exec_write(
+            "MATCH (s:Section {id: $id}) DETACH DELETE s",
+            {"id": sid},
+        )
+    return len(stale)
+
+
 def phase_embed_sections(corpus_cfg: CorpusConfig, store: GraphStore) -> PhaseResult:
     """Accounting phase: Section embeddings are written at CREATE time in
     phase_enumerate_sections. This phase counts rows and returns.
