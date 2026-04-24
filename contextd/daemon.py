@@ -15,6 +15,7 @@ import logging.handlers
 import os
 import queue
 import signal
+import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -22,6 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from contextd.indexer.checkpoint import Checkpoint, CheckpointStore
 from contextd.indexer.debouncer import DebouncedQueue
 from contextd.indexer.git_lock import branch_is_allowed, is_git_busy
 from contextd.indexer.hasher import FileHasher
@@ -78,6 +80,7 @@ def _handle_batch(
     inference_concurrency: int,
     incremental_workers: int,
     allowed_branches: list[str],
+    checkpoint_store: CheckpointStore | None = None,
 ) -> None:
     corpus_root = Path(corpus_entry.corpus_cfg.corpus.root)
     corpus_name = corpus_entry.corpus_cfg.corpus.name
@@ -93,9 +96,25 @@ def _handle_batch(
     if not changed:
         return
 
+    # Save initial checkpoint before dispatching — lets a crashed daemon know
+    # which files were in-flight on next startup.
+    if checkpoint_store is not None:
+        checkpoint_store.save(
+            corpus_name,
+            Checkpoint(
+                phase="incremental",
+                last_committed_batch=0,
+                last_committed_file=str(changed[0]),
+            ),
+        )
+
+    any_error = False
+    ckpt_lock = threading.Lock()
+
     def _process(path: Path) -> IncrementalResult | Exception:
+        nonlocal any_error
         try:
-            return run_incremental_file(
+            result = run_incremental_file(
                 path,
                 corpus_entry.corpus_cfg,
                 corpus_entry.store,
@@ -106,8 +125,20 @@ def _handle_batch(
                 corpus_entry.entity_sampler,
                 inference_concurrency=inference_concurrency,
             )
+            if checkpoint_store is not None:
+                with ckpt_lock:
+                    checkpoint_store.save(
+                        corpus_name,
+                        Checkpoint(
+                            phase="incremental",
+                            last_committed_batch=0,
+                            last_committed_file=str(path),
+                        ),
+                    )
+            return result
         except Exception as exc:
             _log.error("corpus %s: failed to index %s: %s", corpus_name, path, exc)
+            any_error = True
             return exc
 
     with ThreadPoolExecutor(max_workers=incremental_workers) as executor:
@@ -116,6 +147,9 @@ def _handle_batch(
             result = future.result()
             if isinstance(result, IncrementalResult):
                 _log.info("corpus %s: %s %s", corpus_name, result.action, result.path)
+
+    if not any_error and checkpoint_store is not None:
+        checkpoint_store.clear(corpus_name)
 
 
 def _write_pid(pid_path: Path, pid: int) -> None:

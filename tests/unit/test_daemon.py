@@ -285,3 +285,127 @@ def test_daemon_config_default_poll_interval() -> None:
 
     cfg = DaemonConfig(corpora=[])
     assert cfg.poll_interval_seconds == 1.0
+
+
+def test_handle_batch_saves_checkpoint_before_processing(tmp_path: Path) -> None:
+    from contextd.daemon import CorpusDaemonEntry, _handle_batch
+    from contextd.corpus_config import CorpusConfig
+    from contextd.indexer.hasher import FileHasher
+    from contextd.indexer.checkpoint import CheckpointStore
+    from contextd.indexer.pipeline import IncrementalResult
+
+    f = tmp_path / "a.md"
+    f.write_text("x")
+    corpus_cfg = CorpusConfig.model_validate({"corpus": {"name": "t", "root": str(tmp_path)}})
+    entry = CorpusDaemonEntry(
+        corpus_cfg=corpus_cfg,
+        store=MagicMock(),
+        hasher=FileHasher(),
+        embedder=MagicMock(),
+        summariser=MagicMock(),
+        inferrer=MagicMock(),
+        entity_sampler=lambda _s: [],
+    )
+    ckpt_store = MagicMock(spec=CheckpointStore)
+    call_order: list[str] = []
+    ckpt_store.save.side_effect = lambda *a, **kw: call_order.append("save")
+
+    with (
+        patch("contextd.daemon.branch_is_allowed", return_value=True),
+        patch("contextd.daemon.is_git_busy", return_value=False),
+        patch(
+            "contextd.daemon.run_incremental_file",
+            side_effect=lambda *a, **kw: (
+                call_order.append("rif"),
+                IncrementalResult("indexed", str(f)),
+            )[1],
+        ),
+    ):
+        _handle_batch(
+            [f],
+            entry,
+            inference_concurrency=1,
+            incremental_workers=1,
+            allowed_branches=[],
+            checkpoint_store=ckpt_store,
+        )
+
+    assert call_order[0] == "save"
+
+
+def test_handle_batch_clears_checkpoint_after_completion(tmp_path: Path) -> None:
+    from contextd.daemon import CorpusDaemonEntry, _handle_batch
+    from contextd.corpus_config import CorpusConfig
+    from contextd.indexer.hasher import FileHasher
+    from contextd.indexer.checkpoint import CheckpointStore
+    from contextd.indexer.pipeline import IncrementalResult
+
+    f = tmp_path / "a.md"
+    f.write_text("x")
+    corpus_cfg = CorpusConfig.model_validate({"corpus": {"name": "t", "root": str(tmp_path)}})
+    entry = CorpusDaemonEntry(
+        corpus_cfg=corpus_cfg,
+        store=MagicMock(),
+        hasher=FileHasher(),
+        embedder=MagicMock(),
+        summariser=MagicMock(),
+        inferrer=MagicMock(),
+        entity_sampler=lambda _s: [],
+    )
+    ckpt_store = MagicMock(spec=CheckpointStore)
+
+    with (
+        patch("contextd.daemon.branch_is_allowed", return_value=True),
+        patch("contextd.daemon.is_git_busy", return_value=False),
+        patch(
+            "contextd.daemon.run_incremental_file",
+            return_value=IncrementalResult("indexed", str(f)),
+        ),
+    ):
+        _handle_batch(
+            [f],
+            entry,
+            inference_concurrency=1,
+            incremental_workers=1,
+            allowed_branches=[],
+            checkpoint_store=ckpt_store,
+        )
+
+    ckpt_store.clear.assert_called_once_with("t")
+
+
+def test_handle_batch_does_not_clear_checkpoint_on_error(tmp_path: Path) -> None:
+    from contextd.daemon import CorpusDaemonEntry, _handle_batch
+    from contextd.corpus_config import CorpusConfig
+    from contextd.indexer.hasher import FileHasher
+    from contextd.indexer.checkpoint import CheckpointStore
+
+    f = tmp_path / "a.md"
+    f.write_text("x")
+    corpus_cfg = CorpusConfig.model_validate({"corpus": {"name": "t", "root": str(tmp_path)}})
+    entry = CorpusDaemonEntry(
+        corpus_cfg=corpus_cfg,
+        store=MagicMock(),
+        hasher=FileHasher(),
+        embedder=MagicMock(),
+        summariser=MagicMock(),
+        inferrer=MagicMock(),
+        entity_sampler=lambda _s: [],
+    )
+    ckpt_store = MagicMock(spec=CheckpointStore)
+
+    with (
+        patch("contextd.daemon.branch_is_allowed", return_value=True),
+        patch("contextd.daemon.is_git_busy", return_value=False),
+        patch("contextd.daemon.run_incremental_file", side_effect=RuntimeError("store down")),
+    ):
+        _handle_batch(
+            [f],
+            entry,
+            inference_concurrency=1,
+            incremental_workers=1,
+            allowed_branches=[],
+            checkpoint_store=ckpt_store,
+        )
+
+    ckpt_store.clear.assert_not_called()
