@@ -27,7 +27,11 @@ from contextd.indexer.checkpoint import Checkpoint, CheckpointStore
 from contextd.indexer.debouncer import DebouncedQueue
 from contextd.indexer.git_lock import branch_is_allowed, is_git_busy
 from contextd.indexer.hasher import FileHasher
-from contextd.indexer.pipeline import IncrementalResult, run_incremental_file
+from contextd.indexer.pipeline import (
+    IncrementalResult,
+    enumerate_corpus_files,
+    run_incremental_file,
+)
 from contextd.indexer.watcher import CorpusWatcher
 
 _log = logging.getLogger(__name__)
@@ -171,7 +175,7 @@ def _path_under(path: Path, root: Path) -> bool:
         return False
 
 
-def run_daemon(config: DaemonConfig) -> None:
+def run_daemon(config: DaemonConfig, *, checkpoint_store: CheckpointStore | None = None) -> None:
     relays: dict[str, queue.Queue[Path]] = {}
     stop_requested = False
 
@@ -182,11 +186,35 @@ def run_daemon(config: DaemonConfig) -> None:
     signal.signal(signal.SIGTERM, _on_stop)
     signal.signal(signal.SIGINT, _on_stop)
 
+    # Phase 1: create relays and debouncers (before crash-recovery and watcher setup)
     debouncers: dict[str, DebouncedQueue] = {}
     for entry in config.corpora:
         name = entry.corpus_cfg.corpus.name
         relays[name] = queue.Queue()
         debouncers[name] = DebouncedQueue(window_seconds=config.debounce_seconds)
+
+    # Phase 2: crash-recovery — re-queue files that were in-flight on last shutdown
+    if checkpoint_store is not None:
+        for entry in config.corpora:
+            name = entry.corpus_cfg.corpus.name
+            ckpt = checkpoint_store.load(name)
+            if ckpt is not None and ckpt.last_committed_file is not None:
+                _log.info(
+                    "corpus %s: crash recovery — replaying files since %s",
+                    name,
+                    ckpt.last_committed_file,
+                )
+                last_file = ckpt.last_committed_file
+                for f in enumerate_corpus_files(entry.corpus_cfg):
+                    try:
+                        if os.path.getmtime(f) >= os.path.getmtime(last_file):
+                            relays[name].put(f)
+                    except OSError:
+                        relays[name].put(f)
+
+    # Phase 3: start watchers
+    for entry in config.corpora:
+        name = entry.corpus_cfg.corpus.name
         root = Path(entry.corpus_cfg.corpus.root)
 
         def _make_callback(
@@ -216,6 +244,7 @@ def run_daemon(config: DaemonConfig) -> None:
                         inference_concurrency=config.inference_concurrency,
                         incremental_workers=config.incremental_workers,
                         allowed_branches=config.allowed_branches,
+                        checkpoint_store=checkpoint_store,
                     )
             time.sleep(config.poll_interval_seconds)
     finally:
@@ -270,6 +299,8 @@ def main() -> None:
     _write_pid(pid_path, os.getpid())
     _log.info("daemon started (pid=%d, corpora=%d)", os.getpid(), len(entries))
 
+    checkpoint_store = CheckpointStore(contextd_home() / "state" / "checkpoints")
+
     daemon_cfg = DaemonConfig(
         corpora=entries,
         debounce_seconds=float(cfg.indexer.debounce_seconds),
@@ -279,6 +310,6 @@ def main() -> None:
     )
 
     try:
-        run_daemon(daemon_cfg)
+        run_daemon(daemon_cfg, checkpoint_store=checkpoint_store)
     finally:
         pid_path.unlink(missing_ok=True)

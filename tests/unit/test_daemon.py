@@ -288,10 +288,10 @@ def test_daemon_config_default_poll_interval() -> None:
 
 
 def test_handle_batch_saves_checkpoint_before_processing(tmp_path: Path) -> None:
-    from contextd.daemon import CorpusDaemonEntry, _handle_batch
     from contextd.corpus_config import CorpusConfig
-    from contextd.indexer.hasher import FileHasher
+    from contextd.daemon import CorpusDaemonEntry, _handle_batch
     from contextd.indexer.checkpoint import CheckpointStore
+    from contextd.indexer.hasher import FileHasher
     from contextd.indexer.pipeline import IncrementalResult
 
     f = tmp_path / "a.md"
@@ -333,11 +333,11 @@ def test_handle_batch_saves_checkpoint_before_processing(tmp_path: Path) -> None
     assert call_order[0] == "save"
 
 
-def test_handle_batch_clears_checkpoint_after_completion(tmp_path: Path) -> None:
-    from contextd.daemon import CorpusDaemonEntry, _handle_batch
+def test_handle_batch_clears_checkpoint_after_batch_completes(tmp_path: Path) -> None:
     from contextd.corpus_config import CorpusConfig
-    from contextd.indexer.hasher import FileHasher
+    from contextd.daemon import CorpusDaemonEntry, _handle_batch
     from contextd.indexer.checkpoint import CheckpointStore
+    from contextd.indexer.hasher import FileHasher
     from contextd.indexer.pipeline import IncrementalResult
 
     f = tmp_path / "a.md"
@@ -375,10 +375,10 @@ def test_handle_batch_clears_checkpoint_after_completion(tmp_path: Path) -> None
 
 
 def test_handle_batch_does_not_clear_checkpoint_on_error(tmp_path: Path) -> None:
-    from contextd.daemon import CorpusDaemonEntry, _handle_batch
     from contextd.corpus_config import CorpusConfig
-    from contextd.indexer.hasher import FileHasher
+    from contextd.daemon import CorpusDaemonEntry, _handle_batch
     from contextd.indexer.checkpoint import CheckpointStore
+    from contextd.indexer.hasher import FileHasher
 
     f = tmp_path / "a.md"
     f.write_text("x")
