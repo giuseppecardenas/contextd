@@ -114,6 +114,111 @@ def _wipe_for_refresh(corpus: CorpusConfig, store: GraphStore, scope: RefreshSco
         store.exec_write("MATCH (n:Corpus {name: $c}) DETACH DELETE n", {"c": c})
 
 
+@dataclass
+class IncrementalResult:
+    action: str  # "indexed" | "deleted" | "skipped"
+    path: str
+
+
+def _clear_file_for_reindex(path: Path, store: GraphStore) -> None:
+    """Wipe per-file markers so IS-NULL guards re-process the file on next pass.
+
+    Order: delete inferred edges first (edge cleanup must precede marker
+    removal so a crash between the two leaves the file in a retry-able state),
+    then REMOVE inferred_at, then REMOVE summary/key_points/summary_confidence.
+    REMOVE on a missing property is a no-op on both backends.
+    """
+    file_path = str(path)
+    store.delete_edges(file_path, origin="inferred", src_label="File")
+    store.exec_write(
+        "MATCH (f:File {path: $path}) REMOVE f.inferred_at",
+        {"path": file_path},
+    )
+    store.exec_write(
+        "MATCH (f:File {path: $path}) REMOVE f.summary, f.key_points, f.summary_confidence",
+        {"path": file_path},
+    )
+
+
+def _clear_sections_for_reindex(path: Path, store: GraphStore, corpus: str) -> None:
+    """Wipe per-section markers for a single file (section-granular mode only)."""
+    file_path = str(path)
+    store.exec_write(
+        "MATCH (s:Section {corpus: $corpus, path: $path})-[r]-() "
+        "WHERE r.origin = 'inferred' DELETE r",
+        {"corpus": corpus, "path": file_path},
+    )
+    store.exec_write(
+        "MATCH (s:Section {corpus: $corpus, path: $path}) "
+        "REMOVE s.inferred_at, s.summary, s.key_points, s.summary_confidence",
+        {"corpus": corpus, "path": file_path},
+    )
+
+
+def run_incremental_file(
+    path: Path,
+    corpus: CorpusConfig,
+    store: GraphStore,
+    hasher: FileHasher,
+    embedder: EmbeddingProvider,
+    summariser: Summariser,
+    inferrer: RelationshipInferrer,
+    entity_sampler: Callable[[GraphStore], list[str]],
+    *,
+    inference_concurrency: int = 1,
+) -> IncrementalResult:
+    """Re-index a single changed file or record its deletion.
+
+    Deletion path: path absent → DETACH DELETE File (+ Sections for
+    section-granular .md) → return action='deleted'.
+
+    Update path: clear stale markers → run applicable phases → return
+    action='indexed'. Phase functions with IS-NULL guards process only the
+    cleared file; other corpus files already have their markers set and are
+    skipped cheaply.
+    """
+    file_path = str(path)
+
+    if not path.exists():
+        if corpus.corpus.granularity == "section" and path.suffix == ".md":
+            store.exec_write(
+                "MATCH (f:File {path: $path})-[:CONTAINS]->(s:Section) DETACH DELETE s",
+                {"path": file_path},
+            )
+        store.exec_write(
+            "MATCH (f:File {path: $path}) DETACH DELETE f",
+            {"path": file_path},
+        )
+        return IncrementalResult(action="deleted", path=file_path)
+
+    _clear_file_for_reindex(path, store)
+
+    if corpus.corpus.granularity == "section" and path.suffix == ".md":
+        _clear_sections_for_reindex(path, store, corpus.corpus.name)
+        phases.phase_enumerate_sections([path], corpus, store, embedder, hasher)
+        phases._gc_sections_for_file(path, corpus, store)
+        phases.phase_summarise_sections(
+            corpus, summariser, store, concurrency=inference_concurrency
+        )
+        phases.phase_relate_sections(
+            corpus, inferrer, store, entity_sampler, concurrency=inference_concurrency
+        )
+        phases._derive_file_level_for_path(path, corpus, store)
+    else:
+        phases.phase_enumerate([path], corpus.corpus.name, hasher, store, embedder)
+        phases.phase_summarise([path], summariser, store, concurrency=inference_concurrency)
+        phases.phase_relate(
+            [path],
+            inferrer,
+            store,
+            entity_sampler,
+            corpus=corpus.corpus.name,
+            concurrency=inference_concurrency,
+        )
+
+    return IncrementalResult(action="indexed", path=file_path)
+
+
 def run_bootstrap(
     corpus: CorpusConfig,
     store: GraphStore,
