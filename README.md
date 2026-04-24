@@ -29,7 +29,7 @@ export VOYAGE_API_KEY=<your-key>
 # 3. First-run wizard — creates ~/.contextd/ layout
 contextd init
 
-# 4. Start the storage backend (Neo4j by default)
+# 4. Start the storage backend + indexer daemon
 contextd up
 
 # 5. Register a corpus and index it
@@ -200,7 +200,19 @@ contextd index notes --estimate-only
 contextd index notes --bootstrap --refresh llm       # e.g. after a prompt change
 ```
 
-(Hash-based incremental re-index — re-running only files whose content changed — is on the roadmap but not yet wired; `--incremental` currently prints a not-yet-implemented warning.)
+**Incremental re-index (one-shot).** To re-index only files that have changed since the last run:
+
+```bash
+contextd index notes --incremental
+```
+
+Scans every file in the corpus, uses MD5 hashing to skip unchanged files, and re-processes only what changed. Output:
+
+```
+  ✓ incremental scan complete: indexed=2 deleted=0 skipped=9
+```
+
+For continuous watching, use the daemon — see [Incremental indexer daemon](#incremental-indexer-daemon) below.
 
 ### Step 5 — Query
 
@@ -282,6 +294,64 @@ See [docs/mcp.md](docs/mcp.md) for the full tool reference.
 
 ---
 
+## Incremental indexer daemon
+
+`contextd up` starts both the graph backend **and** a background file-watching daemon (`contextd-indexer`). The daemon monitors every registered corpus root for file changes and re-indexes modified files automatically — no manual `contextd index` calls needed after the initial bootstrap.
+
+### Lifecycle
+
+```bash
+contextd up        # start graph backend + indexer daemon
+contextd status    # show daemon state (pid, uptime, corpora)
+contextd down      # stop daemon + graph backend
+```
+
+`contextd status` tries the IPC socket first for live runtime info, and falls back to the PID file if the daemon is not reachable:
+
+```
+backend:  neo4j running at 127.0.0.1:7687
+daemon:   running (pid=12345, uptime=42s, corpora=['notes'])
+```
+
+### How it works
+
+1. A `CorpusWatcher` (inotify / FSEvents) fires on every file change under the corpus root.
+2. Events are collected by a `DebouncedQueue` with a configurable window (default 30 s) to batch rapid edits into a single pass.
+3. After the window closes, the daemon runs MD5 checks to skip files whose content did not actually change.
+4. Changed files are re-indexed concurrently (default 4 workers) by calling the same phase pipeline as `--incremental`.
+5. **Crash recovery:** before processing each batch, a checkpoint is written. If the daemon is killed mid-batch, the next startup replays any in-flight files. Paths that fail indexing are buffered to `~/.contextd/state/pending-upserts.jsonl` and retried on the next start.
+
+### Branch gate
+
+If you check out a remote branch for comparison, the daemon would re-index every differing file — potentially hundreds of Gemini calls against a scratch branch. The `allowed_branches` gate prevents this:
+
+```toml
+# ~/.contextd/config.toml
+[indexer]
+allowed_branches = ["main", "develop"]
+```
+
+When the corpus repo's active branch is not in the list, both the daemon and `contextd index --incremental` skip all work and log a warning. An empty list (the default) allows all branches.
+
+Detached HEAD is always blocked when a whitelist is configured (a comparison checkout puts the repo in detached HEAD state).
+
+### Tuning
+
+```toml
+[indexer]
+debounce_seconds    = 30   # seconds to wait after the last event before dispatching a batch
+incremental_workers = 4    # concurrent file workers per batch (distinct from inference_concurrency)
+inference_concurrency = 1  # LLM call parallelism within each file's summarise+relate phases
+
+[logging]
+max_log_bytes  = 10485760  # 10 MB per log file; 0 disables rotation
+log_backup_count = 5       # number of rotated files to keep
+```
+
+The daemon writes only to the configured log file (`~/.contextd/logs/contextd.log` by default) — no terminal output — so these rotation settings matter for long-running installs.
+
+---
+
 ## Ontology customisation
 
 The base ontology is intentionally general. Domain-specific corpora map their vocabulary to Contextd's canonical node and edge types through two mechanisms:
@@ -318,17 +388,19 @@ embedding = "voyage"
 summary_max_words = 100
 
 [indexer]
-debounce_seconds = 30
+debounce_seconds       = 30   # seconds to collect FS events before dispatching a batch
 parallel_embedding_batches = 4
-inference_concurrency = 1   # ThreadPoolExecutor workers for summarise+relate;
-                            # raise to parallelise Gemini calls. The model's
-                            # RPM quota is usually the binding cap — e.g. 5
-                            # is a good default for Gemma free-tier (15 RPM).
+inference_concurrency  = 1    # LLM call parallelism (summarise+relate); 5 is a good
+                              # default for Gemma free-tier (15 RPM quota)
+incremental_workers    = 4    # concurrent file workers per incremental batch
+allowed_branches       = []   # whitelist; empty = allow all branches
 
 [logging]
-level = "info"
-format = "json"
-path = "~/.contextd/logs/contextd.log"
+level          = "info"
+format         = "json"
+path           = "~/.contextd/logs/contextd.log"
+max_log_bytes  = 10485760   # 10 MB; 0 = no rotation
+log_backup_count = 5
 ```
 
 Full corpus config schema and CLI reference live in [docs/cli.md](docs/cli.md).
@@ -360,6 +432,19 @@ Contextd is a single-user local tool. Its security posture reflects that:
 - **Graph store** binds to `127.0.0.1:7687` only. Neither Neo4j nor Memgraph is exposed beyond the loopback interface in the default compose config.
 - **MCP read-only guard.** The `query_graph` tool and all per-corpus Cypher tools pass through `assert_read_only` before execution. The guard rejects Cypher containing `CREATE`, `MERGE`, `DELETE`, `SET`, `REMOVE`, `DROP`, `DETACH`, `FOREACH`, and `CALL` with side-effecting procedures. This guards against prompt-injection attacks that attempt to write to the graph through the MCP surface.
 - **Do not expose Contextd's MCP server over a network.** It is designed for stdio transport to a locally-running MCP client. Running it as a shared network service is out of scope and untested.
+
+---
+
+## Roadmap / Known gaps
+
+Items that are designed and partially built but not yet wired or shipped:
+
+| Gap | Detail |
+|---|---|
+| **Hybrid search** | `search()` is full-text only. Vector-similarity fallback (hybrid ranking) is deferred; callers needing vector-space matches can call `GraphStore.vector_search` directly for now. |
+| **`CONTEXTD_INFERENCE_DAILY_BUDGET`** | The design specifies an env var cap on daily Gemini calls. Not implemented; manual cost monitoring via `contextd costs` is the current guard. |
+| **Per-corpus MCP tool `$` false positives** | `extract_placeholders` uses a simple regex and will match `$` inside Cypher string literals as spurious parameters. Proper Cypher tokenisation is deferred. |
+| **Stale `CheckpointStore` entries on incremental section refresh** | If an incremental re-index refreshes sections in a section-granular corpus, existing checkpoint entries for the affected file are not invalidated. They will report the old phase state until the next full bootstrap. (`contextd/indexer/phases.py` `TODO(M9-followup)`) |
 
 ---
 
