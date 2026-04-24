@@ -112,11 +112,10 @@ def _handle_batch(
             ),
         )
 
-    any_error = False
+    error_event = threading.Event()
     ckpt_lock = threading.Lock()
 
     def _process(path: Path) -> IncrementalResult | Exception:
-        nonlocal any_error
         try:
             result = run_incremental_file(
                 path,
@@ -142,7 +141,7 @@ def _handle_batch(
             return result
         except Exception as exc:
             _log.error("corpus %s: failed to index %s: %s", corpus_name, path, exc)
-            any_error = True
+            error_event.set()
             return exc
 
     with ThreadPoolExecutor(max_workers=incremental_workers) as executor:
@@ -152,7 +151,7 @@ def _handle_batch(
             if isinstance(result, IncrementalResult):
                 _log.info("corpus %s: %s %s", corpus_name, result.action, result.path)
 
-    if not any_error and checkpoint_store is not None:
+    if not error_event.is_set() and checkpoint_store is not None:
         checkpoint_store.clear(corpus_name)
 
 

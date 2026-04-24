@@ -330,7 +330,7 @@ def test_handle_batch_saves_checkpoint_before_processing(tmp_path: Path) -> None
             checkpoint_store=ckpt_store,
         )
 
-    assert call_order[0] == "save"
+    assert call_order == ["save", "rif", "save"]
 
 
 def test_handle_batch_clears_checkpoint_after_batch_completes(tmp_path: Path) -> None:
