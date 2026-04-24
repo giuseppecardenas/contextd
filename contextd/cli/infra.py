@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import contextlib
+import os
 import shutil
+import signal
 import subprocess
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -15,6 +19,53 @@ from contextd.cli._shared import _load_cfg, console
 
 if TYPE_CHECKING:
     from contextd.config import Config
+
+
+# ---------------------------------------------------------------------------
+# Daemon lifecycle helpers
+# ---------------------------------------------------------------------------
+
+
+def _pid_path() -> Path:
+    return contextd_home() / "state" / "indexer.pid"
+
+
+def _write_pid(pid_path: Path, pid: int) -> None:
+    pid_path.write_text(str(pid))
+
+
+def _daemon_pid() -> int | None:
+    try:
+        return int(_pid_path().read_text().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def _daemon_is_running(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except (OSError, ProcessLookupError):
+        return False
+
+
+def _stop_daemon() -> None:
+    pid = _daemon_pid()
+    if pid is None:
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+        for _ in range(50):  # wait up to 5s
+            time.sleep(0.1)
+            if not _daemon_is_running(pid):
+                break
+        else:
+            with contextlib.suppress(OSError, ProcessLookupError):
+                os.kill(pid, signal.SIGKILL)
+    except (OSError, ProcessLookupError):
+        pass
+    finally:
+        _pid_path().unlink(missing_ok=True)
 
 
 def _compose_file_for(cfg: Config) -> Path:
@@ -78,12 +129,26 @@ def up() -> None:
         console.print("[green]✓[/] migrations applied")
     finally:
         store.close()
+
+    # Launch the incremental indexer daemon.
+    state_dir = contextd_home() / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    proc = subprocess.Popen(
+        ["contextd-indexer"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    _pid_path().write_text(str(proc.pid))
+    console.print(f"[green]✓[/] indexer daemon launched (pid={proc.pid})")
     console.print("[bold]ready[/]")
 
 
 @cli.command()
 def down() -> None:
     """Stop the storage backend and indexer."""
+    _stop_daemon()
+    console.print("[green]✓[/] indexer daemon stopped")
     cfg = _load_cfg()
     backend = cfg.storage.backend
     compose_file = _compose_file_for(cfg)
@@ -115,3 +180,10 @@ def status() -> None:
             console.print(f"  - {c.stem}")
     else:
         console.print("[bold]corpora:[/] none (run `contextd init`)")
+    pid = _daemon_pid()
+    if pid is not None and _daemon_is_running(pid):
+        console.print(f"[bold]daemon:[/] running (pid={pid})")
+    else:
+        console.print("[bold]daemon:[/] not running")
+        if pid is not None:
+            _pid_path().unlink(missing_ok=True)

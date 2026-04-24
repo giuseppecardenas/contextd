@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import signal
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from click.testing import CliRunner
@@ -55,9 +56,12 @@ def test_up_memgraph_calls_docker_compose(tmp_path: Path, monkeypatch: pytest.Mo
     # Mock shutil.which so the test is deterministic regardless of whether
     # the runner has docker on PATH — mirrors test_up_neo4j_calls_compose_with_profile.
     monkeypatch.setattr("shutil.which", lambda _x: "/usr/bin/docker")
+    fake_proc = MagicMock()
+    fake_proc.pid = 12345
     with (
         patch("subprocess.run") as mock_run,
         patch("contextd.storage.factory.build_graph_store") as mock_build,
+        patch("contextd.cli.infra.subprocess.Popen", return_value=fake_proc),
     ):
         mock_run.return_value.returncode = 0
         fake_store = mock_build.return_value
@@ -124,7 +128,12 @@ def test_up_neo4j_calls_compose_with_profile(
     monkeypatch.setattr("shutil.which", lambda _x: "/usr/bin/docker")
 
     # Stub backend connect/migrate path so the test exercises CLI dispatch only.
-    with patch("contextd.storage.factory.build_graph_store") as mock_build:
+    fake_proc = MagicMock()
+    fake_proc.pid = 12345
+    with (
+        patch("contextd.storage.factory.build_graph_store") as mock_build,
+        patch("contextd.cli.infra.subprocess.Popen", return_value=fake_proc),
+    ):
         fake_store = mock_build.return_value
         fake_store.connect.return_value = None
         fake_store.apply_migrations.return_value = None
@@ -135,3 +144,64 @@ def test_up_neo4j_calls_compose_with_profile(
     # At least one docker compose call with --profile neo4j and `up`.
     compose_calls = [c for c in calls if "compose" in c]
     assert any("--profile" in c and "neo4j" in c and "up" in c for c in compose_calls)
+
+
+# ---------------------------------------------------------------------------
+# Task 14.4 — daemon lifecycle helpers
+# ---------------------------------------------------------------------------
+
+
+def test_up_writes_pid_file(tmp_path: Path) -> None:
+    from contextd.cli.infra import _write_pid
+
+    pid_file = tmp_path / "indexer.pid"
+    with patch("contextd.cli.infra._pid_path", return_value=pid_file):
+        _write_pid(pid_file, 77777)
+    assert pid_file.read_text().strip() == "77777"
+
+
+def test_down_sends_sigterm_to_daemon(tmp_path: Path) -> None:
+    from contextd.cli.infra import _stop_daemon
+
+    pid_file = tmp_path / "indexer.pid"
+    pid_file.write_text("99999")
+
+    with (
+        patch("contextd.cli.infra._pid_path", return_value=pid_file),
+        patch("os.kill") as mock_kill,
+        patch("os.waitpid", side_effect=ChildProcessError),
+    ):
+        _stop_daemon()
+
+    sigterm_calls = [c for c in mock_kill.call_args_list if c[0][1] == signal.SIGTERM]
+    assert sigterm_calls
+
+
+def test_down_removes_pid_file(tmp_path: Path) -> None:
+    from contextd.cli.infra import _stop_daemon
+
+    pid_file = tmp_path / "indexer.pid"
+    pid_file.write_text("99999")
+
+    with (
+        patch("contextd.cli.infra._pid_path", return_value=pid_file),
+        patch("os.kill"),
+        patch("os.waitpid", side_effect=ChildProcessError),
+    ):
+        _stop_daemon()
+
+    assert not pid_file.exists()
+
+
+def test_down_is_safe_with_no_pid_file(tmp_path: Path) -> None:
+    from contextd.cli.infra import _stop_daemon
+
+    with patch("contextd.cli.infra._pid_path", return_value=tmp_path / "missing.pid"):
+        _stop_daemon()  # must not raise
+
+
+def test_daemon_pid_returns_none_on_missing(tmp_path: Path) -> None:
+    from contextd.cli.infra import _daemon_pid
+
+    with patch("contextd.cli.infra._pid_path", return_value=tmp_path / "none.pid"):
+        assert _daemon_pid() is None
