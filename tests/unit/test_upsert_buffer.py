@@ -18,7 +18,7 @@ def test_append_creates_jsonl_file(tmp_path: Path) -> None:
     assert record == {"path": "/some/file.md", "corpus": "my-corpus"}
 
 
-def test_append_is_idempotent_for_same_path(tmp_path: Path) -> None:
+def test_append_accumulates_duplicate_paths(tmp_path: Path) -> None:
     from contextd.indexer.upsert_buffer import PendingUpsertBuffer
 
     buf = PendingUpsertBuffer(tmp_path / "pending-upserts.jsonl")
@@ -141,3 +141,16 @@ def test_replay_returns_correct_counts(tmp_path: Path) -> None:
 
     assert succeeded == 2
     assert failed == 1
+
+
+def test_replay_retains_entry_when_corpus_not_found(tmp_path: Path) -> None:
+    from contextd.indexer.upsert_buffer import PendingUpsertBuffer
+
+    buf = PendingUpsertBuffer(tmp_path / "buf.jsonl")
+    buf.append(Path("/some/file.md"), "missing-corpus")
+    succeeded, failed = buf.replay(corpus_lookup=lambda _: None)
+    assert succeeded == 0
+    assert failed == 1
+    records = buf.load()
+    assert len(records) == 1
+    assert records[0]["corpus"] == "missing-corpus"

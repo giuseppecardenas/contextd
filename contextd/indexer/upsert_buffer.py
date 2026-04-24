@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -30,15 +31,17 @@ class PendingUpsertBuffer:
 
     def __init__(self, buffer_path: Path) -> None:
         self._buffer_path = buffer_path
+        self._lock = threading.Lock()
 
     def append(self, path: Path, corpus_name: str) -> None:
-        """Append a failed-path record atomically (atomic via tmp + os.replace)."""
-        records = self.load()
-        records.append({"path": str(path), "corpus": corpus_name})
-        tmp = self._buffer_path.with_suffix(".tmp")
-        self._buffer_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp.write_text("\n".join(json.dumps(r) for r in records) + "\n")
-        os.replace(tmp, self._buffer_path)
+        """Append a failed-path record; safe to call from concurrent threads."""
+        with self._lock:
+            records = self.load()
+            records.append({"path": str(path), "corpus": corpus_name})
+            tmp = self._buffer_path.with_suffix(".tmp")
+            self._buffer_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp.write_text("\n".join(json.dumps(r) for r in records) + "\n")
+            os.replace(tmp, self._buffer_path)
 
     def load(self) -> list[dict[str, str]]:
         """Read all buffered records; return [] if file absent or corrupt line."""
@@ -103,6 +106,7 @@ class PendingUpsertBuffer:
                 failed_records.append(rec)
         if failed_records:
             tmp = self._buffer_path.with_suffix(".tmp")
+            self._buffer_path.parent.mkdir(parents=True, exist_ok=True)
             tmp.write_text("\n".join(json.dumps(r) for r in failed_records) + "\n")
             os.replace(tmp, self._buffer_path)
         else:
