@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import time
 from pathlib import Path
@@ -28,6 +30,26 @@ if TYPE_CHECKING:
 
 def _pid_path() -> Path:
     return contextd_home() / "state" / "indexer.pid"
+
+
+def _query_ipc_status() -> dict[str, object] | None:
+    """Try to read richer daemon state via the IPC socket.
+
+    Returns the parsed status dict on success, or None if the socket is
+    absent, connection is refused, or the round-trip takes longer than 1s.
+    """
+    sock_path = contextd_home() / "ipc.sock"
+    if not sock_path.exists():
+        return None
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(1.0)
+            s.connect(str(sock_path))
+            s.sendall((json.dumps({"cmd": "status"}) + "\n").encode())
+            raw = s.recv(4096).decode().strip()
+        return dict(json.loads(raw))
+    except Exception:
+        return None
 
 
 def _write_pid(pid_path: Path, pid: int) -> None:
@@ -180,10 +202,20 @@ def status() -> None:
             console.print(f"  - {c.stem}")
     else:
         console.print("[bold]corpora:[/] none (run `contextd init`)")
-    pid = _daemon_pid()
-    if pid is not None and _daemon_is_running(pid):
-        console.print(f"[bold]daemon:[/] running (pid={pid})")
+    ipc_status = _query_ipc_status()
+    if ipc_status is not None:
+        ipc_pid = ipc_status.get("pid")
+        ipc_uptime = ipc_status.get("uptime_seconds")
+        ipc_corpora = ipc_status.get("corpora", [])
+        console.print(
+            f"[bold]daemon:[/] running "
+            f"(pid={ipc_pid}, uptime={ipc_uptime}s, corpora={ipc_corpora!r})"
+        )
     else:
-        console.print("[bold]daemon:[/] not running")
-        if pid is not None:
-            _pid_path().unlink(missing_ok=True)
+        pid = _daemon_pid()
+        if pid is not None and _daemon_is_running(pid):
+            console.print(f"[bold]daemon:[/] running (pid={pid})")
+        else:
+            console.print("[bold]daemon:[/] not running")
+            if pid is not None:
+                _pid_path().unlink(missing_ok=True)

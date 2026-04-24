@@ -183,13 +183,13 @@ def run_daemon(
     *,
     checkpoint_store: CheckpointStore | None = None,
     upsert_buffer: PendingUpsertBuffer | None = None,
+    ipc_socket_path: Path | None = None,
 ) -> None:
     relays: dict[str, queue.Queue[Path]] = {}
-    stop_requested = False
+    stop_event = threading.Event()
 
     def _on_stop(signum: int, frame: object) -> None:
-        nonlocal stop_requested
-        stop_requested = True
+        stop_event.set()
 
     signal.signal(signal.SIGTERM, _on_stop)
     signal.signal(signal.SIGINT, _on_stop)
@@ -239,8 +239,23 @@ def run_daemon(
         entry.watcher.start()
         _log.info("watching corpus %s at %s", name, root)
 
+    # Phase 4: start IPC server (if a socket path was provided)
+    ipc_server = None
+    if ipc_socket_path is not None:
+        from contextd.daemon_ipc import IpcServer
+
+        corpus_names = [e.corpus_cfg.corpus.name for e in config.corpora]
+        ipc_server = IpcServer(
+            socket_path=ipc_socket_path,
+            stop_event=stop_event,
+            pid=os.getpid(),
+            corpora=corpus_names,
+            start_time=time.time(),
+        )
+        ipc_server.start()
+
     try:
-        while not stop_requested:
+        while not stop_event.is_set():
             for entry in config.corpora:
                 name = entry.corpus_cfg.corpus.name
                 _drain_relay_into_debouncer(relays[name], debouncers[name])
@@ -257,6 +272,8 @@ def run_daemon(
                     )
             time.sleep(config.poll_interval_seconds)
     finally:
+        if ipc_server is not None:
+            ipc_server.stop()
         for entry in config.corpora:
             if entry.watcher is not None:
                 entry.watcher.stop()
@@ -324,7 +341,14 @@ def main() -> None:
         allowed_branches=cfg.indexer.allowed_branches,
     )
 
+    ipc_socket_path = contextd_home() / "ipc.sock"
+
     try:
-        run_daemon(daemon_cfg, checkpoint_store=checkpoint_store, upsert_buffer=upsert_buffer)
+        run_daemon(
+            daemon_cfg,
+            checkpoint_store=checkpoint_store,
+            upsert_buffer=upsert_buffer,
+            ipc_socket_path=ipc_socket_path,
+        )
     finally:
         pid_path.unlink(missing_ok=True)
