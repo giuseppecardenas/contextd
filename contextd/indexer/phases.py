@@ -664,6 +664,33 @@ def phase_derive_file_level(
     return PhaseResult(name="derive_file_level", processed=len(rows), skipped=0)
 
 
+def _derive_file_level_for_path(
+    path: Path,
+    corpus_cfg: CorpusConfig,
+    store: GraphStore,
+) -> None:
+    """Derive File.summary from Section summaries for a single file.
+
+    Queries only the sections of *path* and sets File.summary via
+    _concat_first_sentences. O(1) w.r.t. corpus size — called from
+    run_incremental_file instead of the full-corpus phase_derive_file_level.
+    """
+    file_path = str(path)
+    rows = store.exec_read(
+        "MATCH (f:File {path: $path})-[:CONTAINS]->(s:Section) "
+        "RETURN collect(s.summary) AS summaries",
+        {"path": file_path},
+    )
+    if not rows:
+        return
+    summaries = [s for s in rows[0]["summaries"] if s]
+    summary = _concat_first_sentences(summaries, max_chars=500)
+    store.exec_write(
+        "MATCH (f:File {path: $path}) SET f.summary = $summary",
+        {"path": file_path, "summary": summary},
+    )
+
+
 def _infer_key(target_type: str) -> str:
     """Return the primary-key property name for target_type, or raise ValueError.
 
