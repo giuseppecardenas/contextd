@@ -31,6 +31,8 @@ summary_max_words = 100
 debounce_seconds = 30
 git_lock_check = true
 parallel_embedding_batches = 4
+allowed_branches = []
+incremental_workers = 4
 
 [mcp]
 transport = "stdio"
@@ -39,3 +41,5 @@ transport = "stdio"
 level = "info"
 format = "json"
 path = "~/.contextd/logs/contextd.log"
+max_log_bytes = 10485760
+log_backup_count = 5

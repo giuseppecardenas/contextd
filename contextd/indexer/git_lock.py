@@ -15,6 +15,7 @@ Handles three ``.git`` shapes:
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 
@@ -50,3 +51,32 @@ def is_git_busy(corpus_root: Path) -> bool:
     if git_dir is None:
         return False
     return (git_dir / "index.lock").exists() or (git_dir / "HEAD.lock").exists()
+
+
+def _current_branch(corpus_root: Path) -> str:
+    """Return active branch name, 'HEAD' if detached, or '' if not a git repo."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(corpus_root), "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5.0,
+        )
+        return result.stdout.strip() if result.returncode == 0 else ""
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+def branch_is_allowed(corpus_root: Path, allowed_branches: list[str]) -> bool:
+    """Return True if indexing is permitted given the whitelist.
+
+    Empty whitelist → always allowed. Non-git repo (empty branch) → always allowed.
+    Detached HEAD ('HEAD') is blocked when a whitelist is configured — a detached
+    checkout is almost always a comparison or CI checkout, not the working branch.
+    """
+    if not allowed_branches:
+        return True
+    branch = _current_branch(corpus_root)
+    if not branch:
+        return True
+    return branch in allowed_branches

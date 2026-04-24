@@ -95,6 +95,8 @@ class IndexerConfig(BaseModel):
     git_lock_check: bool = True
     parallel_embedding_batches: int = 4
     inference_concurrency: int = Field(default=1, ge=1)
+    allowed_branches: list[str] = Field(default_factory=list)
+    incremental_workers: int = Field(default=4, ge=1)
 
 
 class McpConfig(BaseModel):
@@ -108,6 +110,8 @@ class LoggingConfig(BaseModel):
     level: str = "info"
     format: Literal["json", "text"] = "json"
     path: str = "~/.contextd/logs/contextd.log"
+    max_log_bytes: int = Field(default=10_485_760, ge=0)
+    log_backup_count: int = Field(default=5, ge=0)
 
 
 class Config(BaseModel):
