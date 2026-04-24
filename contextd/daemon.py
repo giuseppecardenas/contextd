@@ -10,6 +10,7 @@ Thread model:
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import logging.handlers
 import os
@@ -319,6 +320,9 @@ def main() -> None:
             )
         )
 
+    for entry in entries:
+        entry.store.connect()
+
     state_dir = contextd_home() / "state"
     state_dir.mkdir(parents=True, exist_ok=True)
     pid_path = state_dir / "indexer.pid"
@@ -351,4 +355,7 @@ def main() -> None:
             ipc_socket_path=ipc_socket_path,
         )
     finally:
+        for entry in entries:
+            with contextlib.suppress(Exception):
+                entry.store.close()
         pid_path.unlink(missing_ok=True)

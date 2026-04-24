@@ -452,7 +452,7 @@ def phase_gc_sections(
     return PhaseResult(name="gc_sections", processed=len(stale), skipped=0)
 
 
-def _gc_sections_for_file(
+def gc_sections_for_file(
     path: Path,
     corpus_cfg: CorpusConfig,
     store: GraphStore,
@@ -664,7 +664,7 @@ def phase_derive_file_level(
     return PhaseResult(name="derive_file_level", processed=len(rows), skipped=0)
 
 
-def _derive_file_level_for_path(
+def derive_file_level_for_path(
     path: Path,
     corpus_cfg: CorpusConfig,
     store: GraphStore,

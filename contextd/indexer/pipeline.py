@@ -196,14 +196,14 @@ def run_incremental_file(
     if corpus.corpus.granularity == "section" and path.suffix == ".md":
         _clear_sections_for_reindex(path, store, corpus.corpus.name)
         phases.phase_enumerate_sections([path], corpus, store, embedder, hasher)
-        phases._gc_sections_for_file(path, corpus, store)
+        phases.gc_sections_for_file(path, corpus, store)
         phases.phase_summarise_sections(
             corpus, summariser, store, concurrency=inference_concurrency
         )
         phases.phase_relate_sections(
             corpus, inferrer, store, entity_sampler, concurrency=inference_concurrency
         )
-        phases._derive_file_level_for_path(path, corpus, store)
+        phases.derive_file_level_for_path(path, corpus, store)
     else:
         phases.phase_enumerate([path], corpus.corpus.name, hasher, store, embedder)
         phases.phase_summarise([path], summariser, store, concurrency=inference_concurrency)
