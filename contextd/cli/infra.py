@@ -48,7 +48,7 @@ def _query_ipc_status() -> dict[str, object] | None:
             s.sendall((json.dumps({"cmd": "status"}) + "\n").encode())
             raw = s.recv(4096).decode().strip()
         return dict(json.loads(raw))
-    except Exception:
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         return None
 
 

@@ -76,25 +76,32 @@ class IpcServer:
             except json.JSONDecodeError:
                 conn.sendall((json.dumps({"error": "invalid JSON"}) + "\n").encode())
             except Exception:
-                pass
+                _log.debug("IPC connection error", exc_info=True)
 
     def _serve(self) -> None:
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self._server_socket = sock
-        with contextlib.suppress(FileNotFoundError):
-            self._socket_path.unlink()
-        sock.bind(str(self._socket_path))
-        sock.listen(5)
-        sock.settimeout(1.0)
-        _log.debug("IPC server listening on %s", self._socket_path)
-        while not self._stop_event.is_set():
-            try:
-                conn, _ = sock.accept()
-                threading.Thread(target=self._handle_connection, args=(conn,), daemon=True).start()
-            except TimeoutError:
-                continue
-            except OSError:
-                break
+        try:
+            with contextlib.suppress(FileNotFoundError):
+                self._socket_path.unlink()
+            sock.bind(str(self._socket_path))
+            sock.listen(5)
+            sock.settimeout(1.0)
+            _log.debug("IPC server listening on %s", self._socket_path)
+            while not self._stop_event.is_set():
+                try:
+                    conn, _ = sock.accept()
+                    threading.Thread(
+                        target=self._handle_connection, args=(conn,), daemon=True
+                    ).start()
+                except TimeoutError:
+                    continue
+                except OSError:
+                    break
+        except Exception:
+            _log.exception("IPC server failed to start")
+        finally:
+            sock.close()
 
     def start(self) -> None:
         """Start the IPC server in a background daemon thread (non-blocking)."""
