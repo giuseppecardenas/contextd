@@ -32,6 +32,7 @@ from contextd.indexer.pipeline import (
     enumerate_corpus_files,
     run_incremental_file,
 )
+from contextd.indexer.upsert_buffer import PendingUpsertBuffer
 from contextd.indexer.watcher import CorpusWatcher
 
 _log = logging.getLogger(__name__)
@@ -85,6 +86,7 @@ def _handle_batch(
     incremental_workers: int,
     allowed_branches: list[str],
     checkpoint_store: CheckpointStore | None = None,
+    upsert_buffer: PendingUpsertBuffer | None = None,
 ) -> None:
     corpus_root = Path(corpus_entry.corpus_cfg.corpus.root)
     corpus_name = corpus_entry.corpus_cfg.corpus.name
@@ -142,6 +144,8 @@ def _handle_batch(
         except Exception as exc:
             _log.error("corpus %s: failed to index %s: %s", corpus_name, path, exc)
             error_event.set()
+            if upsert_buffer is not None:
+                upsert_buffer.append(path, corpus_name)
             return exc
 
     with ThreadPoolExecutor(max_workers=incremental_workers) as executor:
@@ -174,7 +178,12 @@ def _path_under(path: Path, root: Path) -> bool:
         return False
 
 
-def run_daemon(config: DaemonConfig, *, checkpoint_store: CheckpointStore | None = None) -> None:
+def run_daemon(
+    config: DaemonConfig,
+    *,
+    checkpoint_store: CheckpointStore | None = None,
+    upsert_buffer: PendingUpsertBuffer | None = None,
+) -> None:
     relays: dict[str, queue.Queue[Path]] = {}
     stop_requested = False
 
@@ -244,6 +253,7 @@ def run_daemon(config: DaemonConfig, *, checkpoint_store: CheckpointStore | None
                         incremental_workers=config.incremental_workers,
                         allowed_branches=config.allowed_branches,
                         checkpoint_store=checkpoint_store,
+                        upsert_buffer=upsert_buffer,
                     )
             time.sleep(config.poll_interval_seconds)
     finally:
@@ -300,6 +310,12 @@ def main() -> None:
 
     checkpoint_store = CheckpointStore(contextd_home() / "state" / "checkpoints")
 
+    upsert_buffer = PendingUpsertBuffer(state_dir / "pending-upserts.jsonl")
+    corpus_lookup = {e.corpus_cfg.corpus.name: e for e in entries}
+    succeeded, failed = upsert_buffer.replay(corpus_lookup.get)
+    if succeeded or failed:
+        _log.info("upsert buffer replay: %d succeeded, %d failed", succeeded, failed)
+
     daemon_cfg = DaemonConfig(
         corpora=entries,
         debounce_seconds=float(cfg.indexer.debounce_seconds),
@@ -309,6 +325,6 @@ def main() -> None:
     )
 
     try:
-        run_daemon(daemon_cfg, checkpoint_store=checkpoint_store)
+        run_daemon(daemon_cfg, checkpoint_store=checkpoint_store, upsert_buffer=upsert_buffer)
     finally:
         pid_path.unlink(missing_ok=True)
