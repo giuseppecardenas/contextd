@@ -6,13 +6,12 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from contextd.corpus_config import CorpusConfig
+from contextd.indexer.phases import _gc_sections_for_file
 
 
 def test_gc_sections_for_file_deletes_stale_section(
     tmp_path: Path,
 ) -> None:
-    from contextd.indexer.phases import _gc_sections_for_file
-
     md_file = tmp_path / "doc.md"
     md_file.write_text("# Heading A\n\nbody\n")
 
@@ -43,8 +42,6 @@ def test_gc_sections_for_file_deletes_stale_section(
 def test_gc_sections_for_file_preserves_current_sections(
     tmp_path: Path,
 ) -> None:
-    from contextd.indexer.phases import _gc_sections_for_file
-
     md_file = tmp_path / "doc.md"
     md_file.write_text("# Heading A\n\nbody\n")
 
@@ -68,8 +65,6 @@ def test_gc_sections_for_file_preserves_current_sections(
 
 
 def test_gc_sections_for_file_noop_on_non_md(tmp_path: Path) -> None:
-    from contextd.indexer.phases import _gc_sections_for_file
-
     lua_file = tmp_path / "mod.lua"
     lua_file.write_text("-- code\n")
     store = MagicMock()
