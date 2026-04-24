@@ -11,6 +11,12 @@ import click
 from contextd._paths import contextd_home
 from contextd.cli import cli
 from contextd.cli._shared import PipelineDeps, _load_cfg, console
+from contextd.indexer.git_lock import _current_branch, branch_is_allowed
+from contextd.indexer.pipeline import (
+    IncrementalResult,
+    enumerate_corpus_files,
+    run_incremental_file,
+)
 
 if TYPE_CHECKING:
     from contextd.config import Config
@@ -252,7 +258,7 @@ def index(
 ) -> None:
     """Run an indexing pass on the named corpus."""
     from contextd.corpus_config import CorpusConfig
-    from contextd.indexer.pipeline import enumerate_corpus_files, run_bootstrap
+    from contextd.indexer.pipeline import run_bootstrap
 
     cfg = _load_cfg()
     corpus_toml = contextd_home() / "corpora" / f"{corpus_name}.toml"
@@ -305,6 +311,41 @@ def index(
                     f" processed={phase.processed} skipped={phase.skipped}"
                 )
         else:
-            console.print("[yellow]⚠[/] incremental mode not yet implemented in this build")
+            corpus_root = Path(corpus_cfg.corpus.root)
+            if not branch_is_allowed(corpus_root, cfg.indexer.allowed_branches):
+                branch = _current_branch(corpus_root)
+                raise click.ClickException(
+                    f"Current branch '{branch}' is not in indexer.allowed_branches; "
+                    "indexing blocked. Update ~/.contextd/config.toml to allow this branch."
+                )
+
+            total_indexed = total_skipped = total_deleted = 0
+            for file_path in files:
+                try:
+                    res: IncrementalResult = run_incremental_file(
+                        path=file_path,
+                        corpus=corpus_cfg,
+                        store=deps.store,
+                        hasher=deps.hasher,
+                        embedder=deps.embedder,
+                        summariser=deps.summariser,
+                        inferrer=deps.inferrer,
+                        entity_sampler=lambda _s: [],
+                        inference_concurrency=cfg.indexer.inference_concurrency,
+                    )
+                except Exception as exc:
+                    console.print(f"  [red]✗[/] {file_path.name}: {exc}")
+                    total_skipped += 1
+                    continue
+                if res.action == "indexed":
+                    total_indexed += 1
+                elif res.action == "deleted":
+                    total_deleted += 1
+                else:
+                    total_skipped += 1
+            console.print(
+                f"  [green]✓[/] incremental scan complete: "
+                f"indexed={total_indexed} deleted={total_deleted} skipped={total_skipped}"
+            )
     finally:
         deps.store.close()

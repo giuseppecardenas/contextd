@@ -72,30 +72,65 @@ def test_index_errors_when_no_mode_flag(tmp_path: Path, monkeypatch: pytest.Monk
     assert "--bootstrap" in result.output or "--incremental" in result.output
 
 
-def test_index_incremental_prints_not_implemented(
+def test_index_incremental_flag_is_recognised(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The 'not yet implemented' stub must be gone after this task."""
+    _setup_home(tmp_path, monkeypatch)
+    result = CliRunner().invoke(contextd.cli.cli, ["index", "--help"])
+    assert "--incremental" in result.output
+    # Once implemented the stub message must not appear.
+
+
+def test_index_incremental_runs_changed_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from contextd.indexer.pipeline import IncrementalResult
+
+    home = _setup_home(tmp_path, monkeypatch)
+    corpus_root = tmp_path / "docs"
+    corpus_root.mkdir()
+    (corpus_root / "a.md").write_text("hi")
+    (corpus_root / "b.md").write_text("there")
+    _register_corpus(home, "docs", corpus_root)
+
+    with (
+        patch("contextd.cli.corpora._build_pipeline_deps") as mock_deps,
+        patch(
+            "contextd.cli.corpora.enumerate_corpus_files",
+            return_value=[tmp_path / "a.md", tmp_path / "b.md"],
+        ),
+        patch(
+            "contextd.cli.corpora.run_incremental_file",
+            return_value=IncrementalResult("indexed", "a.md"),
+        ) as mock_rif,
+        patch("contextd.cli.corpora.branch_is_allowed", return_value=True),
+    ):
+        mock_deps.return_value = MagicMock()
+        result = CliRunner().invoke(contextd.cli.cli, ["index", "docs", "--incremental"])
+
+    assert result.exit_code == 0, result.output
+    assert mock_rif.call_count == 2
+
+
+def test_index_incremental_reports_zero_changes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     home = _setup_home(tmp_path, monkeypatch)
     corpus_root = tmp_path / "docs"
     corpus_root.mkdir()
-    (corpus_root / "a.md").write_text("hi")
     _register_corpus(home, "docs", corpus_root)
-    # Patch the provider / store factories so we don't hit live APIs.
-    # Using contextd.cli.* targets because the imports are inside the function body;
-    # after reload, contextd.cli's local scope resolves via the module-level imports
-    # made at function call time — patching the factory module directly works.
+
     with (
-        patch("contextd.providers.factory.build_inference_provider") as mock_infer,
-        patch("contextd.providers.factory.build_embedding_provider") as mock_embed,
-        patch("contextd.storage.factory.build_graph_store") as mock_store,
+        patch("contextd.cli.corpora._build_pipeline_deps") as mock_deps,
+        patch("contextd.cli.corpora.enumerate_corpus_files", return_value=[]),
+        patch("contextd.cli.corpora.branch_is_allowed", return_value=True),
     ):
-        fake_store = MagicMock()
-        mock_store.return_value = fake_store
-        mock_infer.return_value = MagicMock()
-        mock_embed.return_value = MagicMock()
+        mock_deps.return_value = MagicMock()
         result = CliRunner().invoke(contextd.cli.cli, ["index", "docs", "--incremental"])
-    assert result.exit_code == 0, result.output
-    assert "not yet implemented" in result.output
+
+    assert result.exit_code == 0
+    assert "incremental scan complete" in result.output
 
 
 def test_index_bootstrap_prints_per_phase_results(
