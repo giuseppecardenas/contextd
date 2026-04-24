@@ -138,7 +138,7 @@ def _path_under(path: Path, root: Path) -> bool:
 
 
 def run_daemon(config: DaemonConfig) -> None:
-    relay: queue.Queue[Path] = queue.Queue()
+    relays: dict[str, queue.Queue[Path]] = {}
     stop_requested = False
 
     def _on_stop(signum: int, frame: object) -> None:
@@ -151,11 +151,13 @@ def run_daemon(config: DaemonConfig) -> None:
     debouncers: dict[str, DebouncedQueue] = {}
     for entry in config.corpora:
         name = entry.corpus_cfg.corpus.name
+        relays[name] = queue.Queue()
         debouncers[name] = DebouncedQueue(window_seconds=config.debounce_seconds)
         root = Path(entry.corpus_cfg.corpus.root)
 
         def _make_callback(
             e: CorpusDaemonEntry = entry,
+            relay: queue.Queue[Path] = relays[name],
         ) -> Callable[[Path], None]:
             def _cb(path: Path) -> None:
                 if _path_under(path, Path(e.corpus_cfg.corpus.root)):
@@ -171,7 +173,7 @@ def run_daemon(config: DaemonConfig) -> None:
         while not stop_requested:
             for entry in config.corpora:
                 name = entry.corpus_cfg.corpus.name
-                _drain_relay_into_debouncer(relay, debouncers[name])
+                _drain_relay_into_debouncer(relays[name], debouncers[name])
                 batch = debouncers[name].drain_if_ready()
                 if batch:
                     _handle_batch(
