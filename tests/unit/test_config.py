@@ -8,28 +8,33 @@ from contextd.config import Config, ConfigError, IndexerConfig
 
 def test_indexer_config_allowed_branches_defaults_empty() -> None:
     from contextd.config import IndexerConfig
+
     assert IndexerConfig().allowed_branches == []
 
 
 def test_indexer_config_allowed_branches_parsed() -> None:
     from contextd.config import IndexerConfig
+
     cfg = IndexerConfig(allowed_branches=["main", "develop"])
     assert cfg.allowed_branches == ["main", "develop"]
 
 
 def test_indexer_config_incremental_workers_defaults_to_4() -> None:
     from contextd.config import IndexerConfig
+
     assert IndexerConfig().incremental_workers == 4
 
 
 def test_indexer_config_incremental_workers_rejects_zero() -> None:
     from contextd.config import IndexerConfig
+
     with pytest.raises(ValidationError):
         IndexerConfig(incremental_workers=0)
 
 
 def test_logging_config_rotation_defaults() -> None:
     from contextd.config import LoggingConfig
+
     cfg = LoggingConfig()
     assert cfg.max_log_bytes == 10_485_760
     assert cfg.log_backup_count == 5
@@ -37,6 +42,7 @@ def test_logging_config_rotation_defaults() -> None:
 
 def test_logging_config_max_log_bytes_zero_is_valid() -> None:
     from contextd.config import LoggingConfig
+
     cfg = LoggingConfig(max_log_bytes=0)
     assert cfg.max_log_bytes == 0
 

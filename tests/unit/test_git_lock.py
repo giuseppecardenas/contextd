@@ -6,30 +6,35 @@ from contextd.indexer.git_lock import is_git_busy
 
 def test_branch_is_allowed_empty_list_allows_any(tmp_path: Path) -> None:
     from contextd.indexer.git_lock import branch_is_allowed
+
     with patch("contextd.indexer.git_lock._current_branch", return_value="anything"):
         assert branch_is_allowed(tmp_path, []) is True
 
 
 def test_branch_is_allowed_matching_branch(tmp_path: Path) -> None:
     from contextd.indexer.git_lock import branch_is_allowed
+
     with patch("contextd.indexer.git_lock._current_branch", return_value="main"):
         assert branch_is_allowed(tmp_path, ["main", "develop"]) is True
 
 
 def test_branch_is_allowed_nonmatching_branch(tmp_path: Path) -> None:
     from contextd.indexer.git_lock import branch_is_allowed
+
     with patch("contextd.indexer.git_lock._current_branch", return_value="feature/foo"):
         assert branch_is_allowed(tmp_path, ["main"]) is False
 
 
 def test_branch_is_allowed_detached_head_blocked(tmp_path: Path) -> None:
     from contextd.indexer.git_lock import branch_is_allowed
+
     with patch("contextd.indexer.git_lock._current_branch", return_value="HEAD"):
         assert branch_is_allowed(tmp_path, ["main"]) is False
 
 
 def test_branch_is_allowed_non_git_repo_always_allowed(tmp_path: Path) -> None:
     from contextd.indexer.git_lock import branch_is_allowed
+
     with patch("contextd.indexer.git_lock._current_branch", return_value=""):
         assert branch_is_allowed(tmp_path, ["main"]) is True
 
