@@ -160,6 +160,59 @@ def test_up_writes_pid_file(tmp_path: Path) -> None:
     assert pid_file.read_text().strip() == "77777"
 
 
+def test_up_skips_daemon_launch_when_already_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _setup_contextd_home(tmp_path, backend="memgraph")
+    monkeypatch.setenv("CONTEXTD_HOME", str(home))
+    # Pre-existing PID file that points at a live process.
+    (home / "state").mkdir(exist_ok=True)
+    (home / "state" / "indexer.pid").write_text("42424")
+    monkeypatch.setattr("shutil.which", lambda _x: "/usr/bin/docker")
+    with (
+        patch("subprocess.run") as mock_run,
+        patch("contextd.storage.factory.build_graph_store") as mock_build,
+        patch("contextd.cli.infra.subprocess.Popen") as mock_popen,
+        patch("contextd.cli.infra._daemon_is_running", return_value=True),
+    ):
+        mock_run.return_value.returncode = 0
+        fake_store = mock_build.return_value
+        fake_store.connect.return_value = None
+        fake_store.apply_migrations.return_value = None
+        fake_store.close.return_value = None
+        result = CliRunner().invoke(contextd.cli.cli, ["up"])
+    assert result.exit_code == 0, result.output
+    assert mock_popen.call_count == 0
+    assert "already running" in result.output
+
+
+def test_up_clears_stale_pid_and_launches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    home = _setup_contextd_home(tmp_path, backend="memgraph")
+    monkeypatch.setenv("CONTEXTD_HOME", str(home))
+    # Pre-existing PID file that points at a dead process.
+    (home / "state").mkdir(exist_ok=True)
+    pid_file = home / "state" / "indexer.pid"
+    pid_file.write_text("99999")
+    monkeypatch.setattr("shutil.which", lambda _x: "/usr/bin/docker")
+    fake_proc = MagicMock()
+    fake_proc.pid = 55555
+    with (
+        patch("subprocess.run") as mock_run,
+        patch("contextd.storage.factory.build_graph_store") as mock_build,
+        patch("contextd.cli.infra.subprocess.Popen", return_value=fake_proc) as mock_popen,
+        patch("contextd.cli.infra._daemon_is_running", return_value=False),
+    ):
+        mock_run.return_value.returncode = 0
+        fake_store = mock_build.return_value
+        fake_store.connect.return_value = None
+        fake_store.apply_migrations.return_value = None
+        fake_store.close.return_value = None
+        result = CliRunner().invoke(contextd.cli.cli, ["up"])
+    assert result.exit_code == 0, result.output
+    assert mock_popen.call_count == 1
+    assert pid_file.read_text().strip() == "55555"
+
+
 def test_down_sends_sigterm_to_daemon(tmp_path: Path) -> None:
     from contextd.cli.infra import _stop_daemon
 

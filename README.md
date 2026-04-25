@@ -350,6 +350,42 @@ log_backup_count = 5       # number of rotated files to keep
 
 The daemon writes only to the configured log file (`~/.contextd/logs/contextd.log` by default) — no terminal output — so these rotation settings matter for long-running installs.
 
+### Running under systemd (optional)
+
+`contextd up` spawns the daemon as a detached child of your shell, so WSL VM shutdown or logout kills it without a clean `SIGTERM` — you'll see unexplained gaps in the log followed by fresh `daemon started` lines. To auto-restart across WSL/machine boots, install the provided user unit:
+
+```bash
+# 1. Provider keys — systemd user units do NOT source ~/.bashrc, so put the
+#    keys the daemon needs in a dedicated env file with restrictive perms.
+mkdir -p ~/.config/contextd
+umask 077
+cat > ~/.config/contextd/env <<EOF
+GEMINI_API_KEY=$GEMINI_API_KEY
+VOYAGE_API_KEY=$VOYAGE_API_KEY
+EOF
+chmod 600 ~/.config/contextd/env
+
+# 2. Install and enable the unit (run from the contextd repo root).
+mkdir -p ~/.config/systemd/user
+cp scripts/systemd/contextd-indexer.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now contextd-indexer.service
+
+# 3. Allow the unit to run without an active login session (WSL users: required).
+loginctl enable-linger $USER
+```
+
+Verify:
+
+```bash
+systemctl --user status contextd-indexer    # → Active: active (running)
+tail -f ~/.contextd/logs/contextd.log       # → "daemon started ... watching corpus ..."
+```
+
+If `status` shows `code=exited, status=1/FAILURE`, run `journalctl --user -u contextd-indexer -n 30` — the most common cause is a missing or unreadable `~/.config/contextd/env` (the daemon refuses to start without `GEMINI_API_KEY` / `VOYAGE_API_KEY`).
+
+Then use `systemctl --user {status,stop,restart} contextd-indexer` instead of `contextd up/down` for the daemon portion. `contextd up` still handles the graph backend container; just skip its daemon-launch step by not calling it (or let the PID-file guard skip it for you — `up` detects the running daemon and leaves it alone).
+
 ---
 
 ## Ontology customisation

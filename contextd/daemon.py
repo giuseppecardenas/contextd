@@ -299,6 +299,12 @@ def main() -> None:
     handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
     logging.basicConfig(level=cfg.logging.level.upper(), handlers=[handler])
 
+    # Quiet noisy third-party loggers. Neo4j's server-side "Cartesian product"
+    # performance notifications and httpx/google_genai per-call traces drown
+    # the daemon's own INFO lines; keep warnings/errors from them.
+    for noisy in ("neo4j.notifications", "httpx", "google_genai.models"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
     corpora_dir = contextd_home() / "corpora"
     entries: list[CorpusDaemonEntry] = []
     for toml_path in sorted(corpora_dir.glob("*.toml")):

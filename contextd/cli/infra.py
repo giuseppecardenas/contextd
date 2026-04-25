@@ -155,6 +155,20 @@ def up() -> None:
     # Launch the incremental indexer daemon.
     state_dir = contextd_home() / "state"
     state_dir.mkdir(parents=True, exist_ok=True)
+
+    # Guard against double-launch: if the PID file names a live process,
+    # skip the Popen. If it names a dead one, clear the stale file and
+    # proceed.
+    existing_pid = _daemon_pid()
+    if existing_pid is not None:
+        if _daemon_is_running(existing_pid):
+            console.print(
+                f"[yellow]![/] indexer daemon already running (pid={existing_pid}); skipping launch"
+            )
+            console.print("[bold]ready[/]")
+            return
+        _pid_path().unlink(missing_ok=True)
+
     proc = subprocess.Popen(
         ["contextd-indexer"],
         stdout=subprocess.DEVNULL,

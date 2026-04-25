@@ -1,0 +1,26 @@
+[Unit]
+Description=contextd incremental indexer daemon
+# The daemon connects to the Neo4j/Memgraph backend over Bolt. Docker is
+# managed separately (via `contextd up` / `docker compose`); the systemd
+# unit only supervises the indexer process itself. If the backend isn't
+# reachable the daemon will error on the first write and be restarted.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/contextd-indexer
+Restart=on-failure
+RestartSec=5s
+# Tight environment — the daemon reads $HOME to resolve ~/.contextd/.
+# Provider API keys (GEMINI_API_KEY, VOYAGE_API_KEY) live in ~/.bashrc, which
+# user units do NOT source. Load them from a dedicated env file instead.
+# The leading `-` makes the file optional (no failure if absent).
+Environment=HOME=%h
+EnvironmentFile=-%h/.config/contextd/env
+# Prevent runaway log spam from a crash-loop; systemd will back off.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Install]
+WantedBy=default.target
