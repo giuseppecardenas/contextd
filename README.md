@@ -417,8 +417,13 @@ Key global config fields (full reference in [docs/architecture.md](docs/architec
 backend = "neo4j"           # "neo4j" (default) or "memgraph"
 
 [providers]
-inference = "gemini"
-embedding = "voyage"
+# Inference provider per call-site. Each independently picks "gemini"
+# (cloud) or "openai_compat" (any local OpenAI-compatible HTTP server:
+# Ollama, LM Studio, vLLM, LocalAI). Embeddings stay on Voyage.
+summary     = "gemini"
+inference   = "gemini"
+translation = "gemini"
+embedding   = "voyage"
 
 [inference]
 summary_max_words = 100
@@ -440,6 +445,32 @@ log_backup_count = 5
 ```
 
 Full corpus config schema and CLI reference live in [docs/cli.md](docs/cli.md).
+
+### Using a local model
+
+Each of `summary`, `inference`, and `translation` can independently target a local OpenAI-compatible HTTP server (Ollama, LM Studio, vLLM, LocalAI) instead of Gemini. Embeddings stay on Voyage. A common split is to push the high-volume summary + relate traffic to a local model and keep translation (Cypher generation for `contextd ask`) on Gemini for higher quality:
+
+```toml
+[providers]
+summary     = "openai_compat"
+inference   = "openai_compat"
+translation = "gemini"
+embedding   = "voyage"
+
+[providers.openai_compat]
+base_url        = "http://localhost:11434/v1"   # Ollama default
+# api_key_env   = "OPENAI_API_KEY"               # only for servers that require a token
+model_summary   = "qwen2.5:7b-instruct"
+model_inference = "qwen2.5:14b-instruct"
+model_translation = "qwen2.5:14b-instruct"
+max_retries     = 5
+request_timeout_seconds = 120.0
+json_mode       = true   # sends response_format JSON for summary+inference call-sites
+```
+
+Quality floor recommendation: the relationship-inference call-site emits strict typed-edge JSON. Models below ~14B parameters tend to fail the JSON shape often enough to slow indexing. Qwen-2.5-14B-Instruct or Llama-3.1-70B-Instruct are reliable choices; smaller models are fine for `summary` only.
+
+**Migrating an existing config.** The pre-v0.2 single-line `inference = "gemini"` under `[providers]` is replaced by three lines (`summary`, `inference`, `translation`). Pydantic will reject the old shape with `extra fields not permitted` — rename and the rest of the file stays unchanged.
 
 ---
 
