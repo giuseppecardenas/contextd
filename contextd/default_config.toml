@@ -1,5 +1,10 @@
 [providers]
+# Inference provider per call-site. Each independently picks "gemini" or
+# "openai_compat" (any local OpenAI-compatible HTTP server: Ollama, LM
+# Studio, vLLM, LocalAI). Embeddings stay on Voyage.
+summary = "gemini"
 inference = "gemini"
+translation = "gemini"
 embedding = "voyage"
 
 [providers.gemini]
@@ -9,6 +14,17 @@ model_translation = "gemma-4-31b-it"
 max_retries = 5
 safety_block = "BLOCK_NONE"
 daily_budget = "unlimited"
+
+[providers.openai_compat]
+base_url = "http://localhost:11434/v1"
+# Set api_key_env = "OPENAI_API_KEY" (or any env var) for servers that
+# require a bearer token. Leave unset for keyless local servers.
+model_summary = "qwen2.5:7b-instruct"
+model_inference = "qwen2.5:14b-instruct"
+model_translation = "qwen2.5:14b-instruct"
+max_retries = 5
+request_timeout_seconds = 120.0
+json_mode = true
 
 [providers.voyage]
 model = "voyage-4-large"

@@ -40,11 +40,29 @@ class VoyageConfig(BaseModel):
     max_batch_size: int = 128
 
 
+InferenceProviderName = Literal["gemini", "openai_compat"]
+
+
+class OpenAICompatConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    base_url: str = "http://localhost:11434/v1"
+    api_key_env: str | None = None
+    model_summary: str = "qwen2.5:7b-instruct"
+    model_inference: str = "qwen2.5:14b-instruct"
+    model_translation: str = "qwen2.5:14b-instruct"
+    max_retries: int = Field(default=5, ge=0)
+    request_timeout_seconds: float = Field(default=120.0, gt=0)
+    json_mode: bool = True
+
+
 class ProvidersConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    inference: Literal["gemini"] = "gemini"
+    summary: InferenceProviderName = "gemini"
+    inference: InferenceProviderName = "gemini"
+    translation: InferenceProviderName = "gemini"
     embedding: Literal["voyage"] = "voyage"
     gemini: GeminiConfig = Field(default_factory=GeminiConfig)
+    openai_compat: OpenAICompatConfig = Field(default_factory=OpenAICompatConfig)
     voyage: VoyageConfig = Field(default_factory=VoyageConfig)
 
 
