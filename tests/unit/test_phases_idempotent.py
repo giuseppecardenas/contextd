@@ -119,6 +119,34 @@ def test_phase_summarise_sections_read_query_filters_on_summary(tmp_path: Path) 
     assert "s.summary IS NULL" in called_cypher
 
 
+def test_phase_summarise_sections_read_query_filters_path_null_stubs(
+    tmp_path: Path,
+) -> None:
+    """Sections without a path are inferred-edge target stubs; the read query
+    must filter them out so Path(None) doesn't blow up the parse-cache prefill."""
+    corpus, _ = _make_section_corpus(tmp_path, 0, 0)
+    store = MagicMock()
+    store.exec_read.return_value = []
+    phase_summarise_sections(corpus, MagicMock(), store)
+    called_cypher = store.exec_read.call_args.args[0]
+    assert "s.path IS NOT NULL" in called_cypher
+
+
+def test_phase_relate_sections_read_query_filters_path_null_stubs(
+    tmp_path: Path,
+) -> None:
+    """Same path-stub guard for relate — target stubs have no source file."""
+    from contextd.indexer.phases import phase_relate_sections
+
+    corpus, _ = _make_section_corpus(tmp_path, 0, 0)
+    store = MagicMock()
+    store.exec_read.return_value = []
+    inferrer = MagicMock()
+    phase_relate_sections(corpus, inferrer, store, entity_sampler=lambda _s: [])
+    called_cypher = store.exec_read.call_args.args[0]
+    assert "s.path IS NOT NULL" in called_cypher
+
+
 # --- phase_relate (file-granular) --------------------------------------------
 
 

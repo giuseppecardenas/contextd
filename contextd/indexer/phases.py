@@ -520,7 +520,13 @@ def phase_summarise_sections(
     """
     # Idempotent resume: skip Section nodes that already have a summary.
     rows = store.exec_read(
-        "MATCH (s:Section {corpus: $c}) WHERE s.summary IS NULL RETURN s.id AS id, s.path AS path",
+        # Path-less sections are inferred-edge target stubs (e.g. an LLM-emitted
+        # target_id like "Utility Fixtures") with no parseable source file. They
+        # have no body to summarise; skip them so Path(None) doesn't blow up
+        # the parse-cache prefill below.
+        "MATCH (s:Section {corpus: $c}) "
+        "WHERE s.summary IS NULL AND s.path IS NOT NULL "
+        "RETURN s.id AS id, s.path AS path",
         {"c": corpus_cfg.corpus.name},
     )
     parser = _build_parser(corpus_cfg)
@@ -577,7 +583,10 @@ def phase_relate_sections(
     # marker. Zero-edge sections still get marked (see worker below) so
     # they are not re-attempted on every restart.
     rows = store.exec_read(
-        "MATCH (s:Section {corpus: $c}) WHERE s.inferred_at IS NULL "
+        # Same path-stub filter as phase_summarise_sections — target stubs
+        # have no source file to re-parse for relate either.
+        "MATCH (s:Section {corpus: $c}) "
+        "WHERE s.inferred_at IS NULL AND s.path IS NOT NULL "
         "RETURN s.id AS id, s.path AS path",
         {"c": corpus_cfg.corpus.name},
     )
