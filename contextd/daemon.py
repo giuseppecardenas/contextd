@@ -29,6 +29,7 @@ from contextd.indexer.debouncer import DebouncedQueue
 from contextd.indexer.git_lock import branch_is_allowed, is_git_busy
 from contextd.indexer.hasher import FileHasher
 from contextd.indexer.pipeline import (
+    _DEFAULT_EXCLUDE_DIRS,
     IncrementalResult,
     enumerate_corpus_files,
     run_incremental_file,
@@ -61,6 +62,16 @@ class DaemonConfig:
     allowed_branches: list[str] = field(default_factory=list)
 
 
+def _path_is_excluded(path: Path) -> bool:
+    """Return True if *path* contains a default-excluded directory component.
+
+    Mirrors the exclude logic in enumerate_corpus_files so that watchdog events
+    for .git temp files, __pycache__, etc. are dropped before entering the relay
+    rather than crashing later when the debounce batch drains.
+    """
+    return any(part in _DEFAULT_EXCLUDE_DIRS for part in path.parts)
+
+
 def _drain_relay_into_debouncer(
     relay: queue.Queue[Path],
     debouncer: DebouncedQueue,
@@ -73,9 +84,17 @@ def _drain_relay_into_debouncer(
 
 
 def _filter_changed(paths: list[Path], hasher: FileHasher) -> list[Path]:
-    changed = [p for p in paths if hasher.is_changed(p)]
-    for p in changed:
-        hasher.mark_seen(p)
+    changed: list[Path] = []
+    for p in paths:
+        try:
+            if hasher.is_changed(p):
+                hasher.mark_seen(p)
+                changed.append(p)
+        except OSError:
+            # File was deleted between the watchdog event and the debounce drain
+            # (common for .git temp files). Skip rather than crash; the deletion
+            # case for corpus files is handled separately via on_deleted (TODO).
+            pass
     return changed
 
 
@@ -231,7 +250,9 @@ def run_daemon(
             relay: queue.Queue[Path] = relays[name],
         ) -> Callable[[Path], None]:
             def _cb(path: Path) -> None:
-                if _path_under(path, Path(e.corpus_cfg.corpus.root)):
+                if _path_under(path, Path(e.corpus_cfg.corpus.root)) and not _path_is_excluded(
+                    path
+                ):
                     relay.put(path)
 
             return _cb
@@ -259,18 +280,21 @@ def run_daemon(
         while not stop_event.is_set():
             for entry in config.corpora:
                 name = entry.corpus_cfg.corpus.name
-                _drain_relay_into_debouncer(relays[name], debouncers[name])
-                batch = debouncers[name].drain_if_ready()
-                if batch:
-                    _handle_batch(
-                        batch,
-                        entry,
-                        inference_concurrency=config.inference_concurrency,
-                        incremental_workers=config.incremental_workers,
-                        allowed_branches=config.allowed_branches,
-                        checkpoint_store=checkpoint_store,
-                        upsert_buffer=upsert_buffer,
-                    )
+                try:
+                    _drain_relay_into_debouncer(relays[name], debouncers[name])
+                    batch = debouncers[name].drain_if_ready()
+                    if batch:
+                        _handle_batch(
+                            batch,
+                            entry,
+                            inference_concurrency=config.inference_concurrency,
+                            incremental_workers=config.incremental_workers,
+                            allowed_branches=config.allowed_branches,
+                            checkpoint_store=checkpoint_store,
+                            upsert_buffer=upsert_buffer,
+                        )
+                except Exception:
+                    _log.exception("corpus %s: unhandled error in main loop; skipping batch", name)
             time.sleep(config.poll_interval_seconds)
     finally:
         if ipc_server is not None:

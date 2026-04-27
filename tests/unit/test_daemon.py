@@ -258,6 +258,113 @@ def test_handle_batch_logs_and_continues_on_error(tmp_path: Path) -> None:
     assert len(results) == 1  # second file still processed
 
 
+def test_filter_changed_tolerates_deleted_file(tmp_path: Path) -> None:
+    """A path that vanishes between the watchdog event and the debounce drain
+    must not raise FileNotFoundError — the daemon should skip it silently."""
+    from contextd.daemon import _filter_changed
+    from contextd.indexer.hasher import FileHasher
+
+    existing = tmp_path / "exists.md"
+    existing.write_text("content")
+    deleted = tmp_path / "gone.md"  # never created — simulates a .git temp file
+
+    result = _filter_changed([existing, deleted], FileHasher())
+    assert existing in result
+    assert deleted not in result
+
+
+def test_path_is_excluded_blocks_git_and_cache_paths() -> None:
+    """_path_is_excluded must return True for .git/, __pycache__, etc. so they
+    are never queued into the relay when the watcher fires."""
+    from pathlib import Path
+
+    from contextd.daemon import _path_is_excluded
+
+    assert _path_is_excluded(Path("/repo/.git/COMMIT_EDITMSG")) is True
+    assert _path_is_excluded(Path("/repo/.git/index.lock")) is True
+    assert _path_is_excluded(Path("/repo/__pycache__/foo.pyc")) is True
+    assert _path_is_excluded(Path("/repo/.venv/lib/x.py")) is True
+    assert _path_is_excluded(Path("/repo/src/main.py")) is False
+    assert _path_is_excluded(Path("/repo/docs/prd/spec.md")) is False
+
+
+def test_run_daemon_loop_continues_after_handle_batch_raises(tmp_path: Path) -> None:
+    """An unhandled exception escaping _handle_batch must not kill run_daemon's
+    main loop — it should be logged and the loop should continue."""
+    import threading
+    from unittest.mock import MagicMock, patch
+
+    from contextd.corpus_config import CorpusConfig
+    from contextd.daemon import CorpusDaemonEntry, DaemonConfig, run_daemon
+
+    corpus_cfg = CorpusConfig.model_validate({"corpus": {"name": "t", "root": str(tmp_path)}})
+    entry = CorpusDaemonEntry(
+        corpus_cfg=corpus_cfg,
+        store=MagicMock(),
+        hasher=MagicMock(),
+        embedder=MagicMock(),
+        summariser=MagicMock(),
+        inferrer=MagicMock(),
+        entity_sampler=lambda _s: [],
+    )
+    cfg = DaemonConfig(corpora=[entry], debounce_seconds=0.01, poll_interval_seconds=0.01)
+
+    iteration_count: list[int] = [0]
+
+    def patched_handle_batch(*args: object, **kwargs: object) -> None:
+        iteration_count[0] += 1
+        if iteration_count[0] == 1:
+            raise RuntimeError("simulated crash")
+
+    # Patch DebouncedQueue.drain_if_ready to always return a synthetic batch
+    fake_batch = [tmp_path / "x.md"]
+    with (
+        patch("contextd.daemon._handle_batch", side_effect=patched_handle_batch),
+        patch(
+            "contextd.indexer.debouncer.DebouncedQueue.drain_if_ready",
+            return_value=fake_batch,
+        ),
+        patch("contextd.indexer.watcher.CorpusWatcher.start"),
+        patch("contextd.indexer.watcher.CorpusWatcher.stop"),
+    ):
+
+        def capture_stop_event(sig: int, handler: object) -> None:
+            pass  # suppress real signal setup in test
+
+        with patch("signal.signal", side_effect=capture_stop_event):
+            # Run daemon in a thread; it will self-terminate via iteration_count logic
+            done = threading.Event()
+            exc_holder: list[BaseException | None] = [None]
+
+            def _run() -> None:
+                try:
+                    # We need to stop the daemon; patch time.sleep to inject stop
+                    original_sleep = __import__("time").sleep
+                    call_count = [0]
+
+                    def controlled_sleep(s: float) -> None:
+                        call_count[0] += 1
+                        if call_count[0] > 4:
+                            raise SystemExit(0)
+                        original_sleep(0.001)
+
+                    with patch("contextd.daemon.time.sleep", side_effect=controlled_sleep):
+                        run_daemon(cfg)
+                except SystemExit:
+                    pass
+                except Exception as e:
+                    exc_holder[0] = e
+                finally:
+                    done.set()
+
+            t = threading.Thread(target=_run, daemon=True)
+            t.start()
+            done.wait(timeout=5.0)
+
+    assert exc_holder[0] is None, f"daemon crashed: {exc_holder[0]}"
+    assert iteration_count[0] >= 2, "loop did not continue after first exception"
+
+
 def test_write_and_read_pid(tmp_path: Path) -> None:
     from contextd.daemon import _read_pid, _write_pid
 
