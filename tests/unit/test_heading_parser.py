@@ -1,4 +1,6 @@
-from contextd.indexer.heading_parser import HeadingParser
+import hashlib
+
+from contextd.indexer.heading_parser import HeadingParser, ParsedSection
 
 
 def test_extracts_h2_and_h3_within_bounds() -> None:
@@ -140,3 +142,82 @@ def test_image_heading_with_empty_alt_falls_back_to_section() -> None:
     sections = parser.parse(md)
     # No alt text → empty title → anchor falls back to "section".
     assert sections[0].anchor == "section"
+
+
+# ---------------------------------------------------------------------------
+# Section body hash contract tests
+# ---------------------------------------------------------------------------
+
+
+def _section_hash(sec: ParsedSection) -> str:
+    return hashlib.md5((sec.title + "\n\n" + sec.body).encode()).hexdigest()
+
+
+def test_section_hash_is_stable_across_identical_parses() -> None:
+    md = "## Overview\n\nIntro text.\n\n## Details\n\nMore info."
+    parser = HeadingParser(min_level=2, max_level=4)
+    sections1 = parser.parse(md)
+    sections2 = parser.parse(md)
+    assert len(sections1) == len(sections2)
+    for s1, s2 in zip(sections1, sections2, strict=True):
+        assert _section_hash(s1) == _section_hash(s2)
+
+
+def test_section_hash_changes_on_body_edit() -> None:
+    md1 = "## Overview\n\nOriginal text."
+    md2 = "## Overview\n\nModified text."
+    parser = HeadingParser(min_level=2, max_level=4)
+    s1 = parser.parse(md1)[0]
+    s2 = parser.parse(md2)[0]
+    assert _section_hash(s1) != _section_hash(s2)
+
+
+def test_section_hash_changes_on_title_change() -> None:
+    md1 = "## Overview\n\nSame text."
+    md2 = "## Introduction\n\nSame text."
+    parser = HeadingParser(min_level=2, max_level=4)
+    s1 = parser.parse(md1)[0]
+    s2 = parser.parse(md2)[0]
+    # Different titles → different hashes (title is in formula AND body contains heading line)
+    assert _section_hash(s1) != _section_hash(s2)
+
+
+def test_section_hash_unchanged_when_sibling_changes() -> None:
+    md_before = "## A\n\nBody A.\n\n## B\n\nBody B original."
+    md_after = "## A\n\nBody A.\n\n## B\n\nBody B changed."
+    parser = HeadingParser(min_level=2, max_level=4)
+    a_before = parser.parse(md_before)[0]
+    a_after = parser.parse(md_after)[0]
+    assert a_before.title == "A"
+    assert a_after.title == "A"
+    assert _section_hash(a_before) == _section_hash(a_after)
+
+
+def test_empty_section_body_hash_is_consistent() -> None:
+    md = "## Empty Section\n\n## Next Section\n\nSome text."
+    parser = HeadingParser(min_level=2, max_level=4)
+    sections = parser.parse(md)
+    empty = sections[0]
+    assert empty.title == "Empty Section"
+    h = _section_hash(empty)
+    assert isinstance(h, str) and len(h) == 32
+    # Stable on re-parse
+    empty2 = parser.parse(md)[0]
+    assert _section_hash(empty2) == h
+
+
+def test_parent_body_includes_nested_subsection_content() -> None:
+    md = "## Parent\n\nParent intro.\n\n### Child\n\nChild content.\n\n## Sibling\n\nSibling text."
+    parser = HeadingParser(min_level=2, max_level=4)
+    sections = parser.parse(md)
+    parent = sections[0]
+    assert "Parent intro." in parent.body
+    assert "Child content." in parent.body
+    assert "Sibling text." not in parent.body
+
+    # Changing child content changes parent's hash (parent body includes child)
+    md2 = (
+        "## Parent\n\nParent intro.\n\n### Child\n\nChild MODIFIED.\n\n## Sibling\n\nSibling text."
+    )
+    parent2 = parser.parse(md2)[0]
+    assert _section_hash(parent) != _section_hash(parent2)
