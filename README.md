@@ -206,7 +206,7 @@ contextd index notes --bootstrap --refresh llm       # e.g. after a prompt chang
 contextd index notes --incremental
 ```
 
-Scans every file in the corpus, uses MD5 hashing to skip unchanged files, and re-processes only what changed. Output:
+Scans every file in the corpus. For file-granular corpora, MD5 hashing skips unchanged files. For section-granular corpora, each section's stored hash is compared to the current content — only sections that changed, were added, or were removed trigger re-inference; unchanged sections are protected by IS-NULL guards and skipped automatically. Output:
 
 ```
   ✓ incremental scan complete: indexed=2 deleted=0 skipped=9
@@ -317,9 +317,31 @@ daemon:   running (pid=12345, uptime=42s, corpora=['notes'])
 
 1. A `CorpusWatcher` (inotify / FSEvents) fires on every file change under the corpus root.
 2. Events are collected by a `DebouncedQueue` with a configurable window (default 30 s) to batch rapid edits into a single pass.
-3. After the window closes, the daemon runs MD5 checks to skip files whose content did not actually change.
+3. After the window closes, the daemon runs hash checks. For file-granular corpora, unchanged files are skipped by MD5. For section-granular corpora, section-level hashes are compared — only changed, added, or removed sections are cleared and re-inferred; unchanged sections are left untouched.
 4. Changed files are re-indexed concurrently (default 4 workers) by calling the same phase pipeline as `--incremental`.
 5. **Crash recovery:** before processing each batch, a checkpoint is written. If the daemon is killed mid-batch, the next startup replays any in-flight files. Paths that fail indexing are buffered to `~/.contextd/state/pending-upserts.jsonl` and retried on the next start.
+
+### Periodic sweep (WSL2 / Windows-side edits)
+
+On Linux and macOS, `CorpusWatcher` relies on inotify / FSEvents. On WSL2, edits made from the Windows side (e.g., VS Code Windows app writing into the WSL filesystem) silently bypass inotify — the daemon never receives the event and the index goes stale with no error.
+
+The **periodic sweep** is the fix. On a configurable interval (default 900 s), the daemon queries the graph for all Section nodes (section-granular corpora) or scans disk for all corpus files (file-granular corpora) and compares stored hashes to current content. Any file where at least one section changed, was added, or was removed is re-enqueued for indexing — exactly as if inotify had fired.
+
+Rate limiting uses a budget-accumulation model: `sweep_rate_sections_per_second` (default 0.017 ≈ 1 section/minute) accrues per elapsed main-loop tick. The daemon processes one work unit only when the accumulated budget ≥ 1.0, deducting `max(1, len(sections))` per unit. This keeps the daemon idle between sweeps. Set `sweep_interval_seconds = 0` to disable the sweep entirely.
+
+```toml
+[indexer]
+sweep_interval_seconds         = 900    # 0 disables the sweep
+sweep_rate_sections_per_second = 0.017  # budget rate; default ≈ 1 section/minute
+```
+
+Log output when the sweep is active:
+
+```
+corpus notes: sweep started (12 files, 47 sections)
+corpus notes: sweep complete, next in 900s
+corpus notes: indexed /path/to/changed-file.md
+```
 
 ### Branch gate
 
@@ -339,9 +361,11 @@ Detached HEAD is always blocked when a whitelist is configured (a comparison che
 
 ```toml
 [indexer]
-debounce_seconds    = 30   # seconds to wait after the last event before dispatching a batch
-incremental_workers = 4    # concurrent file workers per batch (distinct from inference_concurrency)
-inference_concurrency = 1  # LLM call parallelism within each file's summarise+relate phases
+debounce_seconds               = 30    # seconds to wait after the last event before dispatching a batch
+incremental_workers            = 4     # concurrent file workers per batch (distinct from inference_concurrency)
+inference_concurrency          = 1     # LLM call parallelism within each file's summarise+relate phases
+sweep_interval_seconds         = 900   # how often to run the periodic sweep; 0 disables it
+sweep_rate_sections_per_second = 0.017 # budget accumulation rate; ≈ 1 section/minute
 
 [logging]
 max_log_bytes  = 10485760  # 10 MB per log file; 0 disables rotation
@@ -429,12 +453,14 @@ embedding   = "voyage"
 summary_max_words = 100
 
 [indexer]
-debounce_seconds       = 30   # seconds to collect FS events before dispatching a batch
-parallel_embedding_batches = 4
-inference_concurrency  = 1    # LLM call parallelism (summarise+relate); 5 is a good
-                              # default for Gemma free-tier (15 RPM quota)
-incremental_workers    = 4    # concurrent file workers per incremental batch
-allowed_branches       = []   # whitelist; empty = allow all branches
+debounce_seconds               = 30   # seconds to collect FS events before dispatching a batch
+parallel_embedding_batches     = 4
+inference_concurrency          = 1    # LLM call parallelism (summarise+relate); 5 is a good
+                                      # default for Gemma free-tier (15 RPM quota)
+incremental_workers            = 4    # concurrent file workers per incremental batch
+allowed_branches               = []   # whitelist; empty = allow all branches
+sweep_interval_seconds         = 900  # 0 disables; how often to check for missed changes
+sweep_rate_sections_per_second = 0.017 # budget rate; default ≈ 1 section/minute
 
 [logging]
 level          = "info"
@@ -480,7 +506,7 @@ Each file (or section, in section-granular mode) triggers two Gemini API calls (
 
 - **Per file:** sub-cent in typical cases (short markdown files); files with dense content may run a few cents each.
 - **Typical 100-file corpus:** order of $0.10–$1.00 for a full bootstrap, depending on file sizes and summary length (`[inference] summary_max_words` is the main lever).
-- **Incremental re-index:** only changed files are re-processed (MD5 hash gating), so ongoing cost is proportional to the edit rate, not corpus size.
+- **Incremental re-index:** for file-granular corpora, only changed files are re-processed (MD5 hash gating). For section-granular corpora, only changed sections trigger LLM calls — unchanged sections are skipped even within a modified file. Ongoing cost is proportional to the edit rate, not corpus size.
 
 These are order-of-magnitude estimates. Exact spend is logged per session to `~/.contextd/state/session-log/`. Inspect it with:
 
@@ -511,7 +537,7 @@ Items that are designed and partially built but not yet wired or shipped:
 | **Hybrid search** | `search()` is full-text only. Vector-similarity fallback (hybrid ranking) is deferred; callers needing vector-space matches can call `GraphStore.vector_search` directly for now. |
 | **`CONTEXTD_INFERENCE_DAILY_BUDGET`** | The design specifies an env var cap on daily Gemini calls. Not implemented; manual cost monitoring via `contextd costs` is the current guard. |
 | **Per-corpus MCP tool `$` false positives** | `extract_placeholders` uses a simple regex and will match `$` inside Cypher string literals as spurious parameters. Proper Cypher tokenisation is deferred. |
-| **Stale `CheckpointStore` entries on incremental section refresh** | If an incremental re-index refreshes sections in a section-granular corpus, existing checkpoint entries for the affected file are not invalidated. They will report the old phase state until the next full bootstrap. (`contextd/indexer/phases.py` `TODO(M9-followup)`) |
+| **Stale `CheckpointStore` entries on section refresh** | The per-file checkpoint records phase-level completion (summarise, relate) but not per-section granularity. After a differential re-index updates only some sections, the checkpoint still reflects the prior full-file state. Reporting via `contextd status` will show the old completion time until the next full bootstrap. |
 
 ---
 
