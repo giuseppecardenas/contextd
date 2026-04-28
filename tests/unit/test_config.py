@@ -172,3 +172,13 @@ safety_block = "BLOCK_EVERYTHING"
 """)
     with pytest.raises(ConfigError, match="safety_block"):
         Config.load(user_cfg)
+
+
+def test_sweep_interval_zero_is_valid() -> None:
+    cfg = IndexerConfig(sweep_interval_seconds=0)
+    assert cfg.sweep_interval_seconds == 0
+
+
+def test_sweep_rate_below_minimum_rejected() -> None:
+    with pytest.raises(ValidationError):
+        IndexerConfig(sweep_rate_sections_per_second=0.0)

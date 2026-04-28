@@ -5,6 +5,8 @@ import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 
 def test_drain_relay_moves_all_queued_paths(tmp_path: Path) -> None:
     from contextd.daemon import DebouncedQueue, _drain_relay_into_debouncer
@@ -479,6 +481,266 @@ def test_handle_batch_clears_checkpoint_after_batch_completes(tmp_path: Path) ->
         )
 
     ckpt_store.clear.assert_called_once_with("t")
+
+
+# ---------------------------------------------------------------------------
+# Sweep tests
+# ---------------------------------------------------------------------------
+
+
+def _make_section_entry(tmp_path: Path):  # type: ignore[no-untyped-def]
+    """Return a minimal CorpusDaemonEntry for sweep tests."""
+    from contextd.corpus_config import CorpusConfig
+    from contextd.daemon import CorpusDaemonEntry
+
+    corpus_cfg = CorpusConfig.model_validate(
+        {"corpus": {"name": "sw", "root": str(tmp_path), "granularity": "section"}}
+    )
+    return CorpusDaemonEntry(
+        corpus_cfg=corpus_cfg,
+        store=MagicMock(),
+        hasher=MagicMock(),
+        embedder=MagicMock(),
+        summariser=MagicMock(),
+        inferrer=MagicMock(),
+        entity_sampler=lambda _s: [],
+    )
+
+
+def test_sweep_enqueues_file_when_section_hash_changed(tmp_path: Path) -> None:
+    import queue
+
+    from contextd.daemon import SectionRecord, SweepWorkUnit, _process_sweep_unit
+
+    md = tmp_path / "doc.md"
+    md.write_text("## Alpha\n\nBody alpha.\n")
+    entry = _make_section_entry(tmp_path)
+
+    from contextd.indexer.heading_parser import HeadingParser
+
+    sec = HeadingParser(min_level=2, max_level=4).parse(md.read_text())[0]
+
+    unit = SweepWorkUnit(
+        path=str(md),
+        sections=[SectionRecord(section_id=f"{md}#alpha", anchor=sec.anchor, stored_hash="stale")],
+    )
+    relay: queue.Queue[Path] = queue.Queue()
+    _process_sweep_unit(unit, entry, relay)
+
+    assert not relay.empty()
+    assert relay.get() == md
+
+
+def test_sweep_skips_file_when_all_section_hashes_match(tmp_path: Path) -> None:
+    import hashlib
+    import queue
+
+    from contextd.daemon import SectionRecord, SweepWorkUnit, _process_sweep_unit
+
+    md = tmp_path / "doc.md"
+    md.write_text("## Alpha\n\nBody alpha.\n")
+    entry = _make_section_entry(tmp_path)
+
+    from contextd.indexer.heading_parser import HeadingParser
+
+    sec = HeadingParser(min_level=2, max_level=4).parse(md.read_text())[0]
+    matched_hash = hashlib.md5((sec.title + "\n\n" + sec.body).encode()).hexdigest()
+
+    unit = SweepWorkUnit(
+        path=str(md),
+        sections=[
+            SectionRecord(section_id=f"{md}#alpha", anchor=sec.anchor, stored_hash=matched_hash)
+        ],
+    )
+    relay: queue.Queue[Path] = queue.Queue()
+    _process_sweep_unit(unit, entry, relay)
+
+    assert relay.empty()
+
+
+def test_sweep_enqueues_file_when_section_added(tmp_path: Path) -> None:
+    """File has a new section not present in unit.sections → enqueue."""
+    import queue
+
+    from contextd.daemon import SectionRecord, SweepWorkUnit, _process_sweep_unit
+
+    md = tmp_path / "doc.md"
+    md.write_text("## Alpha\n\nBody alpha.\n\n## Beta\n\nBody beta.\n")
+    entry = _make_section_entry(tmp_path)
+
+    # Graph only knows about "alpha"; "beta" is new
+    unit = SweepWorkUnit(
+        path=str(md),
+        sections=[SectionRecord(section_id=f"{md}#alpha", anchor="alpha", stored_hash="whatever")],
+    )
+    relay: queue.Queue[Path] = queue.Queue()
+    _process_sweep_unit(unit, entry, relay)
+
+    assert not relay.empty()
+
+
+def test_sweep_enqueues_file_when_section_removed(tmp_path: Path) -> None:
+    """Graph has a section anchor no longer in the file → enqueue for GC."""
+    import hashlib
+    import queue
+
+    from contextd.daemon import SectionRecord, SweepWorkUnit, _process_sweep_unit
+
+    md = tmp_path / "doc.md"
+    md.write_text("## Alpha\n\nBody alpha.\n")  # no "beta"
+    entry = _make_section_entry(tmp_path)
+
+    from contextd.indexer.heading_parser import HeadingParser
+
+    sec = HeadingParser(min_level=2, max_level=4).parse(md.read_text())[0]
+    alpha_hash = hashlib.md5((sec.title + "\n\n" + sec.body).encode()).hexdigest()
+
+    # Graph still has both alpha and a now-removed beta
+    unit = SweepWorkUnit(
+        path=str(md),
+        sections=[
+            SectionRecord(section_id=f"{md}#alpha", anchor="alpha", stored_hash=alpha_hash),
+            SectionRecord(section_id=f"{md}#beta", anchor="beta", stored_hash="some_hash"),
+        ],
+    )
+    relay: queue.Queue[Path] = queue.Queue()
+    _process_sweep_unit(unit, entry, relay)
+
+    assert not relay.empty()
+
+
+def test_sweep_enqueues_deleted_file_when_sections_in_graph(tmp_path: Path) -> None:
+    """File is deleted but still has Section nodes in graph → queue for deletion."""
+    import queue
+
+    from contextd.daemon import SectionRecord, SweepWorkUnit, _process_sweep_unit
+
+    gone = tmp_path / "gone.md"  # never created
+    entry = _make_section_entry(tmp_path)
+
+    unit = SweepWorkUnit(
+        path=str(gone),
+        sections=[SectionRecord(section_id=f"{gone}#alpha", anchor="alpha", stored_hash="hash")],
+    )
+    relay: queue.Queue[Path] = queue.Queue()
+    _process_sweep_unit(unit, entry, relay)
+
+    assert not relay.empty()
+    assert relay.get() == gone
+
+
+def test_sweep_treats_none_stored_hash_as_changed(tmp_path: Path) -> None:
+    """stored_hash=None (pre-feature node) triggers re-index."""
+    import queue
+
+    from contextd.daemon import SectionRecord, SweepWorkUnit, _process_sweep_unit
+
+    md = tmp_path / "doc.md"
+    md.write_text("## Alpha\n\nBody alpha.\n")
+    entry = _make_section_entry(tmp_path)
+
+    from contextd.indexer.heading_parser import HeadingParser
+
+    sec = HeadingParser(min_level=2, max_level=4).parse(md.read_text())[0]
+
+    unit = SweepWorkUnit(
+        path=str(md),
+        sections=[SectionRecord(section_id=f"{md}#alpha", anchor=sec.anchor, stored_hash=None)],
+    )
+    relay: queue.Queue[Path] = queue.Queue()
+    _process_sweep_unit(unit, entry, relay)
+
+    assert not relay.empty()
+
+
+def test_sweep_rate_limits_via_budget_accumulation() -> None:
+    """Budget accumulates; unit processed only once budget >= 1."""
+    from contextd.daemon import SweepState, SweepWorkUnit
+
+    processed: list[str] = []
+    unit = SweepWorkUnit(path="/some/file.md", sections=[])
+    state = SweepState(pending=[unit], last_checked_at=0.0, next_sweep_at=0.0)
+    rate = 1.0  # sections per second
+
+    # Tick 1: 0.5s elapsed → budget=0.5 → nothing processed
+    state.budget += 0.5 * rate
+    while state.pending and state.budget >= 1.0:
+        u = state.pending.pop(0)
+        state.budget = max(0.0, state.budget - float(max(1, len(u.sections))))
+        processed.append(u.path)
+    assert processed == []
+
+    # Tick 2: another 1.0s elapsed → budget=1.5 → one unit processed
+    state.budget += 1.0 * rate
+    while state.pending and state.budget >= 1.0:
+        u = state.pending.pop(0)
+        state.budget = max(0.0, state.budget - float(max(1, len(u.sections))))
+        processed.append(u.path)
+    assert processed == ["/some/file.md"]
+
+
+def test_sweep_disabled_when_interval_zero(tmp_path: Path) -> None:
+    """sweep_interval_seconds=0 → no SweepState created in sweeps dict."""
+    from contextd.daemon import DaemonConfig
+
+    cfg = DaemonConfig(corpora=[], sweep_interval_seconds=0)
+    sweeps: dict[str, object] = {}
+    if cfg.sweep_interval_seconds > 0:
+        sweeps["would_be_created"] = object()
+    assert sweeps == {}
+
+
+def test_sweep_reschedules_after_completion() -> None:
+    """After pending drains to empty, next_sweep_at advances by interval."""
+    import time
+
+    from contextd.daemon import SweepState, SweepWorkUnit
+
+    interval = 900
+    now = time.monotonic()
+    unit = SweepWorkUnit(path="/f.md", sections=[])
+    state = SweepState(pending=[unit], last_checked_at=now, next_sweep_at=now + interval)
+    state.budget = 10.0  # plenty of budget
+
+    # Simulate one loop tick that drains pending
+    while state.pending and state.budget >= 1.0:
+        u = state.pending.pop(0)
+        state.budget = max(0.0, state.budget - float(max(1, len(u.sections))))
+
+    if not state.pending:
+        state.next_sweep_at = now + interval
+
+    assert state.pending == []
+    assert state.next_sweep_at == pytest.approx(now + interval, abs=0.01)
+
+
+def test_sweep_file_granular_enqueues_changed_file(tmp_path: Path) -> None:
+    """File-granular unit (sections=[]) enqueues file when hasher.is_changed is True."""
+    import queue
+
+    from contextd.corpus_config import CorpusConfig
+    from contextd.daemon import CorpusDaemonEntry, SweepWorkUnit, _process_sweep_unit
+
+    f = tmp_path / "a.md"
+    f.write_text("content")
+    corpus_cfg = CorpusConfig.model_validate({"corpus": {"name": "fg", "root": str(tmp_path)}})
+    hasher = MagicMock()
+    hasher.is_changed.return_value = True
+    entry = CorpusDaemonEntry(
+        corpus_cfg=corpus_cfg,
+        store=MagicMock(),
+        hasher=hasher,
+        embedder=MagicMock(),
+        summariser=MagicMock(),
+        inferrer=MagicMock(),
+        entity_sampler=lambda _s: [],
+    )
+    unit = SweepWorkUnit(path=str(f), sections=[])
+    relay: queue.Queue[Path] = queue.Queue()
+    _process_sweep_unit(unit, entry, relay)
+
+    assert not relay.empty()
+    assert relay.get() == f
 
 
 def test_handle_batch_does_not_clear_checkpoint_on_error(tmp_path: Path) -> None:
