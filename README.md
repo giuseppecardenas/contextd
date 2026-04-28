@@ -1,6 +1,4 @@
-# Contextd
-
-**Files are the source of truth; AI is the semantic layer.**
+# Contextd (Context Daemon Abbrev.)
 
 Contextd is a locally-hosted knowledge layer for your project files. It indexes markdown, code, and structured data into a hybrid graph + vector store (Neo4j Community or Memgraph, your choice), generates AI-inferred relationships and per-file summaries, and exposes the result to Claude Desktop, Cursor, and any MCP-speaking client through an MCP server. Cold-start any AI session with a compact, semantically-organised overview of your entire corpus.
 
