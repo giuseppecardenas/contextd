@@ -115,6 +115,8 @@ class IndexerConfig(BaseModel):
     inference_concurrency: int = Field(default=1, ge=1)
     allowed_branches: list[str] = Field(default_factory=list)
     incremental_workers: int = Field(default=4, ge=1)
+    sweep_interval_seconds: int = Field(default=900, ge=0)
+    sweep_rate_sections_per_second: float = Field(default=0.017, ge=0.001)
 
 
 class McpConfig(BaseModel):

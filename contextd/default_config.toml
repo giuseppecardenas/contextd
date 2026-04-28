@@ -49,6 +49,8 @@ git_lock_check = true
 parallel_embedding_batches = 4
 allowed_branches = []
 incremental_workers = 4
+sweep_interval_seconds = 900
+sweep_rate_sections_per_second = 0.017
 
 [mcp]
 transport = "stdio"
