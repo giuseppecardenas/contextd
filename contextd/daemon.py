@@ -11,6 +11,7 @@ Thread model:
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import logging
 import logging.handlers
 import os
@@ -28,6 +29,7 @@ from contextd.indexer.checkpoint import Checkpoint, CheckpointStore
 from contextd.indexer.debouncer import DebouncedQueue
 from contextd.indexer.git_lock import branch_is_allowed, is_git_busy
 from contextd.indexer.hasher import FileHasher
+from contextd.indexer.heading_parser import HeadingParser
 from contextd.indexer.pipeline import (
     _DEFAULT_EXCLUDE_DIRS,
     IncrementalResult,
@@ -60,6 +62,37 @@ class DaemonConfig:
     inference_concurrency: int = 1
     incremental_workers: int = 4
     allowed_branches: list[str] = field(default_factory=list)
+    sweep_interval_seconds: int = 900
+    sweep_rate_sections_per_second: float = 0.017
+
+
+@dataclass
+class SectionRecord:
+    """A Section node's identity + stored hash, as retrieved from the graph."""
+
+    section_id: str
+    anchor: str
+    stored_hash: str | None  # None if Section was indexed before this feature
+
+
+@dataclass
+class SweepWorkUnit:
+    """One file's worth of sweep work.
+
+    ``sections`` is non-empty for section-granular corpora.
+    Empty list signals file-granular mode.
+    """
+
+    path: str
+    sections: list[SectionRecord]
+
+
+@dataclass
+class SweepState:
+    pending: list[SweepWorkUnit]
+    last_checked_at: float
+    next_sweep_at: float
+    budget: float = 0.0
 
 
 def _path_is_excluded(path: Path) -> bool:
@@ -70,6 +103,86 @@ def _path_is_excluded(path: Path) -> bool:
     rather than crashing later when the debounce batch drains.
     """
     return any(part in _DEFAULT_EXCLUDE_DIRS for part in path.parts)
+
+
+def _build_sweep_pending(entry: CorpusDaemonEntry) -> list[SweepWorkUnit]:
+    """Build the pending work list for a new sweep pass.
+
+    Section-granular: queries Section nodes from graph grouped by file path.
+    File-granular: enumerates corpus files from disk.
+    """
+    corpus_name = entry.corpus_cfg.corpus.name
+
+    if entry.corpus_cfg.corpus.granularity == "section":
+        rows = entry.store.exec_read(
+            "MATCH (s:Section {corpus: $corpus}) "
+            "WHERE s.path IS NOT NULL "
+            "RETURN s.id AS id, s.path AS path, s.hash AS hash, s.anchor AS anchor",
+            {"corpus": corpus_name},
+        )
+        by_file: dict[str, list[SectionRecord]] = {}
+        for row in rows:
+            by_file.setdefault(row["path"], []).append(
+                SectionRecord(
+                    section_id=row["id"],
+                    anchor=row.get("anchor") or "",
+                    stored_hash=row.get("hash"),
+                )
+            )
+        return [SweepWorkUnit(path=fp, sections=secs) for fp, secs in by_file.items()]
+
+    return [
+        SweepWorkUnit(path=str(p), sections=[]) for p in enumerate_corpus_files(entry.corpus_cfg)
+    ]
+
+
+def _process_sweep_unit(
+    unit: SweepWorkUnit,
+    entry: CorpusDaemonEntry,
+    relay: queue.Queue[Path],
+) -> None:
+    """Check one sweep work unit; enqueue path in relay if re-indexing is needed."""
+    path = Path(unit.path)
+
+    if unit.sections:
+        try:
+            text = path.read_text(errors="replace")
+        except OSError:
+            # File deleted but still has Section nodes in graph.
+            # Queue so run_incremental_file's !path.exists() branch fires.
+            relay.put(path)
+            return
+
+        parser = HeadingParser(
+            min_level=entry.corpus_cfg.corpus.heading_min_level,
+            max_level=entry.corpus_cfg.corpus.heading_max_level,
+        )
+        current_sections = parser.parse(text)
+        current_hashes: dict[str, str] = {
+            sec.anchor: hashlib.md5((sec.title + "\n\n" + sec.body).encode()).hexdigest()
+            for sec in current_sections
+        }
+
+        stored_anchors = {rec.anchor for rec in unit.sections}
+        current_anchors = set(current_hashes.keys())
+
+        changed = (
+            bool(stored_anchors - current_anchors)
+            or bool(current_anchors - stored_anchors)
+            or any(
+                current_hashes.get(rec.anchor) != rec.stored_hash
+                for rec in unit.sections
+                if rec.anchor in current_anchors
+            )
+        )
+        if changed:
+            relay.put(path)
+    else:
+        try:
+            if entry.hasher.is_changed(path):
+                relay.put(path)
+        except OSError:
+            pass
 
 
 def _drain_relay_into_debouncer(
@@ -221,6 +334,17 @@ def run_daemon(
         relays[name] = queue.Queue()
         debouncers[name] = DebouncedQueue(window_seconds=config.debounce_seconds)
 
+    # Phase 1b: initialise sweep states (one per corpus, if sweep is enabled)
+    sweeps: dict[str, SweepState] = {}
+    if config.sweep_interval_seconds > 0:
+        _sweep_start = time.monotonic()
+        for entry in config.corpora:
+            sweeps[entry.corpus_cfg.corpus.name] = SweepState(
+                pending=[],
+                last_checked_at=_sweep_start,
+                next_sweep_at=_sweep_start + config.sweep_interval_seconds,
+            )
+
     # Phase 2: crash-recovery — re-queue files that were in-flight on last shutdown
     if checkpoint_store is not None:
         for entry in config.corpora:
@@ -293,6 +417,43 @@ def run_daemon(
                             checkpoint_store=checkpoint_store,
                             upsert_buffer=upsert_buffer,
                         )
+
+                    if config.sweep_interval_seconds > 0 and name in sweeps:
+                        sweep = sweeps[name]
+                        now = time.monotonic()
+                        elapsed = now - sweep.last_checked_at
+                        sweep.last_checked_at = now
+
+                        if not sweep.pending and now >= sweep.next_sweep_at:
+                            sweep.pending = _build_sweep_pending(entry)
+                            sweep.budget = 0.0
+                            _log.info(
+                                "corpus %s: sweep started (%d files, %d sections)",
+                                name,
+                                len(sweep.pending),
+                                sum(len(u.sections) for u in sweep.pending),
+                            )
+                        elif sweep.pending:
+                            sweep.budget += elapsed * config.sweep_rate_sections_per_second
+                            while sweep.pending and sweep.budget >= 1.0:
+                                unit = sweep.pending.pop(0)
+                                cost = float(max(1, len(unit.sections)))
+                                sweep.budget = max(0.0, sweep.budget - cost)
+                                try:
+                                    _process_sweep_unit(unit, entry, relays[name])
+                                except Exception:
+                                    _log.exception(
+                                        "corpus %s: sweep error processing %s",
+                                        name,
+                                        unit.path,
+                                    )
+                            if not sweep.pending:
+                                sweep.next_sweep_at = now + config.sweep_interval_seconds
+                                _log.info(
+                                    "corpus %s: sweep complete, next in %ds",
+                                    name,
+                                    config.sweep_interval_seconds,
+                                )
                 except Exception:
                     _log.exception("corpus %s: unhandled error in main loop; skipping batch", name)
             time.sleep(config.poll_interval_seconds)
@@ -373,6 +534,8 @@ def main() -> None:
         inference_concurrency=cfg.indexer.inference_concurrency,
         incremental_workers=cfg.indexer.incremental_workers,
         allowed_branches=cfg.indexer.allowed_branches,
+        sweep_interval_seconds=cfg.indexer.sweep_interval_seconds,
+        sweep_rate_sections_per_second=cfg.indexer.sweep_rate_sections_per_second,
     )
 
     ipc_socket_path = contextd_home() / "ipc.sock"
