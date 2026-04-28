@@ -290,6 +290,75 @@ def test_path_is_excluded_blocks_git_and_cache_paths() -> None:
     assert _path_is_excluded(Path("/repo/docs/prd/spec.md")) is False
 
 
+def test_path_matches_corpus_includes_blocks_unrelated_paths(tmp_path: Path) -> None:
+    """_path_matches_corpus_includes returns False for paths outside the
+    corpus's include globs — protects against e.g. cargo's target/ writes
+    when the corpus only declares docs/ + mods/ patterns."""
+    from contextd.corpus_config import CorpusConfig
+    from contextd.indexer.pipeline import _path_matches_corpus_includes
+
+    corpus_cfg = CorpusConfig.model_validate(
+        {
+            "corpus": {
+                "name": "rl",
+                "root": str(tmp_path),
+                "include": ["docs/prd/**/*.md", "mods/base/**/*.lua", "prd.md", "CLAUDE.md"],
+            }
+        }
+    )
+
+    assert _path_matches_corpus_includes(tmp_path / "docs/prd/sub/spec.md", corpus_cfg) is True
+    assert _path_matches_corpus_includes(tmp_path / "docs/prd/spec.md", corpus_cfg) is True
+    assert _path_matches_corpus_includes(tmp_path / "prd.md", corpus_cfg) is True
+    assert _path_matches_corpus_includes(tmp_path / "CLAUDE.md", corpus_cfg) is True
+    assert _path_matches_corpus_includes(tmp_path / "mods/base/init.lua", corpus_cfg) is True
+    # Cargo build artefact: under root but not in include globs
+    assert (
+        _path_matches_corpus_includes(
+            tmp_path / "target/debug/deps/librng_determinism-d5677356c387e41e.rmeta", corpus_cfg
+        )
+        is False
+    )
+    assert _path_matches_corpus_includes(tmp_path / "src/main.rs", corpus_cfg) is False
+
+
+def test_path_matches_corpus_includes_respects_exclude(tmp_path: Path) -> None:
+    """exclude entries take precedence over include matches."""
+    from contextd.corpus_config import CorpusConfig
+    from contextd.indexer.pipeline import _path_matches_corpus_includes
+
+    corpus_cfg = CorpusConfig.model_validate(
+        {
+            "corpus": {
+                "name": "rl",
+                "root": str(tmp_path),
+                "include": ["docs/prd/**/*.md"],
+                "exclude": ["docs/prd/_audit-methodology.md"],
+            }
+        }
+    )
+
+    assert _path_matches_corpus_includes(tmp_path / "docs/prd/spec.md", corpus_cfg) is True
+    assert (
+        _path_matches_corpus_includes(tmp_path / "docs/prd/_audit-methodology.md", corpus_cfg)
+        is False
+    )
+
+
+def test_path_matches_corpus_includes_returns_false_for_path_outside_root(
+    tmp_path: Path,
+) -> None:
+    """A path not under the corpus root must return False, never raise."""
+    from contextd.corpus_config import CorpusConfig
+    from contextd.indexer.pipeline import _path_matches_corpus_includes
+
+    corpus_cfg = CorpusConfig.model_validate(
+        {"corpus": {"name": "rl", "root": str(tmp_path), "include": ["**/*.md"]}}
+    )
+
+    assert _path_matches_corpus_includes(Path("/tmp/elsewhere/foo.md"), corpus_cfg) is False
+
+
 def test_run_daemon_loop_continues_after_handle_batch_raises(tmp_path: Path) -> None:
     """An unhandled exception escaping _handle_batch must not kill run_daemon's
     main loop — it should be logged and the loop should continue."""

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -68,6 +69,38 @@ def enumerate_corpus_files(corpus: CorpusConfig) -> list[Path]:
         return not any(part in _DEFAULT_EXCLUDE_DIRS for part in p.parts)
 
     return [p for p in hits if _allowed(p)]
+
+
+def _path_matches_corpus_includes(path: Path, corpus: CorpusConfig) -> bool:
+    """Return True if *path* falls inside the corpus's declared scope.
+
+    Mirrors the include/exclude contract that ``enumerate_corpus_files``
+    enforces, so the watchdog callback can drop events for build artefacts
+    (cargo's ``target/``, generic ``dist/``, etc.) before they reach the
+    pipeline.  Uses ``relative_to`` (no syscall) so this stays cheap on every
+    inotify event; callers are responsible for passing absolute paths from
+    watchdog (which already does).
+    """
+    root = Path(corpus.corpus.root).expanduser()
+    try:
+        rel = path.relative_to(root)
+    except ValueError:
+        return False
+
+    rel_str = rel.as_posix()
+    for ex in corpus.corpus.exclude:
+        if rel_str == ex or fnmatch.fnmatch(rel_str, ex):
+            return False
+
+    for pattern in corpus.corpus.include:
+        if fnmatch.fnmatch(rel_str, pattern):
+            return True
+        # `**/` should also match zero intermediate segments, e.g.
+        # `docs/prd/**/*.md` must match `docs/prd/spec.md` as well as
+        # `docs/prd/sub/spec.md`. fnmatch alone only does the latter.
+        if "**/" in pattern and fnmatch.fnmatch(rel_str, pattern.replace("**/", "")):
+            return True
+    return False
 
 
 def _wipe_for_refresh(corpus: CorpusConfig, store: GraphStore, scope: RefreshScope) -> None:
@@ -204,6 +237,15 @@ def run_incremental_file(
             {"path": file_path},
         )
         return IncrementalResult(action="deleted", path=file_path)
+
+    # Empty files (e.g. cargo's zero-byte .rmeta placeholders, or partial
+    # writes captured mid-flight) crash Voyage embed with "Input cannot
+    # contain empty strings". Short-circuit before touching the graph.
+    try:
+        if path.stat().st_size == 0:
+            return IncrementalResult(action="skipped", path=file_path)
+    except OSError:
+        return IncrementalResult(action="skipped", path=file_path)
 
     _clear_file_for_reindex(path, store)
 

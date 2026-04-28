@@ -33,6 +33,7 @@ from contextd.indexer.heading_parser import HeadingParser
 from contextd.indexer.pipeline import (
     _DEFAULT_EXCLUDE_DIRS,
     IncrementalResult,
+    _path_matches_corpus_includes,
     enumerate_corpus_files,
     run_incremental_file,
 )
@@ -374,8 +375,10 @@ def run_daemon(
             relay: queue.Queue[Path] = relays[name],
         ) -> Callable[[Path], None]:
             def _cb(path: Path) -> None:
-                if _path_under(path, Path(e.corpus_cfg.corpus.root)) and not _path_is_excluded(
-                    path
+                if (
+                    _path_under(path, Path(e.corpus_cfg.corpus.root))
+                    and not _path_is_excluded(path)
+                    and _path_matches_corpus_includes(path, e.corpus_cfg)
                 ):
                     relay.put(path)
 

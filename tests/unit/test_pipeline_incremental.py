@@ -291,6 +291,29 @@ def test_run_incremental_file_treats_missing_hash_as_changed(tmp_path: Path) -> 
     assert f"{file_path_str}#alpha" in cleared_ids
 
 
+def test_run_incremental_file_skips_empty_file(tmp_path: Path) -> None:
+    """Zero-byte files (e.g. cargo's .rmeta placeholders) must short-circuit
+    to action='skipped' before reaching the embedder — Voyage rejects empty
+    input strings."""
+    from contextd.indexer.pipeline import run_incremental_file
+
+    empty = tmp_path / "empty.md"
+    empty.write_text("")
+    corpus = _make_corpus(tmp_path)
+
+    store = MagicMock()
+    embedder = MagicMock()
+    summariser = MagicMock()
+    inferrer = MagicMock()
+
+    result = run_incremental_file(
+        empty, corpus, store, MagicMock(), embedder, summariser, inferrer, lambda _s: []
+    )
+
+    assert result.action == "skipped"
+    assert embedder.embed.called is False
+
+
 def test_run_incremental_file_section_corpus_non_md(tmp_path: Path) -> None:
     from contextd.indexer.pipeline import run_incremental_file
 
