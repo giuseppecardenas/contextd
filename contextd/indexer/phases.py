@@ -32,6 +32,7 @@ mis-routing by future callers.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import logging
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -368,6 +369,7 @@ def phase_enumerate_sections(
                     "file_id": file_path,
                     "ordinal": sec.ordinal,
                     "embedding": embedding_map[(file_path, section_id)],
+                    "hash": hashlib.md5((sec.title + "\n\n" + sec.body).encode()).hexdigest(),
                 },
             )
             # src_label/dst_label required by GraphStore.upsert_edge.
