@@ -140,6 +140,157 @@ def test_run_incremental_file_section_granular(tmp_path: Path) -> None:
     assert store.upsert_node.called
 
 
+def test_run_incremental_file_returns_skipped_when_no_sections_changed(
+    tmp_path: Path,
+) -> None:
+    """When all Section.hash values match current content, action=='skipped'."""
+    import hashlib
+
+    from contextd.indexer.pipeline import run_incremental_file
+
+    md = tmp_path / "doc.md"
+    md.write_text("## Alpha\n\nBody alpha.\n")
+    corpus = _make_corpus(tmp_path, granularity="section")
+
+    file_path_str = str(md)
+    from contextd.indexer.heading_parser import HeadingParser
+
+    parser = HeadingParser(min_level=2, max_level=4)
+    sections = parser.parse(md.read_text())
+    stored_rows = [
+        {
+            "id": f"{file_path_str}#{sec.anchor}",
+            "hash": hashlib.md5((sec.title + "\n\n" + sec.body).encode()).hexdigest(),
+        }
+        for sec in sections
+    ]
+
+    store = MagicMock()
+    # First exec_read: differential hash query → stored hashes match current content
+    store.exec_read.return_value = stored_rows
+
+    result = run_incremental_file(
+        md,
+        corpus,
+        store,
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+        lambda _s: [],
+    )
+
+    assert result.action == "skipped"
+
+
+def test_run_incremental_file_clears_only_changed_sections(tmp_path: Path) -> None:
+    """Only sections with a stale hash get cleared; unchanged sections are kept."""
+    import hashlib
+    from unittest.mock import patch
+
+    from contextd.indexer.pipeline import run_incremental_file
+
+    md = tmp_path / "doc.md"
+    md.write_text("## Alpha\n\nBody alpha.\n\n## Beta\n\nBody beta.\n")
+    corpus = _make_corpus(tmp_path, granularity="section")
+
+    file_path_str = str(md)
+    from contextd.indexer.heading_parser import HeadingParser
+
+    parser = HeadingParser(min_level=2, max_level=4)
+    sections = parser.parse(md.read_text())
+    alpha = sections[0]
+
+    # Alpha has correct hash; Beta has stale hash
+    alpha_hash = hashlib.md5((alpha.title + "\n\n" + alpha.body).encode()).hexdigest()
+    stored_rows = [
+        {"id": f"{file_path_str}#alpha", "hash": alpha_hash},
+        {"id": f"{file_path_str}#beta", "hash": "stale_hash_value"},
+    ]
+
+    store = MagicMock()
+    # First exec_read: differential hash query. Subsequent calls (phase queries): empty.
+    call_count = [0]
+
+    def _exec_read(query: str, params: object) -> list[object]:
+        call_count[0] += 1
+        return stored_rows if call_count[0] == 1 else []
+
+    store.exec_read.side_effect = _exec_read
+
+    embedder = MagicMock()
+    embedder.embed.return_value = [[0.1] * 1024, [0.2] * 1024]
+    from contextd.inference.summarise import FileSummary
+
+    summariser = MagicMock()
+    summariser.summarise.return_value = FileSummary(
+        summary="s", key_points=[], entities_mentioned=[]
+    )
+    inferrer = MagicMock()
+    inferrer.infer.return_value = []
+
+    cleared_ids: list[str] = []
+
+    def spy_clear(section_id: str, corpus_name: str, s: object) -> None:
+        cleared_ids.append(section_id)
+
+    with patch("contextd.indexer.pipeline._clear_section_for_reindex", side_effect=spy_clear):
+        result = run_incremental_file(
+            md, corpus, store, MagicMock(), embedder, summariser, inferrer, lambda _s: []
+        )
+
+    assert result.action == "indexed"
+    # Only beta's ID should have been cleared
+    assert f"{file_path_str}#beta" in cleared_ids
+    assert f"{file_path_str}#alpha" not in cleared_ids
+
+
+def test_run_incremental_file_treats_missing_hash_as_changed(tmp_path: Path) -> None:
+    """A Section with stored_hash=None must be treated as changed and re-processed."""
+    from unittest.mock import patch
+
+    from contextd.indexer.pipeline import run_incremental_file
+
+    md = tmp_path / "doc.md"
+    md.write_text("## Alpha\n\nBody alpha.\n")
+    corpus = _make_corpus(tmp_path, granularity="section")
+
+    file_path_str = str(md)
+    # Graph returns section with hash=None (pre-feature node)
+    store = MagicMock()
+    call_count = [0]
+
+    def _exec_read(query: str, params: object) -> list[object]:
+        call_count[0] += 1
+        return [{"id": f"{file_path_str}#alpha", "hash": None}] if call_count[0] == 1 else []
+
+    store.exec_read.side_effect = _exec_read
+
+    embedder = MagicMock()
+    embedder.embed.return_value = [[0.1] * 1024]
+    from contextd.inference.summarise import FileSummary
+
+    summariser = MagicMock()
+    summariser.summarise.return_value = FileSummary(
+        summary="s", key_points=[], entities_mentioned=[]
+    )
+    inferrer = MagicMock()
+    inferrer.infer.return_value = []
+
+    cleared_ids: list[str] = []
+
+    def spy_clear(section_id: str, corpus_name: str, s: object) -> None:
+        cleared_ids.append(section_id)
+
+    with patch("contextd.indexer.pipeline._clear_section_for_reindex", side_effect=spy_clear):
+        result = run_incremental_file(
+            md, corpus, store, MagicMock(), embedder, summariser, inferrer, lambda _s: []
+        )
+
+    assert result.action == "indexed"
+    assert f"{file_path_str}#alpha" in cleared_ids
+
+
 def test_run_incremental_file_section_corpus_non_md(tmp_path: Path) -> None:
     from contextd.indexer.pipeline import run_incremental_file
 
