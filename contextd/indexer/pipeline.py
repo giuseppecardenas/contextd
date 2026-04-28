@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -155,6 +156,19 @@ def _clear_sections_for_reindex(path: Path, store: GraphStore, corpus: str) -> N
     )
 
 
+def _clear_section_for_reindex(section_id: str, corpus: str, store: GraphStore) -> None:
+    """Wipe markers for a single section so IS-NULL guards re-process it."""
+    store.exec_write(
+        "MATCH (s:Section {id: $id, corpus: $corpus})-[r]-() WHERE r.origin = 'inferred' DELETE r",
+        {"id": section_id, "corpus": corpus},
+    )
+    store.exec_write(
+        "MATCH (s:Section {id: $id, corpus: $corpus}) "
+        "REMOVE s.inferred_at, s.summary, s.key_points, s.summary_confidence",
+        {"id": section_id, "corpus": corpus},
+    )
+
+
 def run_incremental_file(
     path: Path,
     corpus: CorpusConfig,
@@ -194,7 +208,37 @@ def run_incremental_file(
     _clear_file_for_reindex(path, store)
 
     if corpus.corpus.granularity == "section" and path.suffix == ".md":
-        _clear_sections_for_reindex(path, store, corpus.corpus.name)
+        file_path_str = str(path)
+        corpus_name = corpus.corpus.name
+
+        # Parse current sections and compute per-section hashes
+        parsed = phases._build_parser(corpus).parse(path.read_text(errors="replace"))
+        current_hashes = {
+            f"{file_path_str}#{sec.anchor}": hashlib.md5(
+                (sec.title + "\n\n" + sec.body).encode()
+            ).hexdigest()
+            for sec in parsed
+        }
+
+        # Query graph for stored hashes
+        rows = store.exec_read(
+            "MATCH (s:Section {path: $path, corpus: $corpus}) RETURN s.id AS id, s.hash AS hash",
+            {"path": file_path_str, "corpus": corpus_name},
+        )
+        graph_hashes: dict[str, str | None] = {r["id"]: r.get("hash") for r in rows}
+
+        # Sections to re-process: changed, no stored hash, or new
+        to_reprocess = {sid for sid, h in current_hashes.items() if graph_hashes.get(sid) != h}
+
+        if not to_reprocess:
+            return IncrementalResult(action="skipped", path=file_path_str)
+
+        # Selective clear — only wipe markers for changed/new sections
+        for sid in to_reprocess:
+            _clear_section_for_reindex(sid, corpus_name, store)
+
+        # Re-enumerate writes current hash+embedding for ALL sections;
+        # IS-NULL guards protect unchanged sections in summarise/relate
         phases.phase_enumerate_sections([path], corpus, store, embedder, hasher)
         phases.gc_sections_for_file(path, corpus, store)
         phases.phase_summarise_sections(
