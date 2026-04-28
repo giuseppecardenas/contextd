@@ -110,3 +110,43 @@ def testderive_file_level_for_path_handles_no_sections(tmp_path: Path) -> None:
     derive_file_level_for_path(tmp_path / "empty.md", corpus_cfg, store)
 
     store.exec_write.assert_not_called()
+
+
+def test_phase_enumerate_sections_stores_section_hash(tmp_path: Path) -> None:
+    import hashlib
+
+    from contextd.indexer.phases import phase_enumerate_sections
+
+    md_file = tmp_path / "doc.md"
+    md_file.write_text("## Alpha\n\nBody alpha.\n\n## Beta\n\nBody beta.\n")
+
+    store = MagicMock()
+    embedder = MagicMock()
+    embedder.embed.return_value = [[0.1] * 1024, [0.2] * 1024]
+    hasher = MagicMock()
+    hasher.hash.return_value = "abc123"
+
+    corpus_cfg = CorpusConfig.model_validate(
+        {"corpus": {"name": "test", "root": str(tmp_path), "heading_min_level": 2}}
+    )
+    phase_enumerate_sections([md_file], corpus_cfg, store, embedder, hasher)
+
+    # Collect all dicts passed to upsert_node for Section nodes
+    section_upserts = [
+        call[0][1] for call in store.upsert_node.call_args_list if call[0][0] == "Section"
+    ]
+    assert len(section_upserts) == 2
+
+    for upsert in section_upserts:
+        assert "hash" in upsert
+        h = upsert["hash"]
+        assert isinstance(h, str) and len(h) == 32  # MD5 hex digest
+
+    # Re-parse to cross-check each hash against the title+body formula
+    from contextd.indexer.heading_parser import HeadingParser
+
+    parser = HeadingParser(min_level=2, max_level=4)
+    sections = parser.parse(md_file.read_text())
+    for sec, upsert in zip(sections, section_upserts, strict=True):
+        expected = hashlib.md5((sec.title + "\n\n" + sec.body).encode()).hexdigest()
+        assert upsert["hash"] == expected
