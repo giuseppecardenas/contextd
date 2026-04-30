@@ -16,7 +16,6 @@ import logging
 import logging.handlers
 import os
 import queue
-import signal
 import threading
 import time
 from collections.abc import Callable
@@ -25,6 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from contextd._compat import install_stop_handlers, ipc_file_name
 from contextd.indexer.checkpoint import Checkpoint, CheckpointStore
 from contextd.indexer.debouncer import DebouncedQueue
 from contextd.indexer.git_lock import branch_is_allowed, is_git_busy
@@ -325,8 +325,7 @@ def run_daemon(
     def _on_stop(signum: int, frame: object) -> None:
         stop_event.set()
 
-    signal.signal(signal.SIGTERM, _on_stop)
-    signal.signal(signal.SIGINT, _on_stop)
+    install_stop_handlers(_on_stop)
 
     # Phase 1: create relays and debouncers (before crash-recovery and watcher setup)
     debouncers: dict[str, DebouncedQueue] = {}
@@ -395,7 +394,7 @@ def run_daemon(
 
         corpus_names = [e.corpus_cfg.corpus.name for e in config.corpora]
         ipc_server = IpcServer(
-            socket_path=ipc_socket_path,
+            ipc_path=ipc_socket_path,
             stop_event=stop_event,
             pid=os.getpid(),
             corpora=corpus_names,
@@ -541,7 +540,7 @@ def main() -> None:
         sweep_rate_sections_per_second=cfg.indexer.sweep_rate_sections_per_second,
     )
 
-    ipc_socket_path = contextd_home() / "ipc.sock"
+    ipc_socket_path = contextd_home() / ipc_file_name()
 
     try:
         run_daemon(

@@ -1,7 +1,9 @@
-"""Unix domain socket IPC server for daemon control.
+"""IPC server for daemon control.
 
-JSON-lines protocol. Runs in a background thread spawned by run_daemon.
-Each client connection is handled in its own short-lived daemon thread.
+JSON-lines protocol over a platform-specific transport (AF_UNIX on
+Linux/macOS, localhost TCP on Windows). Runs in a background thread
+spawned by run_daemon. Each client connection is handled in its own
+short-lived daemon thread.
 
 Supported commands:
   {"cmd": "ping"}   → {"pong": true}
@@ -19,15 +21,18 @@ import threading
 import time
 from pathlib import Path
 
+from contextd._compat import cleanup_ipc, create_ipc_server_socket
+
 _log = logging.getLogger(__name__)
 
 
 class IpcServer:
-    """Unix domain socket server for daemon control (JSON-lines protocol).
+    """IPC server for daemon control (JSON-lines protocol).
 
-    Runs in a background thread started by run_daemon. The main loop
-    continues unaffected; the server handles each connection in its own
-    short-lived thread.
+    Transport is platform-specific: AF_UNIX on Linux/macOS, localhost TCP
+    on Windows. Runs in a background thread started by run_daemon. The
+    main loop continues unaffected; the server handles each connection in
+    its own short-lived thread.
 
     Supported commands:
       {"cmd": "status"} → {"pid": N, "corpora": ["name", ...], "uptime_seconds": N}
@@ -37,13 +42,13 @@ class IpcServer:
 
     def __init__(
         self,
-        socket_path: Path,
+        ipc_path: Path,
         stop_event: threading.Event,
         pid: int,
         corpora: list[str],
         start_time: float,
     ) -> None:
-        self._socket_path = socket_path
+        self._ipc_path = ipc_path
         self._stop_event = stop_event
         self._pid = pid
         self._corpora = corpora
@@ -79,15 +84,16 @@ class IpcServer:
                 _log.debug("IPC connection error", exc_info=True)
 
     def _serve(self) -> None:
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            sock = create_ipc_server_socket(self._ipc_path)
+        except Exception:
+            _log.exception("IPC server failed to start")
+            return
         self._server_socket = sock
         try:
-            with contextlib.suppress(FileNotFoundError):
-                self._socket_path.unlink()
-            sock.bind(str(self._socket_path))
             sock.listen(5)
             sock.settimeout(1.0)
-            _log.debug("IPC server listening on %s", self._socket_path)
+            _log.debug("IPC server listening on %s", self._ipc_path)
             while not self._stop_event.is_set():
                 try:
                     conn, _ = sock.accept()
@@ -98,8 +104,6 @@ class IpcServer:
                     continue
                 except OSError:
                     break
-        except Exception:
-            _log.exception("IPC server failed to start")
         finally:
             sock.close()
 
@@ -115,5 +119,4 @@ class IpcServer:
                 self._server_socket.close()
         if self._thread is not None:
             self._thread.join(timeout=3.0)
-        with contextlib.suppress(FileNotFoundError):
-            self._socket_path.unlink()
+        cleanup_ipc(self._ipc_path)

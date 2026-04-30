@@ -24,7 +24,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-24.04, macos-14]
+        os: [ubuntu-24.04, macos-14, windows-latest]
         python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
@@ -36,9 +36,17 @@ jobs:
       - run: pytest tests/unit -v --cov=contextd --cov-report=term
 
   integration:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
     steps:
       - uses: actions/checkout@v4
+      - name: Switch Docker to Linux containers (Windows only)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & "$env:ProgramFiles\Docker\Docker\DockerCli.exe" -SwitchLinuxEngine
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -47,9 +55,17 @@ jobs:
       - run: pytest tests/integration -v -m integration
 
   e2e:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
     steps:
       - uses: actions/checkout@v4
+      - name: Switch Docker to Linux containers (Windows only)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & "$env:ProgramFiles\Docker\Docker\DockerCli.exe" -SwitchLinuxEngine
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"

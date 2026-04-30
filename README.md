@@ -87,15 +87,26 @@ Edge types: `CONTAINS`, `PARENT_OF`, `NEXT_SIBLING`, `BELONGS_TO`, `CREATED_BY`,
 
 The package is not yet on PyPI. Clone the repo and install in editable mode:
 
+**Linux / macOS:**
+
 ```bash
 git clone git@github.com:giuseppecardenas/contextd.git
 cd contextd
-uv venv
-source .venv/bin/activate        # or .venv\Scripts\activate on Windows
+uv venv && source .venv/bin/activate
 uv pip install -e ".[dev]"
 ```
 
-Requirements: Python 3.11+, Docker (Docker Desktop or any Docker engine with Compose v2).
+**Windows (cmd.exe / PowerShell):**
+
+```powershell
+git clone https://github.com/giuseppecardenas/contextd.git
+cd contextd
+python -m venv .venv
+.venv\Scripts\activate
+pip install -e ".[dev]"
+```
+
+Requirements: Python 3.11+, Docker (Docker Desktop or any Docker engine with Compose v2). On Windows, Docker Desktop must be set to Linux containers (the default) for the Neo4j/Memgraph images.
 
 ### After v0.1.0 on PyPI (future)
 
@@ -233,6 +244,50 @@ Add `contextd-mcp` to your Claude Desktop config (see [MCP integration](#mcp-int
 
 The tool returns up to 40 nodes ordered by inbound-citation count, each with its AI summary. An AI assistant can use this as a session primer — one tool call replaces reading every file.
 
+### Step 7 — Monitor costs and logs
+
+```bash
+# Tail the daemon's structured JSON log
+contextd logs --follow
+
+# Aggregated provider token spend
+contextd costs
+contextd costs --since 2026-04-01
+
+# List registered corpora
+contextd list-corpora
+
+# Backend + daemon + corpora state at a glance
+contextd status
+```
+
+Each indexing session logs per-provider input/output token counts to `~/.contextd/state/session-log/`. The `costs` command aggregates these into a per-provider summary. The `status` command queries the daemon's IPC endpoint (Unix socket on Linux/macOS, localhost TCP on Windows) for live runtime info (pid, uptime, watched corpora) and falls back to a PID-file check if the endpoint is unreachable.
+
+---
+
+## CLI reference
+
+| Command | Purpose | Key flags |
+|---|---|---|
+| `contextd init` | First-run wizard — creates `~/.contextd/` layout | `--yes` (non-interactive) |
+| `contextd up` | Start graph backend + indexer daemon | — |
+| `contextd down` | Stop daemon + graph backend | — |
+| `contextd status` | Report daemon, backend, and corpora state | — |
+| `contextd add-corpus PATH` | Register a corpus for indexing | `--name`, `--granularity {file,section}`, `--from TEMPLATE` |
+| `contextd list-corpora` | List registered corpora | — |
+| `contextd index CORPUS` | Run an indexing pass | `--bootstrap`, `--incremental`, `--estimate-only`, `--refresh {inferred,summaries,llm,all}` |
+| `contextd ask "QUESTION"` | NL→Cypher query translation and execution | `--corpus NAME` |
+| `contextd logs` | Tail the structured JSON log | `--follow` |
+| `contextd costs` | Aggregated provider token spend | `--since YYYY-MM-DD` |
+
+Three console scripts are installed:
+
+| Script | Role |
+|---|---|
+| `contextd` | CLI (all commands above) |
+| `contextd-mcp` | stdio MCP server for Claude Desktop / Cursor / Zed |
+| `contextd-indexer` | Background indexer daemon (launched automatically by `contextd up`) |
+
 ---
 
 ## MCP integration
@@ -304,7 +359,7 @@ contextd status    # show daemon state (pid, uptime, corpora)
 contextd down      # stop daemon + graph backend
 ```
 
-`contextd status` tries the IPC socket first for live runtime info, and falls back to the PID file if the daemon is not reachable:
+`contextd status` tries the IPC endpoint first for live runtime info, and falls back to the PID file if the daemon is not reachable:
 
 ```
 backend:  neo4j running at 127.0.0.1:7687
@@ -313,7 +368,7 @@ daemon:   running (pid=12345, uptime=42s, corpora=['notes'])
 
 ### How it works
 
-1. A `CorpusWatcher` (inotify / FSEvents) fires on every file change under the corpus root.
+1. A `CorpusWatcher` (inotify on Linux, FSEvents on macOS, ReadDirectoryChangesW on Windows) fires on every file change under the corpus root.
 2. Events are collected by a `DebouncedQueue` with a configurable window (default 30 s) to batch rapid edits into a single pass.
 3. After the window closes, the daemon runs hash checks. For file-granular corpora, unchanged files are skipped by MD5. For section-granular corpora, section-level hashes are compared — only changed, added, or removed sections are cleared and re-inferred; unchanged sections are left untouched.
 4. Changed files are re-indexed concurrently (default 4 workers) by calling the same phase pipeline as `--incremental`.
@@ -410,6 +465,43 @@ Then use `systemctl --user {status,stop,restart} contextd-indexer` instead of `c
 
 ---
 
+## Windows support
+
+Contextd runs natively on Windows (Python 3.11+ installed directly, CLI in cmd.exe or PowerShell, daemon as a native Windows process). No WSL2 required.
+
+The only platform difference is the daemon's IPC transport: on Linux/macOS the daemon uses a Unix domain socket (`~/.contextd/ipc.sock`); on Windows it binds to `127.0.0.1` on an ephemeral TCP port and writes the port number to `~/.contextd/ipc.port`. The JSON-lines wire protocol is identical — this is transparent to the user and to MCP clients.
+
+Process management also adapts: the daemon detaches via `CREATE_NEW_PROCESS_GROUP` instead of `start_new_session`, and `contextd down` uses `TerminateProcess` instead of `SIGTERM`. All platform-specific code is isolated in `contextd/_compat.py`; no other module branches on `sys.platform`.
+
+### Install on Windows
+
+```powershell
+git clone https://github.com/giuseppecardenas/contextd.git
+cd contextd
+python -m venv .venv
+.venv\Scripts\activate
+pip install -e ".[dev]"
+```
+
+Requirements: Python 3.11+, Docker Desktop (with Linux containers enabled — required for Neo4j/Memgraph images).
+
+### WSL2 alternative
+
+If you prefer to run inside WSL2, four PowerShell wrappers under `scripts/windows/` forward commands into the WSL distribution:
+
+| Script | Equivalent |
+|---|---|
+| `contextd-init.ps1` | `wsl -d $Distro -- contextd init` |
+| `contextd-up.ps1` | `wsl -d $Distro -- contextd up` |
+| `contextd-down.ps1` | `wsl -d $Distro -- contextd down` |
+| `contextd-status.ps1` | `wsl -d $Distro -- contextd status` |
+
+Set `$Distro` to your WSL distribution name (e.g., `Ubuntu`).
+
+**WSL2-specific note:** edits made from the Windows side (e.g., VS Code Windows app writing into the WSL filesystem) silently bypass Linux inotify — the daemon never sees the event. The [periodic sweep](#periodic-sweep-wsl2--windows-side-edits) compensates by polling on a configurable interval (default 900 s). If you primarily edit from Windows, consider lowering `sweep_interval_seconds` for faster catch-up.
+
+---
+
 ## Ontology customisation
 
 The base ontology is intentionally general. Domain-specific corpora map their vocabulary to Contextd's canonical node and edge types through two mechanisms:
@@ -419,6 +511,38 @@ The base ontology is intentionally general. Domain-specific corpora map their vo
 2. **Override file** (`[ontology] overrides = "ontology.json"`) — a JSON file that adds domain-specific edge-type aliases. All aliases are validated against the base ontology at index time; unrecognised types are silently discarded, not stored.
 
 Adapter configs live next to the corpus they describe (by convention, a `.contextd/` directory at the corpus root containing `corpus.toml`, `ontology.json`, and `prompts/`). `contextd add-corpus <path> --from <path>/.contextd/corpus.toml` rewrites relative paths in the template to absolute paths anchored at the template's directory, so the adapter stays portable. See [docs/ontology.md](docs/ontology.md) for the full customisation reference.
+
+---
+
+## Writing a domain adapter
+
+A domain adapter teaches Contextd the vocabulary and structure of a specific corpus. By convention, adapters live in a `.contextd/` directory colocated with the corpus root:
+
+```
+my-project/
+├── .contextd/
+│   ├── corpus.toml          # corpus config with ontology aliases, globs, prompts
+│   ├── ontology.json        # domain-specific edge-type aliases
+│   └── prompts/
+│       └── summary.md       # custom summarisation prompt template
+├── docs/
+│   └── spec.md
+└── src/
+    └── ...
+```
+
+Register the adapter:
+
+```bash
+contextd add-corpus /path/to/my-project --name my-project --from /path/to/my-project/.contextd/corpus.toml
+```
+
+The `--from` flag copies the template's settings (ontology overrides, prompt paths, include/exclude patterns) into the registered corpus TOML at `~/.contextd/corpora/my-project.toml`, rewriting relative paths to absolute paths anchored at the template's directory. The adapter stays portable across machines.
+
+**When to use an adapter vs plain `add-corpus`:**
+
+- **Plain `add-corpus`** — the default ontology and prompts work well for general markdown, code, and structured data.
+- **Adapter** — your corpus has domain-specific vocabulary (e.g., `Registry` should map to `Pattern`), you want a custom summarisation prompt, or you need specific include/exclude patterns or section-level heading bounds.
 
 ---
 
@@ -469,6 +593,41 @@ log_backup_count = 5
 ```
 
 Full corpus config schema and CLI reference live in [docs/cli.md](docs/cli.md).
+
+### Per-corpus configuration
+
+Each corpus is configured via a TOML file at `~/.contextd/corpora/<name>.toml`, created by `contextd add-corpus`. Key fields:
+
+```toml
+[corpus]
+name = "notes"
+root = "/home/you/notes"
+include = ["**/*.md"]           # glob patterns; default ["**/*"]
+exclude = ["drafts/**"]         # glob patterns to skip; default []
+granularity = "file"            # "file" (default) or "section"
+heading_min_level = 2           # section mode: shallowest heading to promote (default 2)
+heading_max_level = 4           # section mode: deepest heading to promote (default 4)
+
+[embedding]
+model = "voyage-4-large"        # override global embedding model
+chunk_tokens = 32000            # max tokens per chunk (default 32000)
+chunk_overlap = 200             # overlap between chunks (default 200)
+
+[ontology]
+base = "default"                # base ontology name
+overrides = "ontology.json"     # path to domain-specific edge aliases (relative to TOML)
+aliases = { Registry = "Pattern", Procedure = "Artifact" }  # node-label aliases
+
+[mcp.tools]
+# Per-corpus Cypher tools; each key becomes <corpus>.<key> in the MCP tool list
+# my_query = "queries/my_query.cypher"
+
+[summarization]
+prompt_override = "prompts/summary.md"  # custom summarisation prompt
+max_words = 150                          # override global summary_max_words
+```
+
+The `include` and `exclude` patterns use glob syntax with `**` for recursive matching. Files under `.git`, `.venv`, `__pycache__`, and `node_modules` are always excluded regardless of patterns.
 
 ### Using a local model
 
@@ -523,6 +682,23 @@ Contextd is a single-user local tool. Its security posture reflects that:
 - **Graph store** binds to `127.0.0.1:7687` only. Neither Neo4j nor Memgraph is exposed beyond the loopback interface in the default compose config.
 - **MCP read-only guard.** The `query_graph` tool and all per-corpus Cypher tools pass through `assert_read_only` before execution. The guard rejects Cypher containing `CREATE`, `MERGE`, `DELETE`, `SET`, `REMOVE`, `DROP`, `DETACH`, `FOREACH`, and `CALL` with side-effecting procedures. This guards against prompt-injection attacks that attempt to write to the graph through the MCP surface.
 - **Do not expose Contextd's MCP server over a network.** It is designed for stdio transport to a locally-running MCP client. Running it as a shared network service is out of scope and untested.
+
+---
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `contextd up` fails with "Docker not found" | Docker engine not running or not installed | Start Docker Desktop or install Docker Engine; verify with `docker ps` |
+| `contextd index` hangs or is very slow | Gemini API rate limit (15 RPM on free tier) | Reduce `inference_concurrency`; or point `summary`/`inference` at a [local model](#using-a-local-model) to avoid quota limits |
+| `contextd ask` returns empty results | Corpus not bootstrapped, or query doesn't match indexed content | Run `contextd index <corpus> --bootstrap` first; try simpler queries |
+| `contextd status` shows "daemon not running" after reboot | Daemon was a shell child process, not a service | Install the [systemd unit](#running-under-systemd-optional) for persistence across reboots |
+| Daemon crashes on git commit | Git temp files (e.g., `index.lock`) entering the watcher pipeline | Update to latest; fixed in `2b6d33d` — the daemon now excludes `.git/` events and handles vanished temp files |
+| Section-granular index skips headings | `heading_min_level` / `heading_max_level` too narrow | Adjust range in corpus TOML (default: levels 2–4); level 1 (`#`) is excluded by default |
+| `contextd index --incremental` re-processes everything | Graph predates `inferred_at` marker migration | Run `contextd index <corpus> --bootstrap` once — migration `_0004` backfills markers on existing nodes |
+| Neo4j container won't start on port 7687 | Another backend already bound to the port | `contextd down` first, then switch `backend` in config and `contextd up` |
+| Edits from Windows don't trigger re-indexing | WSL2 inotify doesn't see Windows-side writes | Lower `sweep_interval_seconds` in config (see [periodic sweep](#periodic-sweep-wsl2--windows-side-edits)); or touch the file from WSL |
+| Large MCP search payloads | Embedding vectors included in results (pre-`96c409a`) | Update to latest; the `search` tool now strips embedding vectors from results |
 
 ---
 

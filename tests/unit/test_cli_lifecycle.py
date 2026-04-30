@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import signal
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -213,7 +212,7 @@ def test_up_clears_stale_pid_and_launches(tmp_path: Path, monkeypatch: pytest.Mo
     assert pid_file.read_text().strip() == "55555"
 
 
-def test_down_sends_sigterm_to_daemon(tmp_path: Path) -> None:
+def test_down_sends_graceful_terminate(tmp_path: Path) -> None:
     from contextd.cli.infra import _stop_daemon
 
     pid_file = tmp_path / "indexer.pid"
@@ -221,13 +220,12 @@ def test_down_sends_sigterm_to_daemon(tmp_path: Path) -> None:
 
     with (
         patch("contextd.cli.infra._pid_path", return_value=pid_file),
-        patch("os.kill") as mock_kill,
-        patch("os.waitpid", side_effect=ChildProcessError),
+        patch("contextd.cli.infra.graceful_terminate") as mock_terminate,
+        patch("contextd.cli.infra.process_is_alive", return_value=False),
     ):
         _stop_daemon()
 
-    sigterm_calls = [c for c in mock_kill.call_args_list if c[0][1] == signal.SIGTERM]
-    assert sigterm_calls
+    mock_terminate.assert_called_once_with(99999)
 
 
 def test_down_removes_pid_file(tmp_path: Path) -> None:
@@ -238,8 +236,8 @@ def test_down_removes_pid_file(tmp_path: Path) -> None:
 
     with (
         patch("contextd.cli.infra._pid_path", return_value=pid_file),
-        patch("os.kill"),
-        patch("os.waitpid", side_effect=ChildProcessError),
+        patch("contextd.cli.infra.graceful_terminate"),
+        patch("contextd.cli.infra.process_is_alive", return_value=False),
     ):
         _stop_daemon()
 

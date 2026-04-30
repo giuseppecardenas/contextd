@@ -4,10 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import json
-import os
 import shutil
-import signal
-import socket
 import subprocess
 import time
 from pathlib import Path
@@ -15,6 +12,14 @@ from typing import TYPE_CHECKING
 
 import click
 
+from contextd._compat import (
+    connect_ipc,
+    daemon_popen_kwargs,
+    force_kill,
+    graceful_terminate,
+    ipc_file_name,
+    process_is_alive,
+)
 from contextd._paths import contextd_home
 from contextd.cli import cli
 from contextd.cli._shared import _load_cfg, console
@@ -33,22 +38,22 @@ def _pid_path() -> Path:
 
 
 def _query_ipc_status() -> dict[str, object] | None:
-    """Try to read richer daemon state via the IPC socket.
+    """Try to read richer daemon state via the IPC endpoint.
 
-    Returns the parsed status dict on success, or None if the socket is
-    absent, connection is refused, or the round-trip takes longer than 1s.
+    Returns the parsed status dict on success, or None if the endpoint
+    file is absent, connection is refused, or the round-trip takes
+    longer than 1s.
     """
-    sock_path = contextd_home() / "ipc.sock"
-    if not sock_path.exists():
+    ipc_path = contextd_home() / ipc_file_name()
+    if not ipc_path.exists():
         return None
     try:
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+        with connect_ipc(ipc_path) as s:
             s.settimeout(1.0)
-            s.connect(str(sock_path))
             s.sendall((json.dumps({"cmd": "status"}) + "\n").encode())
             raw = s.recv(4096).decode().strip()
         return dict(json.loads(raw))
-    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError, ValueError):
         return None
 
 
@@ -64,11 +69,7 @@ def _daemon_pid() -> int | None:
 
 
 def _daemon_is_running(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-        return True
-    except (OSError, ProcessLookupError):
-        return False
+    return process_is_alive(pid)
 
 
 def _stop_daemon() -> None:
@@ -76,14 +77,14 @@ def _stop_daemon() -> None:
     if pid is None:
         return
     try:
-        os.kill(pid, signal.SIGTERM)
+        graceful_terminate(pid)
         for _ in range(50):  # wait up to 5s
             time.sleep(0.1)
-            if not _daemon_is_running(pid):
+            if not process_is_alive(pid):
                 break
         else:
             with contextlib.suppress(OSError, ProcessLookupError):
-                os.kill(pid, signal.SIGKILL)
+                force_kill(pid)
     except (OSError, ProcessLookupError):
         pass
     finally:
@@ -173,7 +174,7 @@ def up() -> None:
         ["contextd-indexer"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        start_new_session=True,
+        **daemon_popen_kwargs(),  # type: ignore[call-overload]
     )
     _pid_path().write_text(str(proc.pid))
     console.print(f"[green]✓[/] indexer daemon launched (pid={proc.pid})")
