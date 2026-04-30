@@ -5,7 +5,15 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
+
 from contextd._compat import connect_ipc
+
+# IPC handler threads are daemon threads — on macOS, GC can finalize
+# their socket objects before the thread's `with conn:` block exits,
+# producing a spurious ResourceWarning. The handler join in stop()
+# prevents real leaks; this suppresses the non-deterministic GC race.
+pytestmark = pytest.mark.filterwarnings("ignore::pytest.PytestUnraisableExceptionWarning")
 
 
 def _send_recv(ipc_path: Path, payload: str, timeout: float = 2.0) -> str:

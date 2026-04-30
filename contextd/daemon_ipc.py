@@ -99,13 +99,9 @@ class IpcServer:
             while not self._stop_event.is_set():
                 try:
                     conn, _ = sock.accept()
-                    t = threading.Thread(
-                        target=self._handle_connection, args=(conn,), daemon=True
-                    )
+                    t = threading.Thread(target=self._handle_connection, args=(conn,), daemon=True)
                     with self._handler_lock:
-                        self._handler_threads = [
-                            h for h in self._handler_threads if h.is_alive()
-                        ]
+                        self._handler_threads = [h for h in self._handler_threads if h.is_alive()]
                         self._handler_threads.append(t)
                     t.start()
                 except TimeoutError:
