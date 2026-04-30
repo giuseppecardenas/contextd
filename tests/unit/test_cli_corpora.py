@@ -16,9 +16,10 @@ from contextd.cli.corpora import _rewrite_template_path
 def _setup_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home = tmp_path / ".contextd"
     home.mkdir()
+    compose = (home / "docker-compose.yml").as_posix()
     (home / "config.toml").write_text(
         '[storage]\nbackend = "memgraph"\n\n[storage.memgraph]\n'
-        f'docker_compose_file = "{home}/docker-compose.yml"\n'
+        f'docker_compose_file = "{compose}"\n'
     )
     monkeypatch.setenv("CONTEXTD_HOME", str(home))
     return home
@@ -261,7 +262,7 @@ def test_add_corpus_from_template_preserves_absolute_paths(
     home = _setup_home(tmp_path, monkeypatch)
     template_dir = tmp_path / "tpl3"
     template_dir.mkdir()
-    abs_ontology = "/opt/shared/ontology.json"
+    abs_ontology = (tmp_path / "shared" / "ontology.json").as_posix()
     template = _write_template(template_dir, overrides=abs_ontology, prompt_override=None)
 
     corpus_dir = tmp_path / "data3"
@@ -519,9 +520,10 @@ def test_add_corpus_from_runeledger_template(
 # ---------------------------------------------------------------------------
 
 
-def test_rewrite_template_path_absolute_passes_through() -> None:
+def test_rewrite_template_path_absolute_passes_through(tmp_path: Path) -> None:
     """Absolute paths are returned unchanged regardless of the anchor."""
-    assert _rewrite_template_path("/etc/foo", Path("/tmp")) == "/etc/foo"
+    abs_path = str(tmp_path / "foo")
+    assert _rewrite_template_path(abs_path, Path("/tmp")) == abs_path
 
 
 def test_rewrite_template_path_relative_resolves_against_anchor(tmp_path: Path) -> None:

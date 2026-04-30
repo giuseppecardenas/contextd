@@ -17,12 +17,13 @@ from contextd.providers.cost_log import CostLog
 def _setup_home(tmp_path: Path) -> Path:
     home = tmp_path / ".contextd"
     home.mkdir()
+    compose = (home / "docker-compose.yml").as_posix()
     config = f"""
 [storage]
 backend = "memgraph"
 
 [storage.memgraph]
-docker_compose_file = "{home}/docker-compose.yml"
+docker_compose_file = "{compose}"
 """
     (home / "config.toml").write_text(config)
     (home / "corpora").mkdir()
