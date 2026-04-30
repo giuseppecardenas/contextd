@@ -15,9 +15,10 @@ import contextd.cli
 def _setup_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home = tmp_path / ".contextd"
     home.mkdir()
+    compose = (home / "docker-compose.yml").as_posix()
     (home / "config.toml").write_text(
         f'[storage]\nbackend = "memgraph"\n\n[storage.memgraph]\n'
-        f'docker_compose_file = "{home}/docker-compose.yml"\n'
+        f'docker_compose_file = "{compose}"\n'
     )
     (home / "corpora").mkdir()
     (home / "state").mkdir()

@@ -77,7 +77,7 @@ def _write_corpus_toml(
         "[mcp.tools]",
     ]
     for tool_name, cypher_path in cypher_entries.items():
-        lines.append(f'{tool_name} = "{cypher_path}"')
+        lines.append(f'{tool_name} = "{cypher_path.as_posix()}"')
     if extra:
         lines.append(extra)
     toml_path = corpora_dir / f"{corpus_name}.toml"

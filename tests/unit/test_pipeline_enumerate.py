@@ -46,9 +46,9 @@ def test_excludes_venv_pycache_node_modules(tmp_path: Path) -> None:
         (sub / "dropped.md").write_text("x")
 
     files = enumerate_corpus_files(_cfg(tmp_path))
-    paths = {str(p) for p in files}
-    assert any(p.endswith("/kept.md") for p in paths)
-    assert not any("/.venv/" in p or "/__pycache__/" in p or "/node_modules/" in p for p in paths)
+    names = {p.name for p in files}
+    assert "kept.md" in names
+    assert "dropped.md" not in names
 
 
 def test_skips_symlinks(tmp_path: Path) -> None:

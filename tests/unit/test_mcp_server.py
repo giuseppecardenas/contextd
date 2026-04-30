@@ -159,9 +159,9 @@ def test_build_all_tool_descriptors_adds_corpus_tools(tmp_path: Path) -> None:
     toml_content = f"""
 [corpus]
 name = "my-corpus"
-root = "{tmp_path}"
+root = "{tmp_path.as_posix()}"
 [mcp.tools]
-find_file = "{cypher_file}"
+find_file = "{cypher_file.as_posix()}"
 """
     (corpora_dir / "my-corpus.toml").write_text(toml_content)
 

@@ -15,7 +15,7 @@ def test_append_creates_jsonl_file(tmp_path: Path) -> None:
     lines = buf._buffer_path.read_text().strip().splitlines()
     assert len(lines) == 1
     record = json.loads(lines[0])
-    assert record == {"path": "/some/file.md", "corpus": "my-corpus"}
+    assert record == {"path": str(Path("/some/file.md")), "corpus": "my-corpus"}
 
 
 def test_append_accumulates_duplicate_paths(tmp_path: Path) -> None:
@@ -111,7 +111,7 @@ def test_replay_removes_succeeded_entries_from_buffer(tmp_path: Path) -> None:
 
     remaining = buf.load()
     assert len(remaining) == 1
-    assert remaining[0]["path"] == "/a/file2.md"
+    assert remaining[0]["path"] == str(Path("/a/file2.md"))
 
 
 def test_replay_returns_correct_counts(tmp_path: Path) -> None:
