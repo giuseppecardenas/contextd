@@ -262,8 +262,8 @@ def test_add_corpus_from_template_preserves_absolute_paths(
     home = _setup_home(tmp_path, monkeypatch)
     template_dir = tmp_path / "tpl3"
     template_dir.mkdir()
-    abs_ontology = (tmp_path / "shared" / "ontology.json").as_posix()
-    template = _write_template(template_dir, overrides=abs_ontology, prompt_override=None)
+    abs_ontology_posix = (tmp_path / "shared" / "ontology.json").as_posix()
+    template = _write_template(template_dir, overrides=abs_ontology_posix, prompt_override=None)
 
     corpus_dir = tmp_path / "data3"
     corpus_dir.mkdir()
@@ -274,7 +274,7 @@ def test_add_corpus_from_template_preserves_absolute_paths(
     )
     assert result.exit_code == 0, result.output
     data = tomllib.loads((home / "corpora" / "baz.toml").read_text())
-    assert data["ontology"]["overrides"] == abs_ontology
+    assert data["ontology"]["overrides"] == str(tmp_path / "shared" / "ontology.json")
 
 
 def test_add_corpus_from_template_granularity_inherited_from_template(
