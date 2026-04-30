@@ -26,8 +26,7 @@ def test_ipc_file_name_matches_platform() -> None:
         assert ipc_file_name() == "ipc.sock"
 
 
-def test_create_and_connect_roundtrip(tmp_path: Path) -> None:
-    ipc_path = tmp_path / ipc_file_name()
+def test_create_and_connect_roundtrip(ipc_path: Path) -> None:
     server_sock = create_ipc_server_socket(ipc_path)
     try:
         server_sock.listen(1)
@@ -62,8 +61,7 @@ def test_create_and_connect_roundtrip(tmp_path: Path) -> None:
         cleanup_ipc(ipc_path)
 
 
-def test_cleanup_ipc_removes_file(tmp_path: Path) -> None:
-    ipc_path = tmp_path / ipc_file_name()
+def test_cleanup_ipc_removes_file(ipc_path: Path) -> None:
     sock = create_ipc_server_socket(ipc_path)
     sock.close()
     assert ipc_path.exists()
@@ -92,8 +90,7 @@ def test_daemon_popen_kwargs_has_correct_key() -> None:
         assert kwargs == {"start_new_session": True}
 
 
-def test_ipc_server_socket_creates_endpoint_file(tmp_path: Path) -> None:
-    ipc_path = tmp_path / ipc_file_name()
+def test_ipc_server_socket_creates_endpoint_file(ipc_path: Path) -> None:
     assert not ipc_path.exists()
     sock = create_ipc_server_socket(ipc_path)
     try:
@@ -106,9 +103,8 @@ def test_ipc_server_socket_creates_endpoint_file(tmp_path: Path) -> None:
         cleanup_ipc(ipc_path)
 
 
-def test_ipc_roundtrip_with_json_protocol(tmp_path: Path) -> None:
+def test_ipc_roundtrip_with_json_protocol(ipc_path: Path) -> None:
     """Full JSON-lines round-trip matching daemon IPC protocol."""
-    ipc_path = tmp_path / ipc_file_name()
     server_sock = create_ipc_server_socket(ipc_path)
     try:
         server_sock.listen(1)

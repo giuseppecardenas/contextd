@@ -31,11 +31,9 @@ def _wait_for_ipc(ipc_path: Path, timeout: float = 5.0) -> None:
     raise TimeoutError(f"IPC endpoint {ipc_path} did not become connectable within {timeout}s")
 
 
-def test_ipc_server_responds_to_ping(tmp_path: Path) -> None:
-    from contextd._compat import ipc_file_name
+def test_ipc_server_responds_to_ping(ipc_path: Path) -> None:
     from contextd.daemon_ipc import IpcServer
 
-    ipc_path = tmp_path / ipc_file_name()
     stop_event = threading.Event()
     server = IpcServer(
         ipc_path=ipc_path,
@@ -54,11 +52,9 @@ def test_ipc_server_responds_to_ping(tmp_path: Path) -> None:
         server.stop()
 
 
-def test_ipc_server_responds_to_status(tmp_path: Path) -> None:
-    from contextd._compat import ipc_file_name
+def test_ipc_server_responds_to_status(ipc_path: Path) -> None:
     from contextd.daemon_ipc import IpcServer
 
-    ipc_path = tmp_path / ipc_file_name()
     stop_event = threading.Event()
     server = IpcServer(
         ipc_path=ipc_path,
@@ -80,11 +76,9 @@ def test_ipc_server_responds_to_status(tmp_path: Path) -> None:
         server.stop()
 
 
-def test_ipc_server_stop_sets_event(tmp_path: Path) -> None:
-    from contextd._compat import ipc_file_name
+def test_ipc_server_stop_sets_event(ipc_path: Path) -> None:
     from contextd.daemon_ipc import IpcServer
 
-    ipc_path = tmp_path / ipc_file_name()
     stop_event = threading.Event()
     server = IpcServer(
         ipc_path=ipc_path,
@@ -106,11 +100,9 @@ def test_ipc_server_stop_sets_event(tmp_path: Path) -> None:
         server.stop()
 
 
-def test_ipc_server_ignores_unknown_command(tmp_path: Path) -> None:
-    from contextd._compat import ipc_file_name
+def test_ipc_server_ignores_unknown_command(ipc_path: Path) -> None:
     from contextd.daemon_ipc import IpcServer
 
-    ipc_path = tmp_path / ipc_file_name()
     stop_event = threading.Event()
     server = IpcServer(
         ipc_path=ipc_path,
@@ -133,11 +125,9 @@ def test_ipc_server_ignores_unknown_command(tmp_path: Path) -> None:
         server.stop()
 
 
-def test_ipc_server_handles_corrupt_json(tmp_path: Path) -> None:
-    from contextd._compat import ipc_file_name
+def test_ipc_server_handles_corrupt_json(ipc_path: Path) -> None:
     from contextd.daemon_ipc import IpcServer
 
-    ipc_path = tmp_path / ipc_file_name()
     stop_event = threading.Event()
     server = IpcServer(
         ipc_path=ipc_path,
