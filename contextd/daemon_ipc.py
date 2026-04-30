@@ -55,6 +55,8 @@ class IpcServer:
         self._start_time = start_time
         self._server_socket: socket.socket | None = None
         self._thread: threading.Thread | None = None
+        self._handler_threads: list[threading.Thread] = []
+        self._handler_lock = threading.Lock()
 
     def _handle_connection(self, conn: socket.socket) -> None:
         with conn:
@@ -97,9 +99,15 @@ class IpcServer:
             while not self._stop_event.is_set():
                 try:
                     conn, _ = sock.accept()
-                    threading.Thread(
+                    t = threading.Thread(
                         target=self._handle_connection, args=(conn,), daemon=True
-                    ).start()
+                    )
+                    with self._handler_lock:
+                        self._handler_threads = [
+                            h for h in self._handler_threads if h.is_alive()
+                        ]
+                        self._handler_threads.append(t)
+                    t.start()
                 except TimeoutError:
                     continue
                 except OSError:
@@ -113,10 +121,14 @@ class IpcServer:
         self._thread.start()
 
     def stop(self) -> None:
-        """Close the server socket and join the background thread."""
+        """Close the server socket and join all threads."""
         if self._server_socket is not None:
             with contextlib.suppress(OSError):
                 self._server_socket.close()
         if self._thread is not None:
             self._thread.join(timeout=3.0)
+        with self._handler_lock:
+            for t in self._handler_threads:
+                t.join(timeout=1.0)
+            self._handler_threads.clear()
         cleanup_ipc(self._ipc_path)
