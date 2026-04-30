@@ -23,7 +23,9 @@ def _wait_for_ipc(ipc_path: Path, timeout: float = 5.0) -> None:
         if ipc_path.exists():
             try:
                 with connect_ipc(ipc_path) as s:
-                    s.settimeout(0.1)
+                    s.settimeout(1.0)
+                    s.sendall(json.dumps({"cmd": "ping"}).encode() + b"\n")
+                    s.recv(4096)
                 return
             except OSError:
                 pass

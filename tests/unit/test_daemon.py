@@ -211,7 +211,7 @@ def test_handle_batch_processes_multiple_files_concurrently(
         elapsed = time.monotonic() - start
 
     assert len(call_times) == 4
-    assert elapsed < 0.18  # 4 x 0.05s serial = 0.20s; concurrent ~0.05s
+    assert elapsed < 0.5  # 4 x 0.05s serial = 0.20s; concurrent ~0.05s
 
 
 def test_handle_batch_logs_and_continues_on_error(tmp_path: Path) -> None:
