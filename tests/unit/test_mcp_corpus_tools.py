@@ -71,13 +71,18 @@ def _write_corpus_toml(
     cypher_entries: dict[str, Path],
     extra: str = "",
 ) -> Path:
-    """Helper: write a minimal corpus TOML pointing at cypher_entries."""
+    """Helper: write a minimal corpus TOML pointing at cypher_entries.
+
+    ``Path.as_posix()`` keeps backslash-free paths in the TOML on Windows
+    so ``\\U`` in ``C:\\Users\\...`` does not get parsed as a Unicode
+    escape. pathlib accepts forward-slash paths on Windows transparently.
+    """
     lines = [
         f'[corpus]\nname = "{corpus_name}"\nroot = "/tmp"',
         "[mcp.tools]",
     ]
     for tool_name, cypher_path in cypher_entries.items():
-        lines.append(f'{tool_name} = "{cypher_path}"')
+        lines.append(f'{tool_name} = "{cypher_path.as_posix()}"')
     if extra:
         lines.append(extra)
     toml_path = corpora_dir / f"{corpus_name}.toml"

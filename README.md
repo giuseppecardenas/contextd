@@ -5,7 +5,8 @@ Contextd is a locally-hosted knowledge layer for your project files. It indexes 
 - **Storage:** Neo4j Community 5.x (default) or Memgraph 3.x — both run in Docker, both bind port 7687.
 - **Inference:** Google Gemma (`gemma-4-31b-it` default) via the Gemini API for summarisation, relationship inference, and NL→Cypher translation; Voyage AI `voyage-4-large` (1024-dim, 32k-token context) for vector embeddings.
 - **Interface:** stdio MCP server (`contextd-mcp`) and CLI (`contextd`).
-- **Privacy:** all state lives under `~/.contextd/`; no data is stored outside your machine beyond the per-file API calls.
+- **Platforms:** runs natively on Linux, macOS, and Windows 11. The daemon, IPC, file-watching, and Docker invocation are platform-agnostic — Windows is not a WSL-only afterthought. WSL2 is still a fine host on Windows if you prefer it, but a native Python install on Windows is equally supported.
+- **Privacy:** all state lives under `~/.contextd/` (`%USERPROFILE%\.contextd` on Windows); no data is stored outside your machine beyond the per-file API calls.
 
 > **Status: alpha.** v0.1.0 is pre-PyPI. Use the dev install below. The repo is private while the final documentation milestone lands.
 
@@ -85,17 +86,35 @@ Edge types: `CONTAINS`, `PARENT_OF`, `NEXT_SIBLING`, `BELONGS_TO`, `CREATED_BY`,
 
 ### Pre-PyPI (current)
 
-The package is not yet on PyPI. Clone the repo and install in editable mode:
+The package is not yet on PyPI. Clone the repo and install in editable mode.
+
+**Linux / macOS:**
 
 ```bash
 git clone git@github.com:giuseppecardenas/contextd.git
 cd contextd
 uv venv
-source .venv/bin/activate        # or .venv\Scripts\activate on Windows
+source .venv/bin/activate
 uv pip install -e ".[dev]"
+export GEMINI_API_KEY=<your-key>
+export VOYAGE_API_KEY=<your-key>
 ```
 
-Requirements: Python 3.11+, Docker (Docker Desktop or any Docker engine with Compose v2).
+**Windows 11 (native PowerShell):**
+
+```powershell
+git clone git@github.com:giuseppecardenas/contextd.git
+Set-Location contextd
+uv venv
+.venv\Scripts\Activate.ps1
+uv pip install -e ".[dev]"
+$env:GEMINI_API_KEY = "<your-key>"
+$env:VOYAGE_API_KEY = "<your-key>"
+```
+
+Requirements (both platforms): Python 3.11+, Docker (Docker Desktop on Windows/macOS or any Docker engine with Compose v2 on Linux). Docker Desktop on Windows is supported — `contextd up` calls `docker compose` against the same daemon that `docker` does from PowerShell.
+
+The remaining steps in this README are written with `bash` syntax. The equivalent PowerShell forms differ only in shell-specific surface (`export` ↔ `$env:`, `~/.contextd/` ↔ `$env:USERPROFILE\.contextd\`); the `contextd` CLI invocations themselves are identical on both platforms.
 
 ### After v0.1.0 on PyPI (future)
 
@@ -256,13 +275,28 @@ Contextd exposes a stdio MCP server. It works with any MCP-speaking client over 
 
 **Cursor / Zed / other clients** — register `contextd-mcp` as a stdio MCP server; consult your client's docs for the exact config format.
 
-If `contextd-mcp` is not on your PATH (e.g., when using a venv), use the absolute path to the binary:
+If `contextd-mcp` is not on your PATH (e.g., when using a venv), use the absolute path to the binary.
+
+**Linux/macOS:**
 
 ```json
 {
   "mcpServers": {
     "contextd": {
       "command": "/home/you/src/contextd/.venv/bin/contextd-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+**Windows:**
+
+```json
+{
+  "mcpServers": {
+    "contextd": {
+      "command": "C:\\Users\\you\\src\\contextd\\.venv\\Scripts\\contextd-mcp.exe",
       "args": []
     }
   }

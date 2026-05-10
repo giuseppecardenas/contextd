@@ -1,35 +1,33 @@
 from __future__ import annotations
 
 import json
-import socket
 import threading
 import time
 from pathlib import Path
 
+from contextd.daemon_ipc import connect as _ipc_connect
+
 
 def _send_recv(sock_path: Path, payload: str, timeout: float = 2.0) -> str:
     """Send a JSON-lines message and return the raw response string."""
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-        s.settimeout(timeout)
-        s.connect(str(sock_path))
+    with _ipc_connect(sock_path, timeout=timeout) as s:
         s.sendall(payload.encode())
         return s.recv(4096).decode()
 
 
 def _wait_for_socket(sock_path: Path, timeout: float = 2.0) -> None:
-    """Block until the socket file is connectable or timeout expires."""
+    """Block until the IPC endpoint is connectable or timeout expires."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if sock_path.exists():
             try:
-                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-                    s.settimeout(0.1)
-                    s.connect(str(sock_path))
+                with _ipc_connect(sock_path, timeout=0.1):
+                    pass
                 return
-            except OSError:
+            except (OSError, ValueError):
                 pass
         time.sleep(0.05)
-    raise TimeoutError(f"socket {sock_path} did not become connectable within {timeout}s")
+    raise TimeoutError(f"IPC endpoint {sock_path} did not become connectable within {timeout}s")
 
 
 def test_ipc_server_responds_to_ping(tmp_path: Path) -> None:

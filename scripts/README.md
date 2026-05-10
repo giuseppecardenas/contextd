@@ -2,9 +2,11 @@
 
 ## `windows/`
 
-PowerShell wrappers that let Windows 11 users invoke Contextd commands from PowerShell without typing `wsl` explicitly. Each is a one-line forward to the WSL-installed CLI.
+PowerShell wrappers for users running Contextd **inside WSL2**. Each script is a one-line forward to the WSL-installed CLI (`wsl -d <distro> -- contextd <cmd>`), so PowerShell users running the WSL2 alternative path don't have to type `wsl` explicitly.
 
-**Customisation:** set `$env:CONTEXTD_WSL_DISTRO` (defaults to `Ubuntu`) or pass `-Distro <name>` on the command line to target a different WSL distro.
+**Native Windows users do not need these wrappers.** With a native install (`uv pip install -e .` or `pipx install contextd`), `contextd`, `contextd-mcp`, and `contextd-indexer` are on PATH as regular `.exe` shims under `.venv\Scripts\` — call them directly from PowerShell.
+
+**Customisation (WSL2 setup only):** set `$env:CONTEXTD_WSL_DISTRO` (defaults to `Ubuntu`) or pass `-Distro <name>` on the command line to target a different WSL distro.
 
 ### Scripts
 

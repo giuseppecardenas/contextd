@@ -4,20 +4,20 @@ from __future__ import annotations
 
 import contextlib
 import json
-import os
 import shutil
-import signal
-import socket
 import subprocess
+import sys
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import click
+import psutil
 
 from contextd._paths import contextd_home
 from contextd.cli import cli
 from contextd.cli._shared import _load_cfg, console
+from contextd.daemon_ipc import connect as _ipc_connect
 
 if TYPE_CHECKING:
     from contextd.config import Config
@@ -26,6 +26,32 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 # Daemon lifecycle helpers
 # ---------------------------------------------------------------------------
+
+
+def _daemon_popen_kwargs() -> dict[str, Any]:
+    """Platform-appropriate Popen kwargs for daemon detachment.
+
+    POSIX uses ``setsid`` via ``start_new_session=True`` so the daemon
+    outlives the launching shell. Windows uses
+    ``CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS`` so closing the
+    launching PowerShell window or Ctrl-C in it does not propagate to
+    the daemon. ``DETACHED_PROCESS`` is only defined on Windows builds
+    of ``subprocess``; resolve via ``getattr`` so mypy --strict and
+    POSIX-side runtimes both accept the symbol. Return type is
+    ``dict[str, Any]`` so the unpacking site can match any of Popen's
+    overload variants without per-key type gymnastics.
+    """
+    kwargs: dict[str, Any] = {
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+    }
+    if sys.platform == "win32":
+        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | getattr(
+            subprocess, "DETACHED_PROCESS", 0
+        )
+    else:
+        kwargs["start_new_session"] = True
+    return kwargs
 
 
 def _pid_path() -> Path:
@@ -42,13 +68,11 @@ def _query_ipc_status() -> dict[str, object] | None:
     if not sock_path.exists():
         return None
     try:
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-            s.settimeout(1.0)
-            s.connect(str(sock_path))
+        with _ipc_connect(sock_path, timeout=1.0) as s:
             s.sendall((json.dumps({"cmd": "status"}) + "\n").encode())
             raw = s.recv(4096).decode().strip()
         return dict(json.loads(raw))
-    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+    except (OSError, ValueError, json.JSONDecodeError, UnicodeDecodeError):
         return None
 
 
@@ -64,30 +88,81 @@ def _daemon_pid() -> int | None:
 
 
 def _daemon_is_running(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-        return True
-    except (OSError, ProcessLookupError):
+    return psutil.pid_exists(pid)
+
+
+def _request_daemon_stop(sock_path: Path) -> bool:
+    """Send ``{"cmd": "stop"}`` to the daemon's IPC endpoint.
+
+    Returns True iff the daemon ack'd with ``{"ok": true}``. False covers
+    both transport failures (socket missing, port file unreadable, refused
+    connection) and protocol failures (malformed reply).
+    """
+    if not sock_path.exists():
         return False
+    try:
+        with _ipc_connect(sock_path, timeout=1.0) as s:
+            s.sendall((json.dumps({"cmd": "stop"}) + "\n").encode())
+            raw = s.recv(4096).decode().strip()
+        response = json.loads(raw)
+    except (OSError, ValueError, json.JSONDecodeError, UnicodeDecodeError):
+        return False
+    if not isinstance(response, dict):
+        return False
+    return response.get("ok") is True
+
+
+def _wait_for_exit(pid: int, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not psutil.pid_exists(pid):
+            return True
+        time.sleep(0.1)
+    return not psutil.pid_exists(pid)
+
+
+def _kill_process_tree(pid: int, timeout: float) -> None:
+    """Terminate the daemon process and every descendant.
+
+    Needed on Windows where ``contextd-indexer.exe`` spawns a bootstrap
+    ``python.exe`` which spawns the actual daemon ``python.exe``; killing
+    the root alone leaves orphans. Sends ``terminate()`` first (POSIX:
+    SIGTERM, Windows: TerminateProcess), waits, then ``kill()``s any
+    survivors. Idempotent and safe if the root has already exited.
+    """
+    try:
+        root = psutil.Process(pid)
+    except psutil.NoSuchProcess:
+        return
+    try:
+        descendants = root.children(recursive=True)
+    except psutil.NoSuchProcess:
+        descendants = []
+    procs = [root, *descendants]
+    for p in procs:
+        with contextlib.suppress(psutil.NoSuchProcess, psutil.AccessDenied):
+            p.terminate()
+    _, alive = psutil.wait_procs(procs, timeout=timeout)
+    for p in alive:
+        with contextlib.suppress(psutil.NoSuchProcess, psutil.AccessDenied):
+            p.kill()
+    if alive:
+        psutil.wait_procs(alive, timeout=timeout)
 
 
 def _stop_daemon() -> None:
     pid = _daemon_pid()
     if pid is None:
         return
+    sock_path = contextd_home() / "ipc.sock"
     try:
-        os.kill(pid, signal.SIGTERM)
-        for _ in range(50):  # wait up to 5s
-            time.sleep(0.1)
-            if not _daemon_is_running(pid):
-                break
-        else:
-            with contextlib.suppress(OSError, ProcessLookupError):
-                os.kill(pid, signal.SIGKILL)
-    except (OSError, ProcessLookupError):
-        pass
+        if _request_daemon_stop(sock_path) and _wait_for_exit(pid, timeout=5.0):
+            return
+        _kill_process_tree(pid, timeout=5.0)
     finally:
         _pid_path().unlink(missing_ok=True)
+        with contextlib.suppress(OSError):
+            sock_path.unlink()
 
 
 def _compose_file_for(cfg: Config) -> Path:
@@ -169,12 +244,7 @@ def up() -> None:
             return
         _pid_path().unlink(missing_ok=True)
 
-    proc = subprocess.Popen(
-        ["contextd-indexer"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
+    proc = subprocess.Popen(["contextd-indexer"], **_daemon_popen_kwargs())
     _pid_path().write_text(str(proc.pid))
     console.print(f"[green]✓[/] indexer daemon launched (pid={proc.pid})")
     console.print("[bold]ready[/]")

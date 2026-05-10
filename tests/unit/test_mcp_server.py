@@ -156,12 +156,15 @@ def test_build_all_tool_descriptors_adds_corpus_tools(tmp_path: Path) -> None:
     cypher_file = tools_dir / "find_file.cypher"
     cypher_file.write_text(cypher)
 
+    # ``as_posix()`` keeps the TOML strings backslash-free on Windows; pathlib
+    # accepts forward-slash paths there, but ``\U`` in ``C:\\Users\\...`` would
+    # be parsed as a TOML Unicode escape.
     toml_content = f"""
 [corpus]
 name = "my-corpus"
-root = "{tmp_path}"
+root = "{tmp_path.as_posix()}"
 [mcp.tools]
-find_file = "{cypher_file}"
+find_file = "{cypher_file.as_posix()}"
 """
     (corpora_dir / "my-corpus.toml").write_text(toml_content)
 

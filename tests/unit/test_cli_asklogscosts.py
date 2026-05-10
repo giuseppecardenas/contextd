@@ -17,12 +17,15 @@ from contextd.providers.cost_log import CostLog
 def _setup_home(tmp_path: Path) -> Path:
     home = tmp_path / ".contextd"
     home.mkdir()
+    # ``home.as_posix()`` keeps backslash-free TOML on Windows; pathlib still
+    # accepts forward-slash paths there, but ``\U`` in a double-quoted TOML
+    # string is parsed as a Unicode escape and fails the test fixture.
     config = f"""
 [storage]
 backend = "memgraph"
 
 [storage.memgraph]
-docker_compose_file = "{home}/docker-compose.yml"
+docker_compose_file = "{home.as_posix()}/docker-compose.yml"
 """
     (home / "config.toml").write_text(config)
     (home / "corpora").mkdir()

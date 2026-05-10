@@ -33,6 +33,7 @@ dependencies = [
     "gqlalchemy>=1.5",
     "google-genai>=0.3",
     "voyageai>=0.2",
+    "psutil>=5.9",
 ]
 
 [project.optional-dependencies]
@@ -45,6 +46,7 @@ dev = [
     "ruff>=0.4",
     "mypy>=1.10",
     "pre-commit>=3.7",
+    "types-psutil>=5.9",
 ]
 
 [project.scripts]
@@ -98,6 +100,18 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 filterwarnings = [
     "error",
+    # Must come AFTER "error" and BEFORE any filter whose category resolution
+    # imports neo4j. ``warnings.filterwarnings`` prepends, so this entry ends
+    # up ahead of "error" in ``warnings.filters`` exactly when pytest tries
+    # to resolve the gqlalchemy filter below. Python 3.14 deprecates
+    # asyncio.iscoroutinefunction; neo4j-driver 5.x calls it from
+    # neo4j._meta._preview at module import time, and without this ignore
+    # pytest's filter parser hits a fatal warning before any test collects.
+    "ignore:'asyncio.iscoroutinefunction' is deprecated:DeprecationWarning",
+    # Same root cause: google-genai's types module triggers Python 3.14's
+    # _UnionGenericAlias deprecation at module import. Filter must precede
+    # any provider-test category resolution.
+    "ignore:'_UnionGenericAlias' is deprecated:DeprecationWarning",
     # gqlalchemy raises this whenever it materialises a node whose label is
     # not mapped to a Python ORM class. We intentionally don't map — the
     # GraphStore layer returns plain dicts — so this warning is structural.

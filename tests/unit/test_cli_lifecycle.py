@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import signal
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -15,12 +14,15 @@ import contextd.cli
 def _setup_contextd_home(tmp_path: Path, backend: str = "memgraph") -> Path:
     home = tmp_path / ".contextd"
     home.mkdir()
+    # ``home.as_posix()`` keeps backslash-free TOML on Windows; pathlib still
+    # accepts forward-slash paths there, but ``\U`` in a double-quoted TOML
+    # string is parsed as a Unicode escape and fails the test fixture.
     config = f"""
 [storage]
 backend = "{backend}"
 
 [storage.{backend}]
-docker_compose_file = "{home}/docker-compose.yml"
+docker_compose_file = "{home.as_posix()}/docker-compose.yml"
 """
     (home / "config.toml").write_text(config)
     (home / "corpora").mkdir()
@@ -213,7 +215,8 @@ def test_up_clears_stale_pid_and_launches(tmp_path: Path, monkeypatch: pytest.Mo
     assert pid_file.read_text().strip() == "55555"
 
 
-def test_down_sends_sigterm_to_daemon(tmp_path: Path) -> None:
+def test_down_prefers_graceful_ipc_stop(tmp_path: Path) -> None:
+    """When the IPC stop succeeds and the process exits, no tree-kill happens."""
     from contextd.cli.infra import _stop_daemon
 
     pid_file = tmp_path / "indexer.pid"
@@ -221,16 +224,19 @@ def test_down_sends_sigterm_to_daemon(tmp_path: Path) -> None:
 
     with (
         patch("contextd.cli.infra._pid_path", return_value=pid_file),
-        patch("os.kill") as mock_kill,
-        patch("os.waitpid", side_effect=ChildProcessError),
+        patch("contextd.cli.infra.contextd_home", return_value=tmp_path),
+        patch("contextd.cli.infra._request_daemon_stop", return_value=True),
+        patch("contextd.cli.infra._wait_for_exit", return_value=True),
+        patch("contextd.cli.infra._kill_process_tree") as mock_tree_kill,
     ):
         _stop_daemon()
 
-    sigterm_calls = [c for c in mock_kill.call_args_list if c[0][1] == signal.SIGTERM]
-    assert sigterm_calls
+    mock_tree_kill.assert_not_called()
+    assert not pid_file.exists()
 
 
-def test_down_removes_pid_file(tmp_path: Path) -> None:
+def test_down_falls_back_to_tree_kill_on_ipc_failure(tmp_path: Path) -> None:
+    """When IPC is unreachable, _stop_daemon must walk the process tree."""
     from contextd.cli.infra import _stop_daemon
 
     pid_file = tmp_path / "indexer.pid"
@@ -238,12 +244,54 @@ def test_down_removes_pid_file(tmp_path: Path) -> None:
 
     with (
         patch("contextd.cli.infra._pid_path", return_value=pid_file),
-        patch("os.kill"),
-        patch("os.waitpid", side_effect=ChildProcessError),
+        patch("contextd.cli.infra.contextd_home", return_value=tmp_path),
+        patch("contextd.cli.infra._request_daemon_stop", return_value=False),
+        patch("contextd.cli.infra._kill_process_tree") as mock_tree_kill,
+    ):
+        _stop_daemon()
+
+    mock_tree_kill.assert_called_once_with(99999, timeout=5.0)
+    assert not pid_file.exists()
+
+
+def test_down_falls_back_when_graceful_stop_times_out(tmp_path: Path) -> None:
+    """Graceful stop ack'd but process never exits → fallback engages."""
+    from contextd.cli.infra import _stop_daemon
+
+    pid_file = tmp_path / "indexer.pid"
+    pid_file.write_text("99999")
+
+    with (
+        patch("contextd.cli.infra._pid_path", return_value=pid_file),
+        patch("contextd.cli.infra.contextd_home", return_value=tmp_path),
+        patch("contextd.cli.infra._request_daemon_stop", return_value=True),
+        patch("contextd.cli.infra._wait_for_exit", return_value=False),
+        patch("contextd.cli.infra._kill_process_tree") as mock_tree_kill,
+    ):
+        _stop_daemon()
+
+    mock_tree_kill.assert_called_once_with(99999, timeout=5.0)
+
+
+def test_down_removes_pid_and_socket_files(tmp_path: Path) -> None:
+    from contextd.cli.infra import _stop_daemon
+
+    pid_file = tmp_path / "indexer.pid"
+    pid_file.write_text("99999")
+    sock_file = tmp_path / "ipc.sock"
+    sock_file.write_text("62329\n")
+
+    with (
+        patch("contextd.cli.infra._pid_path", return_value=pid_file),
+        patch("contextd.cli.infra.contextd_home", return_value=tmp_path),
+        patch("contextd.cli.infra._request_daemon_stop", return_value=True),
+        patch("contextd.cli.infra._wait_for_exit", return_value=True),
+        patch("contextd.cli.infra._kill_process_tree"),
     ):
         _stop_daemon()
 
     assert not pid_file.exists()
+    assert not sock_file.exists()
 
 
 def test_down_is_safe_with_no_pid_file(tmp_path: Path) -> None:
@@ -258,3 +306,83 @@ def test_daemon_pid_returns_none_on_missing(tmp_path: Path) -> None:
 
     with patch("contextd.cli.infra._pid_path", return_value=tmp_path / "none.pid"):
         assert _daemon_pid() is None
+
+
+def test_daemon_is_running_uses_psutil() -> None:
+    """The liveness check must work cross-platform via psutil.pid_exists."""
+    import os
+
+    from contextd.cli.infra import _daemon_is_running
+
+    assert _daemon_is_running(os.getpid()) is True
+    # PID 0 is reserved on POSIX (the scheduler) and 'System Idle' on Windows;
+    # use a guaranteed-dead high PID instead. 2**31 - 2 is above any real PID.
+    assert _daemon_is_running(2**31 - 2) is False
+
+
+def test_request_daemon_stop_returns_false_when_socket_absent(tmp_path: Path) -> None:
+    from contextd.cli.infra import _request_daemon_stop
+
+    assert _request_daemon_stop(tmp_path / "missing.sock") is False
+
+
+def test_request_daemon_stop_round_trips_through_ipc_server(tmp_path: Path) -> None:
+    """End-to-end: spin up an IpcServer and confirm _request_daemon_stop sets the event."""
+    import threading
+    import time as _time
+
+    from contextd.cli.infra import _request_daemon_stop
+    from contextd.daemon_ipc import IpcServer
+
+    sock_path = tmp_path / "ipc.sock"
+    stop_event = threading.Event()
+    server = IpcServer(
+        socket_path=sock_path,
+        stop_event=stop_event,
+        pid=12345,
+        corpora=["alpha"],
+        start_time=_time.time(),
+    )
+    server.start()
+    try:
+        # Wait briefly for the server to bind.
+        deadline = _time.monotonic() + 2.0
+        while _time.monotonic() < deadline and not sock_path.exists():
+            _time.sleep(0.02)
+        assert _request_daemon_stop(sock_path) is True
+        stop_event.wait(timeout=1.0)
+        assert stop_event.is_set()
+    finally:
+        server.stop()
+
+
+def test_daemon_popen_kwargs_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """On Windows, the daemon spawn must request a detached process group.
+
+    ``start_new_session=True`` is POSIX-only — Python ignores it on
+    Windows, leaving the child attached to the launching console.
+    """
+    import subprocess
+
+    from contextd.cli.infra import _daemon_popen_kwargs
+
+    monkeypatch.setattr("sys.platform", "win32")
+    kwargs = _daemon_popen_kwargs()
+    assert "creationflags" in kwargs
+    assert "start_new_session" not in kwargs
+    # CREATE_NEW_PROCESS_GROUP is a plain int constant available on every
+    # build (its value is documented in the Win32 API); assert the bit
+    # made it into the resulting flags mask.
+    flags = kwargs["creationflags"]
+    assert isinstance(flags, int)
+    assert flags & subprocess.CREATE_NEW_PROCESS_GROUP
+
+
+def test_daemon_popen_kwargs_posix(monkeypatch: pytest.MonkeyPatch) -> None:
+    """On POSIX, the daemon spawn must call setsid via start_new_session."""
+    from contextd.cli.infra import _daemon_popen_kwargs
+
+    monkeypatch.setattr("sys.platform", "linux")
+    kwargs = _daemon_popen_kwargs()
+    assert kwargs.get("start_new_session") is True
+    assert "creationflags" not in kwargs

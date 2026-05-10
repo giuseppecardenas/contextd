@@ -15,9 +15,12 @@ import contextd.cli
 def _setup_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home = tmp_path / ".contextd"
     home.mkdir()
+    # ``home.as_posix()`` keeps backslash-free TOML on Windows; pathlib still
+    # accepts forward-slash paths there, but ``\U`` in a double-quoted TOML
+    # string is parsed as a Unicode escape and fails the test fixture.
     (home / "config.toml").write_text(
         f'[storage]\nbackend = "memgraph"\n\n[storage.memgraph]\n'
-        f'docker_compose_file = "{home}/docker-compose.yml"\n'
+        f'docker_compose_file = "{home.as_posix()}/docker-compose.yml"\n'
     )
     (home / "corpora").mkdir()
     (home / "state").mkdir()

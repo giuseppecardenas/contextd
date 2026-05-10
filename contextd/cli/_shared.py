@@ -8,6 +8,8 @@ not re-constructed per sub-module.
 
 from __future__ import annotations
 
+import contextlib
+import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -22,6 +24,17 @@ if TYPE_CHECKING:
     from contextd.inference.summarise import Summariser
     from contextd.providers.base import EmbeddingProvider
     from contextd.storage.base import GraphStore
+
+# CLI output uses unicode glyphs (✓, ✗) for status. On Windows, stdout
+# defaults to the system code page (cp1252 on en-US installs), which can't
+# encode those characters and crashes ``rich``'s legacy-Windows renderer.
+# Reconfiguring the underlying TextIOWrapper to UTF-8 is harmless on POSIX
+# (already UTF-8) and safe on Windows ≥ 10 (which ships UTF-8 console
+# support since the 1903 update).
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        with contextlib.suppress(OSError, ValueError):
+            _stream.reconfigure(encoding="utf-8")
 
 console = Console()
 

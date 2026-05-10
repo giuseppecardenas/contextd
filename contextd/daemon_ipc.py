@@ -1,4 +1,10 @@
-"""Unix domain socket IPC server for daemon control.
+"""IPC server for daemon control.
+
+Uses a Unix domain socket on POSIX. On Windows (and any other build where
+``socket.AF_UNIX`` is unavailable) it falls back to a TCP listener bound to
+``127.0.0.1`` on an ephemeral port; the chosen port is written to the same
+``socket_path`` as plain text so the client can discover it. Either way the
+endpoint is loopback-only — no traffic ever leaves the host.
 
 JSON-lines protocol. Runs in a background thread spawned by run_daemon.
 Each client connection is handled in its own short-lived daemon thread.
@@ -21,18 +27,60 @@ from pathlib import Path
 
 _log = logging.getLogger(__name__)
 
+# socket.AF_UNIX is platform-conditional (absent on the Python builds where
+# Unix domain sockets are unavailable, e.g. Windows builds without UDS
+# support). Resolve it via getattr so mypy doesn't probe for it on Windows.
+_AF_UNIX: int | None = getattr(socket, "AF_UNIX", None)
+
+
+def _open_listener(socket_path: Path) -> socket.socket:
+    """Create and bind the IPC listening socket.
+
+    On POSIX, binds an ``AF_UNIX`` socket at ``socket_path``.
+    On systems without ``AF_UNIX``, binds an ``AF_INET`` socket to
+    ``127.0.0.1:0`` (an ephemeral port) and writes ``"<port>\\n"`` to
+    ``socket_path`` so the client can discover the address.
+    """
+    if _AF_UNIX is not None:
+        sock = socket.socket(_AF_UNIX, socket.SOCK_STREAM)
+        with contextlib.suppress(FileNotFoundError):
+            socket_path.unlink()
+        sock.bind(str(socket_path))
+    else:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        socket_path.write_text(f"{port}\n")
+    sock.listen(5)
+    sock.settimeout(1.0)
+    return sock
+
+
+def connect(socket_path: Path, timeout: float = 1.0) -> socket.socket:
+    """Open a client connection to the IPC endpoint at ``socket_path``.
+
+    Mirrors the transport choice made by ``_open_listener``. The caller owns
+    the returned socket and must close it.
+    """
+    if _AF_UNIX is not None:
+        s = socket.socket(_AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        s.connect(str(socket_path))
+        return s
+    port = int(socket_path.read_text().strip())
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    s.connect(("127.0.0.1", port))
+    return s
+
 
 class IpcServer:
-    """Unix domain socket server for daemon control (JSON-lines protocol).
+    """IPC server for daemon control (JSON-lines protocol).
 
     Runs in a background thread started by run_daemon. The main loop
     continues unaffected; the server handles each connection in its own
-    short-lived thread.
-
-    Supported commands:
-      {"cmd": "status"} → {"pid": N, "corpora": ["name", ...], "uptime_seconds": N}
-      {"cmd": "stop"}   → {"ok": true}  (sets the shared stop_event)
-      {"cmd": "ping"}   → {"pong": true}
+    short-lived thread. See module docstring for the supported commands and
+    the transport-selection rules.
     """
 
     def __init__(
@@ -79,14 +127,13 @@ class IpcServer:
                 _log.debug("IPC connection error", exc_info=True)
 
     def _serve(self) -> None:
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            sock = _open_listener(self._socket_path)
+        except Exception:
+            _log.exception("IPC server failed to start")
+            return
         self._server_socket = sock
         try:
-            with contextlib.suppress(FileNotFoundError):
-                self._socket_path.unlink()
-            sock.bind(str(self._socket_path))
-            sock.listen(5)
-            sock.settimeout(1.0)
             _log.debug("IPC server listening on %s", self._socket_path)
             while not self._stop_event.is_set():
                 try:
@@ -98,8 +145,6 @@ class IpcServer:
                     continue
                 except OSError:
                     break
-        except Exception:
-            _log.exception("IPC server failed to start")
         finally:
             sock.close()
 

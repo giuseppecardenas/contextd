@@ -261,7 +261,13 @@ def test_add_corpus_from_template_preserves_absolute_paths(
     home = _setup_home(tmp_path, monkeypatch)
     template_dir = tmp_path / "tpl3"
     template_dir.mkdir()
-    abs_ontology = "/opt/shared/ontology.json"
+    # Use a tmp_path-rooted absolute so the path is genuinely absolute on
+    # every platform (a leading "/" alone is not absolute on Windows).
+    # ``as_posix()`` keeps the value backslash-free in the hand-written TOML
+    # template; the resolved path round-trips through pathlib, so compare by
+    # ``Path`` equality (which normalises separators on Windows).
+    abs_ontology_path = tmp_path / "shared" / "ontology.json"
+    abs_ontology = abs_ontology_path.as_posix()
     template = _write_template(template_dir, overrides=abs_ontology, prompt_override=None)
 
     corpus_dir = tmp_path / "data3"
@@ -273,7 +279,7 @@ def test_add_corpus_from_template_preserves_absolute_paths(
     )
     assert result.exit_code == 0, result.output
     data = tomllib.loads((home / "corpora" / "baz.toml").read_text())
-    assert data["ontology"]["overrides"] == abs_ontology
+    assert Path(data["ontology"]["overrides"]) == abs_ontology_path
 
 
 def test_add_corpus_from_template_granularity_inherited_from_template(
@@ -519,9 +525,14 @@ def test_add_corpus_from_runeledger_template(
 # ---------------------------------------------------------------------------
 
 
-def test_rewrite_template_path_absolute_passes_through() -> None:
-    """Absolute paths are returned unchanged regardless of the anchor."""
-    assert _rewrite_template_path("/etc/foo", Path("/tmp")) == "/etc/foo"
+def test_rewrite_template_path_absolute_passes_through(tmp_path: Path) -> None:
+    """Absolute paths are returned unchanged regardless of the anchor.
+
+    Uses a tmp_path-rooted absolute so the path is genuinely absolute on
+    every platform (a leading "/" alone is not absolute on Windows).
+    """
+    abs_path = tmp_path / "etc" / "foo"
+    assert Path(_rewrite_template_path(str(abs_path), Path("/tmp"))) == abs_path
 
 
 def test_rewrite_template_path_relative_resolves_against_anchor(tmp_path: Path) -> None:

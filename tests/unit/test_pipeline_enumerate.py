@@ -46,20 +46,29 @@ def test_excludes_venv_pycache_node_modules(tmp_path: Path) -> None:
         (sub / "dropped.md").write_text("x")
 
     files = enumerate_corpus_files(_cfg(tmp_path))
-    paths = {str(p) for p in files}
-    assert any(p.endswith("/kept.md") for p in paths)
-    assert not any("/.venv/" in p or "/__pycache__/" in p or "/node_modules/" in p for p in paths)
+    # Use ``Path.parts`` for separator-agnostic membership tests; ``str(p)``
+    # uses backslashes on Windows so substring checks on "/.venv/" miss.
+    names = {p.name for p in files}
+    assert "kept.md" in names
+    assert not any({".venv", "__pycache__", "node_modules"} & set(p.parts) for p in files)
 
 
 def test_skips_symlinks(tmp_path: Path) -> None:
     """Symlinked files are skipped to avoid walking into cycle-forming
     targets (e.g. a symlink back into the corpus root)."""
+    import pytest
+
     (tmp_path / "real.md").write_text("x")
     link_target = tmp_path / "target.md"
     link_target.write_text("y")
-    # Create a symlink inside the corpus root.
     link = tmp_path / "link.md"
-    os.symlink(link_target, link)
+    # On Windows, os.symlink requires SeCreateSymbolicLinkPrivilege (only
+    # held by admins or accounts with Developer Mode enabled); skip the
+    # test rather than fail when the privilege is absent.
+    try:
+        os.symlink(link_target, link)
+    except OSError as exc:
+        pytest.skip(f"cannot create symlinks in this environment: {exc}")
 
     files = enumerate_corpus_files(_cfg(tmp_path))
     names = {p.name for p in files}
