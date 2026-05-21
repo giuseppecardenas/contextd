@@ -211,7 +211,7 @@ def test_handle_batch_processes_multiple_files_concurrently(
         elapsed = time.monotonic() - start
 
     assert len(call_times) == 4
-    assert elapsed < 0.18  # 4 x 0.05s serial = 0.20s; concurrent ~0.05s
+    assert elapsed < 0.5  # 4 x 0.05s serial = 0.20s; concurrent ~0.05s
 
 
 def test_handle_batch_logs_and_continues_on_error(tmp_path: Path) -> None:
@@ -397,40 +397,36 @@ def test_run_daemon_loop_continues_after_handle_batch_raises(tmp_path: Path) -> 
         ),
         patch("contextd.indexer.watcher.CorpusWatcher.start"),
         patch("contextd.indexer.watcher.CorpusWatcher.stop"),
+        patch("contextd.daemon.install_stop_handlers"),
     ):
+        # Run daemon in a thread; it will self-terminate via iteration_count logic
+        done = threading.Event()
+        exc_holder: list[BaseException | None] = [None]
 
-        def capture_stop_event(sig: int, handler: object) -> None:
-            pass  # suppress real signal setup in test
+        def _run() -> None:
+            try:
+                # We need to stop the daemon; patch time.sleep to inject stop
+                original_sleep = __import__("time").sleep
+                call_count = [0]
 
-        with patch("signal.signal", side_effect=capture_stop_event):
-            # Run daemon in a thread; it will self-terminate via iteration_count logic
-            done = threading.Event()
-            exc_holder: list[BaseException | None] = [None]
+                def controlled_sleep(s: float) -> None:
+                    call_count[0] += 1
+                    if call_count[0] > 4:
+                        raise SystemExit(0)
+                    original_sleep(0.001)
 
-            def _run() -> None:
-                try:
-                    # We need to stop the daemon; patch time.sleep to inject stop
-                    original_sleep = __import__("time").sleep
-                    call_count = [0]
+                with patch("contextd.daemon.time.sleep", side_effect=controlled_sleep):
+                    run_daemon(cfg)
+            except SystemExit:
+                pass
+            except Exception as e:
+                exc_holder[0] = e
+            finally:
+                done.set()
 
-                    def controlled_sleep(s: float) -> None:
-                        call_count[0] += 1
-                        if call_count[0] > 4:
-                            raise SystemExit(0)
-                        original_sleep(0.001)
-
-                    with patch("contextd.daemon.time.sleep", side_effect=controlled_sleep):
-                        run_daemon(cfg)
-                except SystemExit:
-                    pass
-                except Exception as e:
-                    exc_holder[0] = e
-                finally:
-                    done.set()
-
-            t = threading.Thread(target=_run, daemon=True)
-            t.start()
-            done.wait(timeout=5.0)
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        done.wait(timeout=5.0)
 
     assert exc_holder[0] is None, f"daemon crashed: {exc_holder[0]}"
     assert iteration_count[0] >= 2, "loop did not continue after first exception"

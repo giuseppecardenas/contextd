@@ -1,13 +1,9 @@
 """IPC server for daemon control.
 
-Uses a Unix domain socket on POSIX. On Windows (and any other build where
-``socket.AF_UNIX`` is unavailable) it falls back to a TCP listener bound to
-``127.0.0.1`` on an ephemeral port; the chosen port is written to the same
-``socket_path`` as plain text so the client can discover it. Either way the
-endpoint is loopback-only — no traffic ever leaves the host.
-
-JSON-lines protocol. Runs in a background thread spawned by run_daemon.
-Each client connection is handled in its own short-lived daemon thread.
+JSON-lines protocol over a platform-specific transport (AF_UNIX on
+Linux/macOS, localhost TCP on Windows). Runs in a background thread
+spawned by run_daemon. Each client connection is handled in its own
+short-lived daemon thread.
 
 Supported commands:
   {"cmd": "ping"}   → {"pong": true}
@@ -25,79 +21,42 @@ import threading
 import time
 from pathlib import Path
 
+from contextd._compat import cleanup_ipc, create_ipc_server_socket
+
 _log = logging.getLogger(__name__)
-
-# socket.AF_UNIX is platform-conditional (absent on the Python builds where
-# Unix domain sockets are unavailable, e.g. Windows builds without UDS
-# support). Resolve it via getattr so mypy doesn't probe for it on Windows.
-_AF_UNIX: int | None = getattr(socket, "AF_UNIX", None)
-
-
-def _open_listener(socket_path: Path) -> socket.socket:
-    """Create and bind the IPC listening socket.
-
-    On POSIX, binds an ``AF_UNIX`` socket at ``socket_path``.
-    On systems without ``AF_UNIX``, binds an ``AF_INET`` socket to
-    ``127.0.0.1:0`` (an ephemeral port) and writes ``"<port>\\n"`` to
-    ``socket_path`` so the client can discover the address.
-    """
-    if _AF_UNIX is not None:
-        sock = socket.socket(_AF_UNIX, socket.SOCK_STREAM)
-        with contextlib.suppress(FileNotFoundError):
-            socket_path.unlink()
-        sock.bind(str(socket_path))
-    else:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
-        socket_path.write_text(f"{port}\n")
-    sock.listen(5)
-    sock.settimeout(1.0)
-    return sock
-
-
-def connect(socket_path: Path, timeout: float = 1.0) -> socket.socket:
-    """Open a client connection to the IPC endpoint at ``socket_path``.
-
-    Mirrors the transport choice made by ``_open_listener``. The caller owns
-    the returned socket and must close it.
-    """
-    if _AF_UNIX is not None:
-        s = socket.socket(_AF_UNIX, socket.SOCK_STREAM)
-        s.settimeout(timeout)
-        s.connect(str(socket_path))
-        return s
-    port = int(socket_path.read_text().strip())
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.settimeout(timeout)
-    s.connect(("127.0.0.1", port))
-    return s
 
 
 class IpcServer:
     """IPC server for daemon control (JSON-lines protocol).
 
-    Runs in a background thread started by run_daemon. The main loop
-    continues unaffected; the server handles each connection in its own
-    short-lived thread. See module docstring for the supported commands and
-    the transport-selection rules.
+    Transport is platform-specific: AF_UNIX on Linux/macOS, localhost TCP
+    on Windows. Runs in a background thread started by run_daemon. The
+    main loop continues unaffected; the server handles each connection in
+    its own short-lived thread.
+
+    Supported commands:
+      {"cmd": "status"} → {"pid": N, "corpora": ["name", ...], "uptime_seconds": N}
+      {"cmd": "stop"}   → {"ok": true}  (sets the shared stop_event)
+      {"cmd": "ping"}   → {"pong": true}
     """
 
     def __init__(
         self,
-        socket_path: Path,
+        ipc_path: Path,
         stop_event: threading.Event,
         pid: int,
         corpora: list[str],
         start_time: float,
     ) -> None:
-        self._socket_path = socket_path
+        self._ipc_path = ipc_path
         self._stop_event = stop_event
         self._pid = pid
         self._corpora = corpora
         self._start_time = start_time
         self._server_socket: socket.socket | None = None
         self._thread: threading.Thread | None = None
+        self._handler_threads: list[threading.Thread] = []
+        self._handler_lock = threading.Lock()
 
     def _handle_connection(self, conn: socket.socket) -> None:
         with conn:
@@ -128,19 +87,23 @@ class IpcServer:
 
     def _serve(self) -> None:
         try:
-            sock = _open_listener(self._socket_path)
+            sock = create_ipc_server_socket(self._ipc_path)
         except Exception:
             _log.exception("IPC server failed to start")
             return
         self._server_socket = sock
         try:
-            _log.debug("IPC server listening on %s", self._socket_path)
+            sock.listen(5)
+            sock.settimeout(1.0)
+            _log.debug("IPC server listening on %s", self._ipc_path)
             while not self._stop_event.is_set():
                 try:
                     conn, _ = sock.accept()
-                    threading.Thread(
-                        target=self._handle_connection, args=(conn,), daemon=True
-                    ).start()
+                    t = threading.Thread(target=self._handle_connection, args=(conn,), daemon=True)
+                    with self._handler_lock:
+                        self._handler_threads = [h for h in self._handler_threads if h.is_alive()]
+                        self._handler_threads.append(t)
+                    t.start()
                 except TimeoutError:
                     continue
                 except OSError:
@@ -154,11 +117,14 @@ class IpcServer:
         self._thread.start()
 
     def stop(self) -> None:
-        """Close the server socket and join the background thread."""
+        """Close the server socket and join all threads."""
         if self._server_socket is not None:
             with contextlib.suppress(OSError):
                 self._server_socket.close()
         if self._thread is not None:
             self._thread.join(timeout=3.0)
-        with contextlib.suppress(FileNotFoundError):
-            self._socket_path.unlink()
+        with self._handler_lock:
+            for t in self._handler_threads:
+                t.join(timeout=1.0)
+            self._handler_threads.clear()
+        cleanup_ipc(self._ipc_path)

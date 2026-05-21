@@ -5,38 +5,48 @@ import threading
 import time
 from pathlib import Path
 
-from contextd.daemon_ipc import connect as _ipc_connect
+import pytest
+
+from contextd._compat import connect_ipc
+
+# IPC handler threads are daemon threads — on macOS, GC can finalize
+# their socket objects before the thread's `with conn:` block exits,
+# producing a spurious ResourceWarning. The handler join in stop()
+# prevents real leaks; this suppresses the non-deterministic GC race.
+pytestmark = pytest.mark.filterwarnings("ignore::pytest.PytestUnraisableExceptionWarning")
 
 
-def _send_recv(sock_path: Path, payload: str, timeout: float = 2.0) -> str:
+def _send_recv(ipc_path: Path, payload: str, timeout: float = 2.0) -> str:
     """Send a JSON-lines message and return the raw response string."""
-    with _ipc_connect(sock_path, timeout=timeout) as s:
+    with connect_ipc(ipc_path) as s:
+        s.settimeout(timeout)
         s.sendall(payload.encode())
         return s.recv(4096).decode()
 
 
-def _wait_for_socket(sock_path: Path, timeout: float = 2.0) -> None:
+def _wait_for_ipc(ipc_path: Path, timeout: float = 5.0) -> None:
     """Block until the IPC endpoint is connectable or timeout expires."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if sock_path.exists():
+        if ipc_path.exists():
             try:
-                with _ipc_connect(sock_path, timeout=0.1):
-                    pass
+                with connect_ipc(ipc_path) as s:
+                    s.settimeout(1.0)
+                    s.sendall(json.dumps({"cmd": "ping"}).encode() + b"\n")
+                    s.recv(4096)
                 return
-            except (OSError, ValueError):
+            except OSError:
                 pass
         time.sleep(0.05)
-    raise TimeoutError(f"IPC endpoint {sock_path} did not become connectable within {timeout}s")
+    raise TimeoutError(f"IPC endpoint {ipc_path} did not become connectable within {timeout}s")
 
 
-def test_ipc_server_responds_to_ping(tmp_path: Path) -> None:
+def test_ipc_server_responds_to_ping(ipc_path: Path) -> None:
     from contextd.daemon_ipc import IpcServer
 
-    sock_path = tmp_path / "test.sock"
     stop_event = threading.Event()
     server = IpcServer(
-        socket_path=sock_path,
+        ipc_path=ipc_path,
         stop_event=stop_event,
         pid=12345,
         corpora=["corp-a"],
@@ -44,21 +54,20 @@ def test_ipc_server_responds_to_ping(tmp_path: Path) -> None:
     )
     server.start()
     try:
-        _wait_for_socket(sock_path)
-        raw = _send_recv(sock_path, json.dumps({"cmd": "ping"}) + "\n")
+        _wait_for_ipc(ipc_path)
+        raw = _send_recv(ipc_path, json.dumps({"cmd": "ping"}) + "\n")
         response = json.loads(raw.strip())
         assert response == {"pong": True}
     finally:
         server.stop()
 
 
-def test_ipc_server_responds_to_status(tmp_path: Path) -> None:
+def test_ipc_server_responds_to_status(ipc_path: Path) -> None:
     from contextd.daemon_ipc import IpcServer
 
-    sock_path = tmp_path / "test.sock"
     stop_event = threading.Event()
     server = IpcServer(
-        socket_path=sock_path,
+        ipc_path=ipc_path,
         stop_event=stop_event,
         pid=99,
         corpora=["alpha", "beta"],
@@ -66,8 +75,8 @@ def test_ipc_server_responds_to_status(tmp_path: Path) -> None:
     )
     server.start()
     try:
-        _wait_for_socket(sock_path)
-        raw = _send_recv(sock_path, json.dumps({"cmd": "status"}) + "\n")
+        _wait_for_ipc(ipc_path)
+        raw = _send_recv(ipc_path, json.dumps({"cmd": "status"}) + "\n")
         response = json.loads(raw.strip())
         assert "corpora" in response
         assert response["corpora"] == ["alpha", "beta"]
@@ -77,13 +86,12 @@ def test_ipc_server_responds_to_status(tmp_path: Path) -> None:
         server.stop()
 
 
-def test_ipc_server_stop_sets_event(tmp_path: Path) -> None:
+def test_ipc_server_stop_sets_event(ipc_path: Path) -> None:
     from contextd.daemon_ipc import IpcServer
 
-    sock_path = tmp_path / "test.sock"
     stop_event = threading.Event()
     server = IpcServer(
-        socket_path=sock_path,
+        ipc_path=ipc_path,
         stop_event=stop_event,
         pid=1,
         corpora=[],
@@ -91,8 +99,8 @@ def test_ipc_server_stop_sets_event(tmp_path: Path) -> None:
     )
     server.start()
     try:
-        _wait_for_socket(sock_path)
-        raw = _send_recv(sock_path, json.dumps({"cmd": "stop"}) + "\n")
+        _wait_for_ipc(ipc_path)
+        raw = _send_recv(ipc_path, json.dumps({"cmd": "stop"}) + "\n")
         response = json.loads(raw.strip())
         assert response == {"ok": True}
         # give the event a moment to be set
@@ -102,13 +110,12 @@ def test_ipc_server_stop_sets_event(tmp_path: Path) -> None:
         server.stop()
 
 
-def test_ipc_server_ignores_unknown_command(tmp_path: Path) -> None:
+def test_ipc_server_ignores_unknown_command(ipc_path: Path) -> None:
     from contextd.daemon_ipc import IpcServer
 
-    sock_path = tmp_path / "test.sock"
     stop_event = threading.Event()
     server = IpcServer(
-        socket_path=sock_path,
+        ipc_path=ipc_path,
         stop_event=stop_event,
         pid=1,
         corpora=[],
@@ -116,25 +123,24 @@ def test_ipc_server_ignores_unknown_command(tmp_path: Path) -> None:
     )
     server.start()
     try:
-        _wait_for_socket(sock_path)
-        raw = _send_recv(sock_path, json.dumps({"cmd": "frobnicate"}) + "\n")
+        _wait_for_ipc(ipc_path)
+        raw = _send_recv(ipc_path, json.dumps({"cmd": "frobnicate"}) + "\n")
         response = json.loads(raw.strip())
         assert "error" in response
         # Server should still be running — send a ping to confirm
-        raw2 = _send_recv(sock_path, json.dumps({"cmd": "ping"}) + "\n")
+        raw2 = _send_recv(ipc_path, json.dumps({"cmd": "ping"}) + "\n")
         response2 = json.loads(raw2.strip())
         assert response2 == {"pong": True}
     finally:
         server.stop()
 
 
-def test_ipc_server_handles_corrupt_json(tmp_path: Path) -> None:
+def test_ipc_server_handles_corrupt_json(ipc_path: Path) -> None:
     from contextd.daemon_ipc import IpcServer
 
-    sock_path = tmp_path / "test.sock"
     stop_event = threading.Event()
     server = IpcServer(
-        socket_path=sock_path,
+        ipc_path=ipc_path,
         stop_event=stop_event,
         pid=1,
         corpora=[],
@@ -142,13 +148,13 @@ def test_ipc_server_handles_corrupt_json(tmp_path: Path) -> None:
     )
     server.start()
     try:
-        _wait_for_socket(sock_path)
+        _wait_for_ipc(ipc_path)
         # Send corrupt JSON — server should reply with error and close connection cleanly
-        raw = _send_recv(sock_path, "not-json\n")
+        raw = _send_recv(ipc_path, "not-json\n")
         response = json.loads(raw.strip())
         assert "error" in response
         # Server must still be running
-        raw2 = _send_recv(sock_path, json.dumps({"cmd": "ping"}) + "\n")
+        raw2 = _send_recv(ipc_path, json.dumps({"cmd": "ping"}) + "\n")
         response2 = json.loads(raw2.strip())
         assert response2 == {"pong": True}
     finally:

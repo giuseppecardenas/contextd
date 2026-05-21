@@ -274,12 +274,13 @@ def test_down_falls_back_when_graceful_stop_times_out(tmp_path: Path) -> None:
 
 
 def test_down_removes_pid_and_socket_files(tmp_path: Path) -> None:
+    from contextd._compat import ipc_file_name
     from contextd.cli.infra import _stop_daemon
 
     pid_file = tmp_path / "indexer.pid"
     pid_file.write_text("99999")
-    sock_file = tmp_path / "ipc.sock"
-    sock_file.write_text("62329\n")
+    ipc_file = tmp_path / ipc_file_name()
+    ipc_file.write_text("62329\n")
 
     with (
         patch("contextd.cli.infra._pid_path", return_value=pid_file),
@@ -291,7 +292,7 @@ def test_down_removes_pid_and_socket_files(tmp_path: Path) -> None:
         _stop_daemon()
 
     assert not pid_file.exists()
-    assert not sock_file.exists()
+    assert not ipc_file.exists()
 
 
 def test_down_is_safe_with_no_pid_file(tmp_path: Path) -> None:
@@ -326,7 +327,7 @@ def test_request_daemon_stop_returns_false_when_socket_absent(tmp_path: Path) ->
     assert _request_daemon_stop(tmp_path / "missing.sock") is False
 
 
-def test_request_daemon_stop_round_trips_through_ipc_server(tmp_path: Path) -> None:
+def test_request_daemon_stop_round_trips_through_ipc_server(ipc_path: Path) -> None:
     """End-to-end: spin up an IpcServer and confirm _request_daemon_stop sets the event."""
     import threading
     import time as _time
@@ -334,10 +335,9 @@ def test_request_daemon_stop_round_trips_through_ipc_server(tmp_path: Path) -> N
     from contextd.cli.infra import _request_daemon_stop
     from contextd.daemon_ipc import IpcServer
 
-    sock_path = tmp_path / "ipc.sock"
     stop_event = threading.Event()
     server = IpcServer(
-        socket_path=sock_path,
+        ipc_path=ipc_path,
         stop_event=stop_event,
         pid=12345,
         corpora=["alpha"],
@@ -347,42 +347,10 @@ def test_request_daemon_stop_round_trips_through_ipc_server(tmp_path: Path) -> N
     try:
         # Wait briefly for the server to bind.
         deadline = _time.monotonic() + 2.0
-        while _time.monotonic() < deadline and not sock_path.exists():
+        while _time.monotonic() < deadline and not ipc_path.exists():
             _time.sleep(0.02)
-        assert _request_daemon_stop(sock_path) is True
+        assert _request_daemon_stop(ipc_path) is True
         stop_event.wait(timeout=1.0)
         assert stop_event.is_set()
     finally:
         server.stop()
-
-
-def test_daemon_popen_kwargs_windows(monkeypatch: pytest.MonkeyPatch) -> None:
-    """On Windows, the daemon spawn must request a detached process group.
-
-    ``start_new_session=True`` is POSIX-only — Python ignores it on
-    Windows, leaving the child attached to the launching console.
-    """
-    import subprocess
-
-    from contextd.cli.infra import _daemon_popen_kwargs
-
-    monkeypatch.setattr("sys.platform", "win32")
-    kwargs = _daemon_popen_kwargs()
-    assert "creationflags" in kwargs
-    assert "start_new_session" not in kwargs
-    # CREATE_NEW_PROCESS_GROUP is a plain int constant available on every
-    # build (its value is documented in the Win32 API); assert the bit
-    # made it into the resulting flags mask.
-    flags = kwargs["creationflags"]
-    assert isinstance(flags, int)
-    assert flags & subprocess.CREATE_NEW_PROCESS_GROUP
-
-
-def test_daemon_popen_kwargs_posix(monkeypatch: pytest.MonkeyPatch) -> None:
-    """On POSIX, the daemon spawn must call setsid via start_new_session."""
-    from contextd.cli.infra import _daemon_popen_kwargs
-
-    monkeypatch.setattr("sys.platform", "linux")
-    kwargs = _daemon_popen_kwargs()
-    assert kwargs.get("start_new_session") is True
-    assert "creationflags" not in kwargs
