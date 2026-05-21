@@ -460,6 +460,12 @@ def run_daemon(
                 except Exception:
                     _log.exception("corpus %s: unhandled error in main loop; skipping batch", name)
             time.sleep(config.poll_interval_seconds)
+    except BaseException as exc:
+        # Catch everything (incl. SystemExit, KeyboardInterrupt, signals, thread
+        # crashes propagated as BaseException) so a silent death always leaves a
+        # message + traceback in the log. Re-raised so exit semantics are preserved.
+        _log.exception("daemon terminating: %s: %s", type(exc).__name__, exc)
+        raise
     finally:
         if ipc_server is not None:
             ipc_server.stop()

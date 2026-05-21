@@ -21,6 +21,7 @@ from contextd.daemon_ipc import connect as _ipc_connect
 
 if TYPE_CHECKING:
     from contextd.config import Config
+    from contextd.storage.base import GraphStore
 
 
 # ---------------------------------------------------------------------------
@@ -183,6 +184,27 @@ def _compose_file_for(cfg: Config) -> Path:
     return Path(compose_file_str).expanduser()
 
 
+def _wait_for_backend_ready(store: GraphStore, timeout: float = 60.0) -> None:
+    # `docker compose up -d` returns when the container starts, but Neo4j and
+    # Memgraph need an additional ~10-60s on cold start before Bolt accepts a
+    # handshake. Without this probe, the very next exec_read (inside
+    # MigrationRunner) races the backend and fails with ServiceUnavailable.
+    deadline = time.monotonic() + timeout
+    last_error: Exception | None = None
+    notified = False
+    while time.monotonic() < deadline:
+        try:
+            store.exec_read("RETURN 1 AS ok", None)
+            return
+        except Exception as exc:
+            last_error = exc
+            if not notified:
+                console.print("[dim]waiting for backend to accept connections...[/]")
+                notified = True
+            time.sleep(1.0)
+    raise click.ClickException(f"backend did not become ready within {timeout:.0f}s: {last_error}")
+
+
 @cli.command()
 def up() -> None:
     """Start the storage backend container and apply pending migrations."""
@@ -213,6 +235,7 @@ def up() -> None:
     store = build_graph_store(cfg)
     store.connect()
     try:
+        _wait_for_backend_ready(store)
         if backend == "memgraph":
             from contextd.migrations.memgraph import ALL_MIGRATIONS
 

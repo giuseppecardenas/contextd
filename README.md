@@ -116,6 +116,36 @@ Requirements (both platforms): Python 3.11+, Docker (Docker Desktop on Windows/m
 
 The remaining steps in this README are written with `bash` syntax. The equivalent PowerShell forms differ only in shell-specific surface (`export` ↔ `$env:`, `~/.contextd/` ↔ `$env:USERPROFILE\.contextd\`); the `contextd` CLI invocations themselves are identical on both platforms.
 
+### Global command without venv activation (optional)
+
+After the editable install, the `contextd`, `contextd-mcp`, and `contextd-indexer` entry points live in `.venv/bin/` (Linux/macOS) or `.venv\Scripts\` (Windows) and are only on `PATH` while the venv is activated. To call them from any shell — useful for Claude Desktop's MCP config, scheduled tasks, or one-off invocations — drop file links into a directory that's already on your user `PATH`. The venv stubs are thin launchers that import the editable-installed package, so the link always picks up the latest source on disk; there is no compile step to keep in sync.
+
+**Linux / macOS** (symlinks, no privileges needed):
+
+```bash
+ln -s ~/src/contextd/.venv/bin/contextd         ~/.local/bin/contextd
+ln -s ~/src/contextd/.venv/bin/contextd-mcp     ~/.local/bin/contextd-mcp
+ln -s ~/src/contextd/.venv/bin/contextd-indexer ~/.local/bin/contextd-indexer
+```
+
+**Windows 11** (hardlinks, no admin needed — symlinks on Windows require admin elevation or Developer Mode, hardlinks need neither, with the one constraint that source and destination must live on the same volume):
+
+```powershell
+$src = "$env:USERPROFILE\src\contextd\.venv\Scripts"
+$dst = "$env:USERPROFILE\.local\bin"   # any dir on your user PATH
+foreach ($name in "contextd.exe","contextd-mcp.exe","contextd-indexer.exe") {
+    fsutil hardlink create "$dst\$name" "$src\$name" | Out-Null
+}
+```
+
+**Caveat — pip stub regeneration.** The links above point at pip-generated launcher stubs. Editing `.py` files in the source tree never affects them — the editable install loads source directly at import time, regardless of which copy of the stub ran. The one situation that *does* matter is if `[project.scripts]` in `pyproject.toml` changes (entry-point name or module path): pip writes a fresh stub to the venv, and on Windows the hardlink in `~/.local/bin` ends up pointing at the now-orphaned old inode. If you suspect drift, re-run the link-creation command. To verify on Windows:
+
+```powershell
+fsutil hardlink list "$env:USERPROFILE\.local\bin\contextd.exe"
+```
+
+If the venv path still appears in the output, the hardlinks are healthy; if only the `.local\bin` entry is listed, recreate the links.
+
 ### After v0.1.0 on PyPI (future)
 
 ```bash
