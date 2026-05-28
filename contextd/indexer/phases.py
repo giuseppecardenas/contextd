@@ -40,10 +40,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeVar
 
+from contextd._paths import canonical_path
 from contextd.corpus_config import CorpusConfig
 from contextd.indexer.hasher import FileHasher
 from contextd.indexer.heading_parser import HeadingParser, ParsedSection
-from contextd.inference.relate import RelationshipInferrer
+from contextd.inference.relate import InferredRelationship, RelationshipInferrer
 from contextd.inference.summarise import Summariser
 from contextd.providers.base import EmbeddingProvider
 from contextd.storage._keys import primary_key_for
@@ -122,7 +123,7 @@ def phase_enumerate(
         store.upsert_node(
             "File",
             {
-                "path": str(f),
+                "path": canonical_path(f),
                 "name": f.name,
                 "type": f.suffix.lstrip(".") or "unknown",
                 "hash": hasher.hash(f),
@@ -160,10 +161,10 @@ def phase_summarise(
             for r in store.exec_read(
                 "MATCH (f:File) WHERE f.path IN $paths AND f.summary IS NOT NULL "
                 "RETURN f.path AS path",
-                {"paths": [str(f) for f in files]},
+                {"paths": [canonical_path(f) for f in files]},
             )
         }
-        files = [f for f in files if str(f) not in already]
+        files = [f for f in files if canonical_path(f) not in already]
 
     def _worker(f: Path) -> tuple[int, int]:
         try:
@@ -173,7 +174,7 @@ def phase_summarise(
         store.exec_write(
             "MATCH (n:File {path: $path}) "
             "SET n.summary = $summary, n.key_points = $key_points, n.summary_confidence = 1.0",
-            {"path": str(f), "summary": result.summary, "key_points": result.key_points},
+            {"path": canonical_path(f), "summary": result.summary, "key_points": result.key_points},
         )
         return (1, 0)
 
@@ -199,10 +200,10 @@ def phase_relate(
             for r in store.exec_read(
                 "MATCH (f:File) WHERE f.path IN $paths AND f.inferred_at IS NOT NULL "
                 "RETURN f.path AS path",
-                {"paths": [str(f) for f in files]},
+                {"paths": [canonical_path(f) for f in files]},
             )
         }
-        files = [f for f in files if str(f) not in already]
+        files = [f for f in files if canonical_path(f) not in already]
 
     known = entity_sampler(store)
 
@@ -211,42 +212,25 @@ def phase_relate(
             relations = inferrer.infer(f.read_text(errors="replace"), known_entities=known)
         except Exception:
             return (0, 1)
+        file_path = canonical_path(f)
         # Wipe-and-replace inferred edges (spec §5.5).
         # src_label="File" required by GraphStore.delete_edges (see ABC
         # docstring) — a label-less MATCH is ambiguous when endpoints
         # have non-"path" PKs.
-        store.delete_edges(str(f), origin="inferred", src_label="File")
+        store.delete_edges(file_path, origin="inferred", src_label="File")
         local_skipped = 0
         for rel in relations:
-            try:
-                pk = _infer_key(rel.target_type)
-            except ValueError:
-                # Hallucinated target label — skip this edge rather than
-                # creating a malformed weak-entry node or aborting the
-                # whole batch.
+            # File/Section targets resolve to an existing node or are dropped
+            # (never stubbed); other labels upsert a tagged stub. See
+            # _apply_inferred_edge.
+            if not _apply_inferred_edge(store, file_path, "File", rel, corpus):
                 local_skipped += 1
-                continue
-            # Tag the auto-created destination with the current corpus so
-            # phase_gc_sections (and any future corpus-scoped cleanup) can
-            # see it. Without this, stubs MERGEd here carry only their PK
-            # and become untracked orphans with corpus=NULL.
-            store.upsert_node(rel.target_type, {pk: rel.target_name, "corpus": corpus})
-            # src_label/dst_label required by GraphStore.upsert_edge.
-            store.upsert_edge(
-                str(f),
-                rel.target_name,
-                rel.edge_type,
-                origin="inferred",
-                properties={"confidence": rel.confidence, "reason": rel.reason},
-                src_label="File",
-                dst_label=rel.target_type,
-            )
         # Mark processed so an interrupted run can resume without re-inferring.
         # Marker set only after the upsert loop completes; exception paths
         # return (0, 1) above and leave the marker unset.
         store.exec_write(
             "MATCH (f:File {path: $path}) SET f.inferred_at = datetime()",
-            {"path": str(f)},
+            {"path": file_path},
         )
         return (1, local_skipped)
 
@@ -333,15 +317,20 @@ def phase_enumerate_sections(
     for start in range(0, len(all_bodies), batch_size):
         embeddings.extend(embedder.embed(all_bodies[start : start + batch_size]))
 
+    # Canonicalise each file path once; node identity (File.path and the
+    # Section.id prefix) must be derived identically here and at every
+    # re-index / GC site or MERGE creates duplicates instead of updating.
+    canon_path: dict[Path, str] = {f: canonical_path(f) for f, _ in parsed_by_file}
+
     # Build (file_path, section_id) → embedding lookup.
     embedding_map: dict[tuple[str, str], list[float]] = {
-        (str(f), f"{f!s}#{sec.anchor}"): vec
+        (canon_path[f], f"{canon_path[f]}#{sec.anchor}"): vec
         for (f, sec), vec in zip(all_sections, embeddings, strict=True)
     }
 
     processed = 0
     for f, sections in parsed_by_file:
-        file_path = str(f)
+        file_path = canon_path[f]
         # Upsert the parent File node with a real MD5 hash (SD #73).
         store.upsert_node(
             "File",
@@ -437,7 +426,7 @@ def phase_gc_sections(
     parse_cache: dict[str, list[ParsedSection]] = {}
     current_ids: set[str] = set()
     for f in files:
-        file_path = str(f)
+        file_path = canonical_path(f)
         for sec in _parse_cached(parser, f, parse_cache):
             current_ids.add(f"{file_path}#{sec.anchor}")
 
@@ -471,7 +460,7 @@ def gc_sections_for_file(
     if path.suffix != ".md":
         return 0
     parser = _build_parser(corpus_cfg)
-    file_path = str(path)
+    file_path = canonical_path(path)
     current_ids: set[str] = {
         f"{file_path}#{sec.anchor}" for sec in parser.parse(path.read_text(errors="replace"))
     }
@@ -597,6 +586,7 @@ def phase_relate_sections(
     for p in {Path(r["path"]) for r in rows}:
         _parse_cached(parser, p, parse_cache)
     known = entity_sampler(store)
+    corpus_name = corpus_cfg.corpus.name
 
     def _worker(r: dict[str, str]) -> tuple[int, int]:
         path = Path(r["path"])
@@ -613,30 +603,11 @@ def phase_relate_sections(
         store.delete_edges(r["id"], origin="inferred", src_label="Section")
         local_skipped = 0
         for rel in relations:
-            try:
-                pk = _infer_key(rel.target_type)
-            except ValueError:
-                # Hallucinated target label — skip silently (see phase_relate
-                # for the same pattern in file-mode).
+            # File/Section targets resolve to an existing node or are dropped
+            # (never stubbed); other labels upsert a tagged stub. See
+            # _apply_inferred_edge.
+            if not _apply_inferred_edge(store, r["id"], "Section", rel, corpus_name):
                 local_skipped += 1
-                continue
-            # Tag the auto-created destination with the current corpus so
-            # phase_gc_sections (and any future corpus-scoped cleanup) can
-            # see it. Without this, stubs MERGEd here carry only their PK
-            # and become untracked orphans with corpus=NULL.
-            store.upsert_node(
-                rel.target_type,
-                {pk: rel.target_name, "corpus": corpus_cfg.corpus.name},
-            )
-            store.upsert_edge(
-                r["id"],
-                rel.target_name,
-                rel.edge_type,
-                origin="inferred",
-                properties={"confidence": rel.confidence, "reason": rel.reason},
-                src_label="Section",
-                dst_label=rel.target_type,
-            )
         # Mark processed so resume can skip. Only set after the upsert loop
         # completes; exception paths above return (0, 1) unmarked.
         store.exec_write(
@@ -686,7 +657,7 @@ def derive_file_level_for_path(
     _concat_first_sentences. O(1) w.r.t. corpus size — called from
     run_incremental_file instead of the full-corpus phase_derive_file_level.
     """
-    file_path = str(path)
+    file_path = canonical_path(path)
     rows = store.exec_read(
         "MATCH (f:File {path: $path})-[:CONTAINS]->(s:Section) "
         "RETURN collect(s.summary) AS summaries",
@@ -711,6 +682,92 @@ def _infer_key(target_type: str) -> str:
     and skip so a hallucinated edge target doesn't abort the whole batch.
     """
     return primary_key_for(target_type)
+
+
+# File and Section nodes mirror real on-disk content and are created ONLY by
+# the enumerate phases. Inference must never mint them: a stub (PK + corpus,
+# no path/summary/embedding) is a phantom "old" record that pollutes
+# section/file queries and is exactly what the wipe-and-replace edge logic
+# leaves orphaned on the next re-inference. References to them are resolved to
+# the existing node instead — or dropped.
+_ENUMERATION_OWNED_LABELS = frozenset({"File", "Section"})
+
+
+def _resolve_existing_node(store: GraphStore, label: str, raw_name: str, corpus: str) -> str | None:
+    """Resolve an inferred-edge target to an EXISTING node's primary-key value.
+
+    Used only for ``_ENUMERATION_OWNED_LABELS`` (File/Section). Resolution is
+    corpus-scoped and best-effort:
+
+      * exact primary-key match (path separators normalised to ``/`` so an
+        LLM citing ``docs\\x.md`` matches the canonical ``docs/x.md``), then
+      * for ``File`` only, a *unique* basename match on the ``name`` property
+        (the LLM commonly cites a file by bare name, e.g. ``03-economy.md``);
+        a non-unique basename is left unresolved rather than mis-linked.
+
+    Returns the matched PK value, or ``None`` when nothing real matches — the
+    caller then drops the edge rather than creating a phantom stub.
+    """
+    pk = primary_key_for(label)
+    needle = raw_name.replace("\\", "/")
+    # ``label`` is constrained to _ENUMERATION_OWNED_LABELS by the sole caller,
+    # so the interpolation here is not attacker-influenced.
+    exact = store.exec_read(
+        f"MATCH (n:{label} {{corpus: $c}}) WHERE n.{pk} = $v RETURN n.{pk} AS v LIMIT 1",
+        {"c": corpus, "v": needle},
+    )
+    if exact:
+        return str(exact[0]["v"])
+    if label == "File":
+        basename = needle.rsplit("/", 1)[-1]
+        by_name = store.exec_read(
+            "MATCH (n:File {corpus: $c}) WHERE n.name = $b AND n.hash IS NOT NULL "
+            "RETURN n.path AS v LIMIT 2",
+            {"c": corpus, "b": basename},
+        )
+        if len(by_name) == 1:
+            return str(by_name[0]["v"])
+    return None
+
+
+def _apply_inferred_edge(
+    store: GraphStore, src_id: str, src_label: str, rel: InferredRelationship, corpus: str
+) -> bool:
+    """Write one inferred edge from ``src_id`` to ``rel``'s target.
+
+    Returns ``True`` if an edge was written, ``False`` if the edge was dropped.
+
+    For enumeration-owned target labels (File/Section) the target is resolved
+    to an existing node and the edge is dropped when it does not resolve —
+    never stubbed. For every other target label the destination is upserted as
+    a lightweight stub (legitimate abstract entities such as
+    ``Pattern``/``Risk``/``Ticket`` the LLM identifies from prose), tagged with
+    the current ``corpus`` so corpus-scoped GC and queries can see it.
+
+    ``src_label``/``dst_label`` are required by ``GraphStore.upsert_edge``.
+    """
+    try:
+        pk = _infer_key(rel.target_type)
+    except ValueError:
+        # Hallucinated target label absent from the ontology key map.
+        return False
+    if rel.target_type in _ENUMERATION_OWNED_LABELS:
+        target_value = _resolve_existing_node(store, rel.target_type, rel.target_name, corpus)
+        if target_value is None:
+            return False
+    else:
+        store.upsert_node(rel.target_type, {pk: rel.target_name, "corpus": corpus})
+        target_value = rel.target_name
+    store.upsert_edge(
+        src_id,
+        target_value,
+        rel.edge_type,
+        origin="inferred",
+        properties={"confidence": rel.confidence, "reason": rel.reason},
+        src_label=src_label,
+        dst_label=rel.target_type,
+    )
+    return True
 
 
 def _build_parser(corpus_cfg: CorpusConfig) -> HeadingParser:

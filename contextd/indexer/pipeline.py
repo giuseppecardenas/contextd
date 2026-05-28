@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from contextd._paths import canonical_path
 from contextd.corpus_config import CorpusConfig
 from contextd.indexer import phases
 from contextd.indexer.hasher import FileHasher
@@ -162,7 +163,7 @@ def _clear_file_for_reindex(path: Path, store: GraphStore) -> None:
     then REMOVE inferred_at, then REMOVE summary/key_points/summary_confidence.
     REMOVE on a missing property is a no-op on both backends.
     """
-    file_path = str(path)
+    file_path = canonical_path(path)
     store.delete_edges(file_path, origin="inferred", src_label="File")
     store.exec_write(
         "MATCH (f:File {path: $path}) REMOVE f.inferred_at",
@@ -176,7 +177,7 @@ def _clear_file_for_reindex(path: Path, store: GraphStore) -> None:
 
 def _clear_sections_for_reindex(path: Path, store: GraphStore, corpus: str) -> None:
     """Wipe per-section markers for a single file (section-granular mode only)."""
-    file_path = str(path)
+    file_path = canonical_path(path)
     store.exec_write(
         "MATCH (s:Section {corpus: $corpus, path: $path})-[r]-() "
         "WHERE r.origin = 'inferred' DELETE r",
@@ -224,7 +225,7 @@ def run_incremental_file(
     cleared file; other corpus files already have their markers set and are
     skipped cheaply.
     """
-    file_path = str(path)
+    file_path = canonical_path(path)
 
     if not path.exists():
         if corpus.corpus.granularity == "section" and path.suffix == ".md":
@@ -250,7 +251,7 @@ def run_incremental_file(
     _clear_file_for_reindex(path, store)
 
     if corpus.corpus.granularity == "section" and path.suffix == ".md":
-        file_path_str = str(path)
+        file_path_str = canonical_path(path)
         corpus_name = corpus.corpus.name
 
         # Parse current sections and compute per-section hashes

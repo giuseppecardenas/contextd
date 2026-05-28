@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
+from contextd._paths import canonical_path
 from contextd.corpus_config import CorpusConfig
 from contextd.indexer.phases import derive_file_level_for_path, gc_sections_for_file
 
@@ -16,7 +17,7 @@ def testgc_sections_for_file_deletes_stale_section(
     md_file.write_text("# Heading A\n\nbody\n")
 
     store = MagicMock()
-    file_path = str(md_file)
+    file_path = canonical_path(md_file)
     store.exec_read.return_value = [
         {"id": f"{file_path}#heading-a"},
         {"id": f"{file_path}#heading-b"},  # stale
@@ -46,7 +47,7 @@ def testgc_sections_for_file_preserves_current_sections(
     md_file.write_text("# Heading A\n\nbody\n")
 
     store = MagicMock()
-    file_path = str(md_file)
+    file_path = canonical_path(md_file)
     store.exec_read.return_value = [{"id": f"{file_path}#heading-a"}]
 
     corpus_cfg = CorpusConfig.model_validate(
@@ -99,7 +100,7 @@ def testderive_file_level_for_path_scoped_to_target_file(tmp_path: Path) -> None
 
     read_call = store.exec_read.call_args
     params = read_call[0][1]
-    assert params["path"] == str(path)
+    assert params["path"] == canonical_path(path)
 
 
 def testderive_file_level_for_path_handles_no_sections(tmp_path: Path) -> None:

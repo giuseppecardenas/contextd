@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
+from contextd._paths import canonical_path
+
 
 def _make_corpus(tmp_path: Path, granularity: str = "file"):
     from contextd.corpus_config import CorpusConfig
@@ -152,7 +154,7 @@ def test_run_incremental_file_returns_skipped_when_no_sections_changed(
     md.write_text("## Alpha\n\nBody alpha.\n")
     corpus = _make_corpus(tmp_path, granularity="section")
 
-    file_path_str = str(md)
+    file_path_str = canonical_path(md)
     from contextd.indexer.heading_parser import HeadingParser
 
     parser = HeadingParser(min_level=2, max_level=4)
@@ -194,7 +196,7 @@ def test_run_incremental_file_clears_only_changed_sections(tmp_path: Path) -> No
     md.write_text("## Alpha\n\nBody alpha.\n\n## Beta\n\nBody beta.\n")
     corpus = _make_corpus(tmp_path, granularity="section")
 
-    file_path_str = str(md)
+    file_path_str = canonical_path(md)
     from contextd.indexer.heading_parser import HeadingParser
 
     parser = HeadingParser(min_level=2, max_level=4)
@@ -255,7 +257,7 @@ def test_run_incremental_file_treats_missing_hash_as_changed(tmp_path: Path) -> 
     md.write_text("## Alpha\n\nBody alpha.\n")
     corpus = _make_corpus(tmp_path, granularity="section")
 
-    file_path_str = str(md)
+    file_path_str = canonical_path(md)
     # Graph returns section with hash=None (pre-feature node)
     store = MagicMock()
     call_count = [0]

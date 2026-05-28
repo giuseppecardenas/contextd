@@ -24,3 +24,30 @@ def contextd_home() -> Path:
     invoke inside function bodies, not at import time.
     """
     return Path(os.environ.get("CONTEXTD_HOME", str(Path.home() / ".contextd")))
+
+
+def canonical_path(path: Path | str) -> str:
+    """Return the canonical string form of a path used as a graph node identity.
+
+    File and Section nodes are keyed by a path string (``File.path`` and the
+    ``<path>#<anchor>`` prefix of ``Section.id``). That string MUST be derived
+    the same way at every site that creates or matches a node, or re-processing
+    a file MERGEs against a different key and creates a duplicate instead of
+    updating the existing record.
+
+    The trap on Windows: ``str(WindowsPath(...))`` yields backslashes, but a
+    path that ever passed through ``as_posix()`` (older code, or a WSL-era
+    index of the same tree) is stored with forward slashes — so the two
+    conventions silently diverge and the "previous record" is never updated.
+    Pinning one convention (forward slashes, via ``as_posix``) makes the
+    identity independent of OS separator and of which code path produced the
+    path (bootstrap glob, watchdog event, or debouncer ``resolve()``).
+
+    ``expanduser`` is applied so a ``~``-rooted path canonicalises the same way
+    the enumerate phase stores it. No ``resolve()``: inputs are already
+    absolute (corpus roots are resolved at ``add-corpus`` time; daemon paths by
+    the debouncer), and ``resolve()`` would add a filesystem ``stat`` plus
+    surprising symlink rewriting on the deletion/GC paths where the file may no
+    longer exist.
+    """
+    return Path(path).expanduser().as_posix()

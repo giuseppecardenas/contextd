@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
+from contextd._paths import canonical_path
 from contextd.corpus_config import CorpusConfig
 from contextd.indexer.phases import (
     phase_relate,
@@ -71,7 +72,10 @@ def test_phase_summarise_skips_already_summarised(tmp_path: Path) -> None:
     )
     store = MagicMock()
     # Two of the four files already have a summary on their File node.
-    store.exec_read.return_value = [{"path": str(files[0])}, {"path": str(files[2])}]
+    store.exec_read.return_value = [
+        {"path": canonical_path(files[0])},
+        {"path": canonical_path(files[2])},
+    ]
 
     result = phase_summarise(files, summariser, store)
 
@@ -83,7 +87,7 @@ def test_phase_summarise_all_already_done(tmp_path: Path) -> None:
     files = _make_files(tmp_path, 3)
     summariser = MagicMock()
     store = MagicMock()
-    store.exec_read.return_value = [{"path": str(f)} for f in files]
+    store.exec_read.return_value = [{"path": canonical_path(f)} for f in files]
 
     result = phase_summarise(files, summariser, store)
 
@@ -155,7 +159,7 @@ def test_phase_relate_skips_files_with_inferred_at(tmp_path: Path) -> None:
     inferrer = MagicMock()
     inferrer.infer.return_value = []
     store = MagicMock()
-    store.exec_read.return_value = [{"path": str(files[1])}]  # one already done
+    store.exec_read.return_value = [{"path": canonical_path(files[1])}]  # one already done
 
     result = phase_relate(files, inferrer, store, entity_sampler=lambda _s: [], corpus="c")
 
@@ -175,7 +179,7 @@ def test_phase_relate_sets_inferred_at_after_successful_upsert(tmp_path: Path) -
     # Find the exec_write that set inferred_at.
     marker_calls = [c for c in store.exec_write.call_args_list if "SET f.inferred_at" in c.args[0]]
     assert len(marker_calls) == 1
-    assert marker_calls[0].args[1]["path"] == str(files[0])
+    assert marker_calls[0].args[1]["path"] == canonical_path(files[0])
 
 
 def test_phase_relate_tags_auto_created_targets_with_corpus(tmp_path: Path) -> None:
@@ -183,7 +187,11 @@ def test_phase_relate_tags_auto_created_targets_with_corpus(tmp_path: Path) -> N
     must carry the ``corpus`` property on MERGE so that it's reachable from
     corpus-scoped queries. Previously the stub MERGE only set the PK, leaving
     the destination untracked with corpus=NULL and invisible to
-    ``phase_gc_sections`` (which filters by corpus)."""
+    ``phase_gc_sections`` (which filters by corpus).
+
+    Uses a stub-eligible target label (``Pattern``). ``File``/``Section``
+    targets are resolved to existing nodes rather than stubbed — see
+    ``tests/unit/test_inferred_edge_targets.py``."""
     from contextd.inference.relate import InferredRelationship
 
     files = _make_files(tmp_path, 1)
@@ -191,8 +199,8 @@ def test_phase_relate_tags_auto_created_targets_with_corpus(tmp_path: Path) -> N
     inferrer.infer.return_value = [
         InferredRelationship(
             edge_type="REFERENCES",
-            target_type="File",
-            target_name="other.md",
+            target_type="Pattern",
+            target_name="some_pattern",
             confidence=0.9,
             reason="stub",
         )
@@ -206,7 +214,7 @@ def test_phase_relate_tags_auto_created_targets_with_corpus(tmp_path: Path) -> N
     target_upserts = [
         c
         for c in store.upsert_node.call_args_list
-        if c.args[0] == "File" and c.args[1].get("path") == "other.md"
+        if c.args[0] == "Pattern" and c.args[1].get("name") == "some_pattern"
     ]
     assert len(target_upserts) == 1, "auto-created target was not upserted"
     assert target_upserts[0].args[1].get("corpus") == "runeledger", (
