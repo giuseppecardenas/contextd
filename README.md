@@ -61,6 +61,8 @@ Every edge carries one of three `origin` values:
 | `inferred` | AI-inferred semantic relationship. Wipe-and-replace on re-index. |
 | `manual` | Hand-authored. Never overwritten on re-index. |
 
+**Inferred edges attach to real nodes, never placeholders.** When inference references a `File` or `Section` (node types created only by indexing on-disk content), the edge is wired to the existing node — matched by canonical path/id, or for files by unique basename — or dropped if nothing matches. It never mints a stub. Only abstract entity types (`Pattern`, `Risk`, `Ticket`, `Technology`, …) are created on demand as inference targets. Node identity is a canonical forward-slash path, so re-indexing a file updates its node in place instead of creating a separator-variant duplicate.
+
 ### The GraphStore abstraction
 
 All higher layers (indexer, MCP server, CLI) talk to the backend through the `GraphStore` ABC. The concrete backend — `Neo4jBackend` or `MemgraphBackend` — is selected by a single line in `~/.contextd/config.toml`:
@@ -210,8 +212,8 @@ Runs the five-phase bootstrap pipeline:
 
 1. **enumerate** — discovers files, computes embeddings at CREATE time.
 2. **embed** — accounting stub (embeddings already written in phase 1).
-3. **summarise** — calls Gemini Flash once per file to generate `summary` and `key_points`.
-4. **relate** — calls Gemini Flash once per file to infer typed edges between nodes.
+3. **summarise** — calls Gemma once per file to generate `summary` and `key_points`.
+4. **relate** — calls Gemma once per file to infer typed edges between nodes.
 5. **close** — persists corpus stats and checkpoint state.
 
 Progress is printed per phase:
@@ -748,6 +750,7 @@ Contextd is a single-user local tool. Its security posture reflects that:
 | Daemon crashes on git commit | Git temp files (e.g., `index.lock`) entering the watcher pipeline | Update to latest; fixed in `2b6d33d` — the daemon now excludes `.git/` events and handles vanished temp files |
 | Section-granular index skips headings | `heading_min_level` / `heading_max_level` too narrow | Adjust range in corpus TOML (default: levels 2–4); level 1 (`#`) is excluded by default |
 | `contextd index --incremental` re-processes everything | Graph predates `inferred_at` marker migration | Run `contextd index <corpus> --bootstrap` once — migration `_0004` backfills markers on existing nodes |
+| Phantom or duplicate `Section`/`File` nodes clutter `query_graph` / `related` / `inbound` results | Older graphs accumulated path-less `Section` / hash-less `File` stubs (inference used to mint a node per edge target) and mixed `\` vs `/` path identities from indexing under different OSes | Update to latest and run `contextd up` — migration `_0005` purges the phantom stubs (and their dangling edges) and canonicalises path identity to forward slashes. Going forward the indexer resolves inferred `File`/`Section` targets to existing nodes instead of stubbing |
 | Neo4j container won't start on port 7687 | Another backend already bound to the port | `contextd down` first, then switch `backend` in config and `contextd up` |
 | Edits from Windows don't trigger re-indexing | WSL2 inotify doesn't see Windows-side writes | Lower `sweep_interval_seconds` in config (see [periodic sweep](#periodic-sweep-wsl2--windows-side-edits)); or touch the file from WSL |
 | Large MCP search payloads | Embedding vectors included in results (pre-`96c409a`) | Update to latest; the `search` tool now strips embedding vectors from results |
