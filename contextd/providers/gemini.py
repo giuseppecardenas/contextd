@@ -14,6 +14,7 @@ import datetime as dt
 import random
 import time
 
+import httpx
 from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types as genai_types
@@ -22,6 +23,15 @@ from contextd.config import GeminiConfig
 from contextd.providers.base import CallSite, InferenceProvider, PromptRequest, UsageRecord
 
 _RETRYABLE_CODES = {429, 500, 503}
+
+# Per-request HTTP timeout in milliseconds passed to the google-genai client.
+# Without a timeout a stalled socket (the server accepts the connection but
+# never sends a response body, which the flaky 500-prone Gemma endpoint does
+# under load) blocks the worker thread forever at 0% CPU, since httpx defaults
+# to no read timeout and nothing raises for the retry loop to catch. 120s is
+# far above normal Gemma latency for a bounded summary/inference call yet still
+# guarantees a hung call eventually raises a retryable httpx.TransportError.
+_DEFAULT_REQUEST_TIMEOUT_MS = 120_000
 
 
 class GeminiProvider(InferenceProvider):
@@ -32,9 +42,13 @@ class GeminiProvider(InferenceProvider):
         api_key: str,
         backoff_initial: float = 1.0,
         backoff_max: float = 60.0,
+        request_timeout_ms: int = _DEFAULT_REQUEST_TIMEOUT_MS,
     ) -> None:
         self._cfg = config
-        self._client = genai.Client(api_key=api_key)
+        self._client = genai.Client(
+            api_key=api_key,
+            http_options=genai_types.HttpOptions(timeout=request_timeout_ms),
+        )
         self._last_usage: UsageRecord | None = None
         self._backoff_initial = backoff_initial
         self._backoff_max = backoff_max
@@ -71,9 +85,19 @@ class GeminiProvider(InferenceProvider):
                 attempt += 1
                 if exc.code not in _RETRYABLE_CODES or attempt >= self._cfg.max_retries:
                     raise
-                delay = min(self._backoff_initial * (2 ** (attempt - 1)), self._backoff_max)
-                delay *= 1.0 + random.uniform(-0.2, 0.2)
-                time.sleep(delay)
+                self._sleep_backoff(attempt)
+            except httpx.TransportError:
+                # A stalled, reset, or timed-out connection surfaces as a raw
+                # httpx.TransportError (e.g. ReadTimeout, ConnectTimeout,
+                # ConnectError) with no `code` attribute, so the APIError branch
+                # above can never see it. These are exactly the transient
+                # transport failures the request timeout converts a silent hang
+                # into; treat them as retryable on the same bounded backoff and
+                # re-raise once max_retries is exhausted.
+                attempt += 1
+                if attempt >= self._cfg.max_retries:
+                    raise
+                self._sleep_backoff(attempt)
 
         usage = response.usage_metadata
         input_tokens = (usage.prompt_token_count if usage else None) or 0
@@ -87,6 +111,21 @@ class GeminiProvider(InferenceProvider):
             timestamp=dt.datetime.now(dt.UTC).isoformat(),
         )
         return response.text or ""
+
+    def _sleep_backoff(self, attempt: int) -> None:
+        """Sleep for an exponentially-increasing, jittered backoff interval.
+
+        The base delay doubles each attempt (``backoff_initial * 2**(attempt-1)``)
+        up to ``backoff_max`` and is then scaled by +/-20% jitter to avoid
+        synchronised retry storms when several worker threads fail at once.
+        Shared by both the ``APIError`` and ``httpx.TransportError`` retry
+        branches so the two failure modes use identical pacing.
+
+        :param attempt: 1-based count of the retry being scheduled.
+        """
+        delay = min(self._backoff_initial * (2 ** (attempt - 1)), self._backoff_max)
+        delay *= 1.0 + random.uniform(-0.2, 0.2)
+        time.sleep(delay)
 
     def last_usage(self) -> UsageRecord | None:
         return self._last_usage

@@ -137,3 +137,48 @@ def test_raises_on_permanent_400(gemini_cfg: GeminiConfig) -> None:
             provider.generate(PromptRequest(system="s", prompt="p", call_site="summary"))
     # Permanent → no retry loop.
     assert mock_client.models.generate_content.call_count == 1
+
+
+def test_client_configured_with_request_timeout(gemini_cfg: GeminiConfig) -> None:
+    """The genai client must be built with an http_options timeout so a stalled
+    socket eventually raises instead of blocking the worker thread forever."""
+    mock_client = _mock_client_with_response("x")
+    with patch("contextd.providers.gemini.genai.Client", return_value=mock_client) as ctor:
+        GeminiProvider(gemini_cfg, api_key="test-key", request_timeout_ms=45_000)
+    http_options = ctor.call_args.kwargs["http_options"]
+    assert http_options.timeout == 45_000
+
+
+def test_retries_on_transport_error(gemini_cfg: GeminiConfig) -> None:
+    """A transient httpx.TransportError (e.g. a read timeout on a stalled
+    connection) carries no APIError code, so it is handled by the dedicated
+    transport-error branch and retried on the same backoff."""
+    import httpx
+
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.text = "recovered"
+    mock_response.usage_metadata = MagicMock(prompt_token_count=1, candidates_token_count=1)
+    mock_client.models.generate_content.side_effect = [
+        httpx.ReadTimeout("read timed out"),
+        mock_response,
+    ]
+    with patch("contextd.providers.gemini.genai.Client", return_value=mock_client):
+        provider = GeminiProvider(gemini_cfg, api_key="test-key", backoff_initial=0.01)
+        result = provider.generate(PromptRequest(system="s", prompt="p", call_site="summary"))
+    assert result == "recovered"
+    assert mock_client.models.generate_content.call_count == 2
+
+
+def test_raises_transport_error_after_max_retries(gemini_cfg: GeminiConfig) -> None:
+    """Persistent transport failures re-raise once max_retries is exhausted
+    rather than looping forever."""
+    import httpx
+
+    mock_client = MagicMock()
+    mock_client.models.generate_content.side_effect = httpx.ConnectTimeout("connect timed out")
+    with patch("contextd.providers.gemini.genai.Client", return_value=mock_client):
+        provider = GeminiProvider(gemini_cfg, api_key="test-key", backoff_initial=0.01)
+        with pytest.raises(httpx.TransportError):
+            provider.generate(PromptRequest(system="s", prompt="p", call_site="summary"))
+    assert mock_client.models.generate_content.call_count == gemini_cfg.max_retries
