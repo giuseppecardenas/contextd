@@ -248,6 +248,20 @@ def run_incremental_file(
     except OSError:
         return IncrementalResult(action="skipped", path=file_path)
 
+    if not (corpus.corpus.granularity == "section" and path.suffix == ".md"):
+        # File-granular: gate on the File node's stored hash before clearing
+        # markers or making any paid embed/inference call. When the stored hash
+        # equals the current content the file is unchanged, so re-running
+        # enumerate/summarise/relate would only waste embedding and inference
+        # tokens; skip instead. A new file (no node) or a hash mismatch falls
+        # through to a full re-index. Mirrors the section branch's hash gate.
+        existing = store.exec_read(
+            "MATCH (f:File {path: $path}) RETURN f.hash AS hash",
+            {"path": file_path},
+        )
+        if existing and existing[0].get("hash") == hasher.hash(path):
+            return IncrementalResult(action="skipped", path=file_path)
+
     _clear_file_for_reindex(path, store)
 
     if corpus.corpus.granularity == "section" and path.suffix == ".md":

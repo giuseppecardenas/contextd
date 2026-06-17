@@ -107,6 +107,71 @@ def test_run_incremental_file_calls_clear_then_phases(tmp_path: Path) -> None:
     assert embedder.embed.called
 
 
+def test_run_incremental_file_skips_unchanged_file_by_hash(tmp_path: Path) -> None:
+    """File-granular: when the File node's stored hash matches current content,
+    re-indexing is skipped so no embed/summarise/relate tokens are spent."""
+    from contextd.indexer.hasher import FileHasher
+    from contextd.indexer.pipeline import run_incremental_file
+
+    md = tmp_path / "a.md"
+    md.write_text("# Title\n\nbody")
+    corpus = _make_corpus(tmp_path)
+
+    hasher = FileHasher()
+    store = MagicMock()
+    store.exec_read.return_value = [{"hash": hasher.hash(md)}]
+    embedder = MagicMock()
+    summariser = MagicMock()
+    inferrer = MagicMock()
+
+    result = run_incremental_file(
+        md, corpus, store, hasher, embedder, summariser, inferrer, lambda _s: []
+    )
+
+    assert result.action == "skipped"
+    assert embedder.embed.called is False
+    assert summariser.summarise.called is False
+    assert store.delete_edges.called is False
+
+
+def test_run_incremental_file_reindexes_when_hash_differs(tmp_path: Path) -> None:
+    """File-granular: a stored hash that differs from current content forces a
+    full re-index rather than a skip."""
+    from contextd.indexer.hasher import FileHasher
+    from contextd.indexer.pipeline import run_incremental_file
+    from contextd.inference.summarise import FileSummary
+
+    md = tmp_path / "a.md"
+    md.write_text("# Title\n\nbody")
+    corpus = _make_corpus(tmp_path)
+
+    # First exec_read is the gate query (stale hash → mismatch); later phase
+    # queries return empty so summarise/relate run.
+    call_count = [0]
+
+    def _exec_read(query: str, params: object) -> list[object]:
+        call_count[0] += 1
+        return [{"hash": "stale-does-not-match"}] if call_count[0] == 1 else []
+
+    store = MagicMock()
+    store.exec_read.side_effect = _exec_read
+    embedder = MagicMock()
+    embedder.embed.return_value = [[0.1] * 1024]
+    summariser = MagicMock()
+    summariser.summarise.return_value = FileSummary(
+        summary="s", key_points=[], entities_mentioned=[]
+    )
+    inferrer = MagicMock()
+    inferrer.infer.return_value = []
+
+    result = run_incremental_file(
+        md, corpus, store, FileHasher(), embedder, summariser, inferrer, lambda _s: []
+    )
+
+    assert result.action == "indexed"
+    assert embedder.embed.called
+
+
 def test_run_incremental_file_section_granular(tmp_path: Path) -> None:
     from contextd.indexer.pipeline import run_incremental_file
 
