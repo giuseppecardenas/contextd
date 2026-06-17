@@ -44,7 +44,7 @@ def test_connect_and_run_migrations(memgraph_port: int) -> None:
         MigrationRunner(store, ALL_MIGRATIONS).apply()
 
         meta = store.exec_read("MATCH (m:Meta) RETURN m.applied AS applied")
-        assert meta[0]["applied"] == [1, 2, 3, 4]
+        assert meta[0]["applied"] == [1, 2, 3, 4, 5]
 
         # Upsert a node and read it back.
         store.upsert_node("File", {"path": "a.md", "hash": "h1"})
