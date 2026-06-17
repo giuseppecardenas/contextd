@@ -14,7 +14,7 @@ from __future__ import annotations
 import datetime as dt
 import random
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Any
 
 import voyageai
@@ -29,6 +29,11 @@ _MODEL_DIMENSIONS = {
     "voyage-3-large": 1024,
     "voyage-code-3": 1024,
 }
+
+# Voyage rejects any single embedding request whose inputs sum to more than
+# 120,000 tokens. The budget is held below that hard ceiling to leave margin
+# for tokenizer/server truncation discrepancies.
+_BATCH_TOKEN_BUDGET = 100_000
 
 
 class VoyageProvider(EmbeddingProvider):
@@ -55,10 +60,18 @@ class VoyageProvider(EmbeddingProvider):
     def last_usage(self) -> UsageRecord | None:
         return self._last_usage
 
+    def _count_batch_tokens(self, texts: list[str]) -> int:
+        return int(self._client.count_tokens(texts, model=self._cfg.model))
+
     def embed(self, texts: list[str]) -> list[list[float]]:
         all_vectors: list[list[float]] = []
         total_tokens = 0
-        for batch in _chunks(texts, self._cfg.max_batch_size):
+        for batch in _token_aware_batches(
+            texts,
+            max_items=self._cfg.max_batch_size,
+            token_budget=_BATCH_TOKEN_BUDGET,
+            count_tokens=self._count_batch_tokens,
+        ):
             result = self._embed_batch(batch)
             all_vectors.extend(result.embeddings)
             total_tokens += result.total_tokens
@@ -73,10 +86,14 @@ class VoyageProvider(EmbeddingProvider):
         return all_vectors
 
     def _embed_batch(self, batch: list[str]) -> Any:
+        # Voyage rejects empty strings; substitute a single space so callers
+        # relying on one-vector-per-input alignment (the strict zip in
+        # phase_enumerate) still receive a vector for empty or blank files.
+        safe_batch = [text if text.strip() else " " for text in batch]
         attempt = 0
         while True:
             try:
-                return self._client.embed(batch, model=self._cfg.model, input_type="document")
+                return self._client.embed(safe_batch, model=self._cfg.model, input_type="document")
             except RateLimitError:
                 attempt += 1
                 if attempt >= self._max_retries:
@@ -86,6 +103,31 @@ class VoyageProvider(EmbeddingProvider):
                 time.sleep(delay)
 
 
-def _chunks(seq: list[str], n: int) -> Iterator[list[str]]:
-    for i in range(0, len(seq), n):
-        yield seq[i : i + n]
+def _token_aware_batches(
+    texts: list[str],
+    *,
+    max_items: int,
+    token_budget: int,
+    count_tokens: Callable[[list[str]], int],
+) -> Iterator[list[str]]:
+    """Yield batches bounded by both item count and a per-batch token budget.
+
+    Batching by item count alone overflows Voyage's 120,000-token-per-request
+    ceiling on corpora containing large files. Each text's token count is
+    accumulated and a new batch is started before ``token_budget`` would be
+    exceeded, while ``max_items`` still caps the number of texts per batch. A
+    single text larger than the whole budget is emitted as its own batch and
+    left to Voyage's server-side per-input truncation.
+    """
+    batch: list[str] = []
+    batch_tokens = 0
+    for text in texts:
+        text_tokens = count_tokens([text])
+        if batch and (len(batch) >= max_items or batch_tokens + text_tokens > token_budget):
+            yield batch
+            batch = []
+            batch_tokens = 0
+        batch.append(text)
+        batch_tokens += text_tokens
+    if batch:
+        yield batch
