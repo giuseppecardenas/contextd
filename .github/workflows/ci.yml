@@ -35,20 +35,15 @@ jobs:
       - run: uv pip install --system -e ".[dev]"
       - run: pytest tests/unit -v --cov=contextd --cov-report=term
 
+  # Integration and e2e tests spin up Linux Memgraph/Neo4j containers via
+  # testcontainers. GitHub-hosted windows-latest runners cannot run Linux
+  # containers (testcontainers' Ryuk reaper bind-mounts /var/run/docker.sock,
+  # which does not exist there), so these jobs run on Linux only. Windows is
+  # still covered by the Docker-free unit matrix above.
   integration:
-    runs-on: ${{ matrix.os }}
-    continue-on-error: ${{ matrix.os == 'windows-latest' }}
-    strategy:
-      matrix:
-        os: [ubuntu-24.04, windows-latest]
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Switch Docker to Linux containers (Windows only)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $cli = "$env:ProgramFiles\Docker\Docker\DockerCli.exe"
-          if (Test-Path $cli) { & $cli -SwitchLinuxEngine } else { Write-Host "Docker Desktop not found — skipping engine switch" }
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -57,19 +52,9 @@ jobs:
       - run: pytest tests/integration -v -m integration
 
   e2e:
-    runs-on: ${{ matrix.os }}
-    continue-on-error: ${{ matrix.os == 'windows-latest' }}
-    strategy:
-      matrix:
-        os: [ubuntu-24.04, windows-latest]
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Switch Docker to Linux containers (Windows only)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $cli = "$env:ProgramFiles\Docker\Docker\DockerCli.exe"
-          if (Test-Path $cli) { & $cli -SwitchLinuxEngine } else { Write-Host "Docker Desktop not found — skipping engine switch" }
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
