@@ -1,5 +1,7 @@
 # Contextd (Context Daemon Abbrev.)
 
+[![CI](https://github.com/giuseppecardenas/contextd/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/giuseppecardenas/contextd/actions/workflows/ci.yml)
+
 Contextd is a locally-hosted knowledge layer for your project files. It indexes markdown, code, and structured data into a hybrid graph + vector store (Neo4j Community or Memgraph, your choice), generates AI-inferred relationships and per-file summaries, and exposes the result to Claude Desktop, Cursor, and any MCP-speaking client through an MCP server. Cold-start any AI session with a compact, semantically-organised overview of your entire corpus.
 
 - **Storage:** Neo4j Community 5.x (default) or Memgraph 3.x — both run in Docker, both bind port 7687.
