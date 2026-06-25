@@ -126,15 +126,18 @@ After the editable install, the `contextd`, `contextd-mcp`, and `contextd-indexe
 **Linux / macOS** (symlinks, no privileges needed):
 
 ```bash
-ln -s ~/src/contextd/.venv/bin/contextd         ~/.local/bin/contextd
-ln -s ~/src/contextd/.venv/bin/contextd-mcp     ~/.local/bin/contextd-mcp
-ln -s ~/src/contextd/.venv/bin/contextd-indexer ~/.local/bin/contextd-indexer
+# run from the repo root, after creating the venv
+mkdir -p ~/.local/bin
+ln -s "$PWD/.venv/bin/contextd"         ~/.local/bin/contextd
+ln -s "$PWD/.venv/bin/contextd-mcp"     ~/.local/bin/contextd-mcp
+ln -s "$PWD/.venv/bin/contextd-indexer" ~/.local/bin/contextd-indexer
 ```
 
 **Windows 11** (hardlinks, no admin needed — symlinks on Windows require admin elevation or Developer Mode, hardlinks need neither, with the one constraint that source and destination must live on the same volume):
 
 ```powershell
-$src = "$env:USERPROFILE\src\contextd\.venv\Scripts"
+# run from the repo root, after creating the venv
+$src = "$PWD\.venv\Scripts"
 $dst = "$env:USERPROFILE\.local\bin"   # any dir on your user PATH
 foreach ($name in "contextd.exe","contextd-mcp.exe","contextd-indexer.exe") {
     fsutil hardlink create "$dst\$name" "$src\$name" | Out-Null
@@ -352,7 +355,7 @@ Contextd exposes a stdio MCP server. It works with any MCP-speaking client over 
 
 **Cursor / Zed / other clients** — register `contextd-mcp` as a stdio MCP server; consult your client's docs for the exact config format.
 
-If `contextd-mcp` is not on your PATH (e.g., when using a venv), use the absolute path to the binary.
+If `contextd-mcp` is not on your PATH (e.g., when using a venv), use the absolute path to the binary. Replace `/path/to/contextd` below with your actual clone location (run `realpath .venv/bin/contextd-mcp` on Linux/macOS, or `Resolve-Path .venv\Scripts\contextd-mcp.exe` on Windows, from the repo root to print it).
 
 **Linux/macOS:**
 
@@ -360,7 +363,7 @@ If `contextd-mcp` is not on your PATH (e.g., when using a venv), use the absolut
 {
   "mcpServers": {
     "contextd": {
-      "command": "/home/you/src/contextd/.venv/bin/contextd-mcp",
+      "command": "/path/to/contextd/.venv/bin/contextd-mcp",
       "args": []
     }
   }
@@ -373,7 +376,7 @@ If `contextd-mcp` is not on your PATH (e.g., when using a venv), use the absolut
 {
   "mcpServers": {
     "contextd": {
-      "command": "C:\\Users\\you\\src\\contextd\\.venv\\Scripts\\contextd-mcp.exe",
+      "command": "C:\\path\\to\\contextd\\.venv\\Scripts\\contextd-mcp.exe",
       "args": []
     }
   }
@@ -657,7 +660,7 @@ Each corpus is configured via a TOML file at `~/.contextd/corpora/<name>.toml`, 
 ```toml
 [corpus]
 name = "notes"
-root = "/home/you/notes"
+root = "/path/to/notes"
 include = ["**/*.md"]           # glob patterns; default ["**/*"]
 exclude = ["drafts/**"]         # glob patterns to skip; default []
 granularity = "file"            # "file" (default) or "section"
