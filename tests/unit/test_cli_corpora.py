@@ -385,10 +385,8 @@ def test_add_corpus_without_from_preserves_existing_behaviour(
     assert data["corpus"]["granularity"] == "file"
 
 
-def test_add_corpus_from_runeledger_template(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Round-trip test with a copy of the realistic runeledger-prd corpus.toml.
+def test_add_corpus_from_acme_template(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Round-trip test with a copy of the realistic acme-prd corpus.toml.
 
     Validates:
     - Template paths are template-parent-relative (not repo-root-relative).
@@ -400,8 +398,8 @@ def test_add_corpus_from_runeledger_template(
 
     home = _setup_home(tmp_path, monkeypatch)
 
-    # Build a directory that mimics examples/runeledger-prd/ structure.
-    examples_dir = tmp_path / "examples" / "runeledger-prd"
+    # Build a directory that mimics examples/acme-prd/ structure.
+    examples_dir = tmp_path / "examples" / "acme-prd"
     examples_dir.mkdir(parents=True)
     tools_dir = examples_dir / "tools"
     tools_dir.mkdir()
@@ -410,7 +408,7 @@ def test_add_corpus_from_runeledger_template(
 
     # Create placeholder files for the artifacts referenced by the template.
     # These must exist so the existence assertions below are meaningful; without
-    # them a path-doubling bug (e.g. "runeledger-prd/runeledger-prd/ontology.json")
+    # them a path-doubling bug (e.g. "acme-prd/acme-prd/ontology.json")
     # would silently produce a non-existent path that the test would catch.
     (examples_dir / "ontology.json").write_text("{}", encoding="utf-8")
     (prompts_dir / "summary.md").write_text("# Summary\n", encoding="utf-8")
@@ -423,8 +421,8 @@ def test_add_corpus_from_runeledger_template(
     template.write_text(
         dedent("""\
         [corpus]
-        name = "runeledger-prd"
-        root = "/home/giuseppe/src/games/runeledger"
+        name = "acme-prd"
+        root = "/home/you/src/acme"
         include = ["docs/prd/**/*.md", "mods/base/**/*.lua", "prd.md", "CLAUDE.md"]
         exclude = ["docs/prd/_audit-methodology.md"]
         granularity = "section"
@@ -455,7 +453,7 @@ def test_add_corpus_from_runeledger_template(
         encoding="utf-8",
     )
 
-    corpus_dir = tmp_path / "runeledger"
+    corpus_dir = tmp_path / "acme"
     corpus_dir.mkdir()
 
     result = CliRunner().invoke(
@@ -464,18 +462,18 @@ def test_add_corpus_from_runeledger_template(
             "add-corpus",
             str(corpus_dir),
             "--name",
-            "runeledger-prd",
+            "acme-prd",
             "--from",
             str(template),
         ],
     )
     assert result.exit_code == 0, result.output
 
-    corpus_toml_path = home / "corpora" / "runeledger-prd.toml"
+    corpus_toml_path = home / "corpora" / "acme-prd.toml"
     data = tomllib.loads(corpus_toml_path.read_text())
 
     # Name and root overridden.
-    assert data["corpus"]["name"] == "runeledger-prd"
+    assert data["corpus"]["name"] == "acme-prd"
     assert data["corpus"]["root"] == str(corpus_dir.resolve())
 
     # Aliases preserved.
@@ -511,7 +509,7 @@ def test_add_corpus_from_runeledger_template(
     # downstream invariant that actually matters: a written TOML must be usable
     # by the indexer without errors.
     loaded_cfg = CorpusConfig.load(corpus_toml_path)
-    assert loaded_cfg.corpus.name == "runeledger-prd"
+    assert loaded_cfg.corpus.name == "acme-prd"
     assert loaded_cfg.corpus.granularity == "section"
     assert loaded_cfg.ontology.aliases["Registry"] == "Pattern"
 

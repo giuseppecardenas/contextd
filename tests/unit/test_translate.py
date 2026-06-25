@@ -88,8 +88,8 @@ def test_injects_corpus_filter_into_labelled_node() -> None:
     mock_renderer = MagicMock()
     mock_renderer.render.return_value = "rendered"
     translator = QueryTranslator(mock_provider, mock_renderer, Ontology.load_base())
-    result = translator.translate("files", corpus="runeledger-prd")
-    assert '{corpus: "runeledger-prd"}' in result
+    result = translator.translate("files", corpus="acme-prd")
+    assert '{corpus: "acme-prd"}' in result
     assert result.startswith("MATCH (n:File {corpus:")
 
 

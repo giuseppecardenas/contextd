@@ -32,11 +32,11 @@ def test_respects_min_and_max_levels() -> None:
 
 
 def test_anchor_matches_github_convention() -> None:
-    md = "## §6.14.9 Feudal nobility"
+    md = "## §6.14.9 Pricing tiers"
     parser = HeadingParser(min_level=2, max_level=4)
     sections = parser.parse(md)
     # GitHub anchor: lowercase, strip punctuation, spaces → dashes.
-    assert sections[0].anchor == "6149-feudal-nobility"
+    assert sections[0].anchor == "6149-pricing-tiers"
 
 
 def test_body_range_includes_content_until_next_equal_or_shallower() -> None:

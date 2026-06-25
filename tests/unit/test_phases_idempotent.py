@@ -208,7 +208,7 @@ def test_phase_relate_tags_auto_created_targets_with_corpus(tmp_path: Path) -> N
     store = MagicMock()
     store.exec_read.return_value = []
 
-    phase_relate(files, inferrer, store, entity_sampler=lambda _s: [], corpus="runeledger")
+    phase_relate(files, inferrer, store, entity_sampler=lambda _s: [], corpus="acme")
 
     # The upsert_node call for the auto-created target must include corpus.
     target_upserts = [
@@ -217,7 +217,7 @@ def test_phase_relate_tags_auto_created_targets_with_corpus(tmp_path: Path) -> N
         if c.args[0] == "Pattern" and c.args[1].get("name") == "some_pattern"
     ]
     assert len(target_upserts) == 1, "auto-created target was not upserted"
-    assert target_upserts[0].args[1].get("corpus") == "runeledger", (
+    assert target_upserts[0].args[1].get("corpus") == "acme", (
         f"corpus property missing from auto-created stub: {target_upserts[0].args[1]}"
     )
 

@@ -29,7 +29,7 @@ PRIMARY_KEY_BY_LABEL: Final[dict[str, str]] = {
     # and MERGE semantics collapse identical-text upserts into a single node
     # (the second upsert overwrites properties in-place rather than creating
     # a duplicate).  Two distinct Risks that happen to share identical
-    # description phrasing will also merge — in the Runeledger use case this
+    # description phrasing will also merge — in the Acme use case this
     # is rare and considered correct; audit-gap entries are nearly always
     # unique prose.  If future content needs co-existing same-phrased Risks,
     # the remedy is to migrate to a content-hash-derived ``id`` field (plus

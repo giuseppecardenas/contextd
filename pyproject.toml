@@ -59,7 +59,7 @@ Homepage = "https://github.com/giuseppecardenas/contextd"
 Issues = "https://github.com/giuseppecardenas/contextd/issues"
 
 # Wheel contents are explicitly scoped to the `contextd/` package + the four
-# bundled resource files listed below. Repo-root `examples/` (the Runeledger
+# bundled resource files listed below. Repo-root `examples/` (the Acme
 # adapter template and future reference configs) is NOT shipped in the wheel
 # — those are developer-facing reference material, not runtime dependencies.
 # Verified 2026-04-21 via `python -m build` + unzip inspection (M10.13).

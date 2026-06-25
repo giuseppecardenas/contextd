@@ -69,7 +69,7 @@ def test_apply_overrides_unknown_top_level_keys_ignored(tmp_path: Path) -> None:
 
 
 def test_apply_overrides_multiple_aliases(tmp_path: Path) -> None:
-    """Multiple aliases from the Runeledger example are all applied."""
+    """Multiple aliases from the Acme example are all applied."""
     aliases = {
         "CITES": "REFERENCES",
         "CONSUMES": "USES",

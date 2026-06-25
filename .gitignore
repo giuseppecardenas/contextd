@@ -17,7 +17,6 @@ build/
 *.swp
 *.swo
 
-# Superpowers subagent-driven-development scratch plans; authoritative
-# plan content lives in docs/implementation-plan.md.
+# Superpowers subagent-driven-development scratch plans.
 .claude/
 docs/superpowers/

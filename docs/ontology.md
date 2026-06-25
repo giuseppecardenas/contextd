@@ -29,7 +29,7 @@ Primary keys are enforced via uniqueness constraints in both backend migrations.
 
 `Section` nodes are only populated in section-granular corpora (`[corpus] granularity = "section"`).
 
-`Risk.description` is the primary key by design: the inferrer emits `Risk` nodes identified solely by their description text, and MERGE semantics collapse identical-description upserts into one node. Two audit-gap entries with identical phrasing will merge — considered correct for the Runeledger use case; if co-existing same-phrased Risks are needed in future, a content-hash-derived `id` field with a companion migration is the remedy.
+`Risk.description` is the primary key by design: the inferrer emits `Risk` nodes identified solely by their description text, and MERGE semantics collapse identical-description upserts into one node. Two audit-gap entries with identical phrasing will merge — considered correct for the Acme use case; if co-existing same-phrased Risks are needed in future, a content-hash-derived `id` field with a companion migration is the remedy.
 
 ---
 
