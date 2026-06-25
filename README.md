@@ -10,7 +10,7 @@ Contextd is a locally-hosted knowledge layer for your project files. It indexes 
 - **Platforms:** runs natively on Linux, macOS, and Windows 11. The daemon, IPC, file-watching, and Docker invocation are platform-agnostic — Windows is not a WSL-only afterthought. WSL2 is still a fine host on Windows if you prefer it, but a native Python install on Windows is equally supported.
 - **Privacy:** all state lives under `~/.contextd/` (`%USERPROFILE%\.contextd` on Windows); no data is stored outside your machine beyond the per-file API calls.
 
-> **Status: alpha.** v0.1.0 is pre-PyPI. Use the dev install below. The repo is private while the final documentation milestone lands.
+> **Status: alpha.** v0.1.0 is pre-PyPI. Use the dev install below.
 
 ---
 
