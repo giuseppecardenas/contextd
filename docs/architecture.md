@@ -129,9 +129,13 @@ Migrations are forward-only; no rollback support.
 **Inference providers** (both via HTTPS):
 
 - `GeminiProvider` — Gemini Flash by default; used for file/section summarisation, relationship inference, and natural-language to Cypher translation. Configured via `GEMINI_API_KEY`.
+- `OpenAICompatProvider` — any OpenAI-compatible chat endpoint (llama.cpp's server, Ollama, LM Studio, vLLM, LocalAI). Drop-in replacement for `GeminiProvider` at any of the three call-sites (`summary` / `inference` / `translation`), independently routable, so inference can run entirely on a local model server. No API key is required for a keyless local server.
 - `VoyageProvider` — Voyage AI `voyage-4-large` model (1024-dim, 32k-token context per input; `voyage-3`, `voyage-3-large`, `voyage-code-3` are also registered for users who want to override via `[providers.voyage] model`). Used for document and section embeddings. Configured via `VOYAGE_API_KEY`.
+- `OpenAICompatEmbeddingProvider` — any OpenAI-compatible `/embeddings` endpoint (llama.cpp's server, Ollama, vLLM, LocalAI). Selecting `providers.embedding = "openai_compat"` runs embeddings locally too, so with a local inference backend the whole indexing pipeline is fully offline. Defaults to `mxbai-embed-large` (1024-dim, matching the vector index); returned vectors are validated against the configured `dimensions` and a mismatch raises before any write.
 
-Both implement an ABC (`InferenceProvider` / `EmbeddingProvider`) defined in `contextd/providers/base.py`. Usage is logged to `~/.contextd/state/session-log/` via `CostLog`.
+All four implement an ABC (`InferenceProvider` / `EmbeddingProvider`) defined in `contextd/providers/base.py`. Usage is logged to `~/.contextd/state/session-log/` via `CostLog`.
+
+**Fully-offline operation:** set every inference call-site (`summary`, `inference`, `translation`) to `openai_compat` and `providers.embedding = "openai_compat"`, pointing both at a local server. The only remaining external dependency is the storage backend, which runs locally in Docker. The vector index is fixed at 1024 dimensions, so a local embedding model must emit 1024-dim vectors (the default `mxbai-embed-large` does) unless the migration DDL is edited on both backends.
 
 **MCP server** — `contextd/mcp_server.py` implements a stdio MCP server registered as the `contextd-mcp` console script. It exposes 8 generic tools plus per-corpus Cypher tools (see [mcp.md](mcp.md)). The server connects to the storage backend over Bolt at startup and holds the connection for the session lifetime.
 

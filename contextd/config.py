@@ -41,6 +41,35 @@ class VoyageConfig(BaseModel):
 
 
 InferenceProviderName = Literal["gemini", "openai_compat"]
+EmbeddingProviderName = Literal["voyage", "openai_compat"]
+
+
+class OpenAICompatEmbeddingConfig(BaseModel):
+    """Config for embeddings served by a local OpenAI-compatible server.
+
+    Targets the OpenAI ``/embeddings`` endpoint shape exposed by llama.cpp's
+    server, Ollama (``/v1/`` mode), LM Studio, vLLM, and LocalAI. Selecting
+    ``providers.embedding = "openai_compat"`` together with an
+    ``providers.openai_compat`` inference backend lets the entire indexing
+    pipeline run offline with no cloud API calls.
+
+    ``dimensions`` MUST match the vector-index dimension declared in the
+    baseline migrations (1024). The default model ``mxbai-embed-large`` emits
+    1024-dim vectors and so drops into the existing index unchanged; choosing
+    a model with a different output width (e.g. the 768-dim
+    ``nomic-embed-text``) requires editing the migration DDL on both backends.
+    The provider validates returned vector length against ``dimensions`` and
+    raises rather than writing mismatched vectors into the index.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    base_url: str = "http://localhost:11434/v1"
+    api_key_env: str | None = None
+    model: str = "mxbai-embed-large"
+    dimensions: int = Field(default=1024, gt=0)
+    max_batch_size: int = Field(default=64, ge=1)
+    max_retries: int = Field(default=5, ge=0)
+    request_timeout_seconds: float = Field(default=120.0, gt=0)
 
 
 class OpenAICompatConfig(BaseModel):
@@ -60,9 +89,12 @@ class ProvidersConfig(BaseModel):
     summary: InferenceProviderName = "gemini"
     inference: InferenceProviderName = "gemini"
     translation: InferenceProviderName = "gemini"
-    embedding: Literal["voyage"] = "voyage"
+    embedding: EmbeddingProviderName = "voyage"
     gemini: GeminiConfig = Field(default_factory=GeminiConfig)
     openai_compat: OpenAICompatConfig = Field(default_factory=OpenAICompatConfig)
+    openai_compat_embedding: OpenAICompatEmbeddingConfig = Field(
+        default_factory=OpenAICompatEmbeddingConfig
+    )
     voyage: VoyageConfig = Field(default_factory=VoyageConfig)
 
 

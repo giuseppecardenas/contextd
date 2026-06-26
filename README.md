@@ -5,7 +5,7 @@
 Contextd is a locally-hosted knowledge layer for your project files. It indexes markdown, code, and structured data into a hybrid graph + vector store (Neo4j Community or Memgraph, your choice), generates AI-inferred relationships and per-file summaries, and exposes the result to Claude Desktop, Cursor, and any MCP-speaking client through an MCP server. Cold-start any AI session with a compact, semantically-organised overview of your entire corpus.
 
 - **Storage:** Neo4j Community 5.x (default) or Memgraph 3.x — both run in Docker, both bind port 7687.
-- **Inference:** Google Gemma (`gemma-4-31b-it` default) via the Gemini API for summarisation, relationship inference, and NL→Cypher translation; Voyage AI `voyage-4-large` (1024-dim, 32k-token context) for vector embeddings.
+- **Inference:** Google Gemma (`gemma-4-31b-it` default) via the Gemini API for summarisation, relationship inference, and NL→Cypher translation; Voyage AI `voyage-4-large` (1024-dim, 32k-token context) for vector embeddings. Both inference and embeddings can instead run against a local OpenAI-compatible server (llama.cpp, Ollama, vLLM, LM Studio), so the whole pipeline can run fully offline.
 - **Interface:** stdio MCP server (`contextd-mcp`) and CLI (`contextd`).
 - **Platforms:** runs natively on Linux, macOS, and Windows 11. The daemon, IPC, file-watching, and Docker invocation are platform-agnostic — Windows is not a WSL-only afterthought. WSL2 is still a fine host on Windows if you prefer it, but a native Python install on Windows is equally supported.
 - **Privacy:** all state lives under `~/.contextd/` (`%USERPROFILE%\.contextd` on Windows); no data is stored outside your machine beyond the per-file API calls.
@@ -624,7 +624,9 @@ backend = "neo4j"           # "neo4j" (default) or "memgraph"
 [providers]
 # Inference provider per call-site. Each independently picks "gemini"
 # (cloud) or "openai_compat" (any local OpenAI-compatible HTTP server:
-# Ollama, LM Studio, vLLM, LocalAI). Embeddings stay on Voyage.
+# Ollama, LM Studio, vLLM, llama.cpp, LocalAI). The embedding provider
+# picks "voyage" (cloud) or "openai_compat" (local /embeddings endpoint);
+# set all four to "openai_compat" to run the pipeline fully offline.
 summary     = "gemini"
 inference   = "gemini"
 translation = "gemini"
@@ -690,7 +692,7 @@ The `include` and `exclude` patterns use glob syntax with `**` for recursive mat
 
 ### Using a local model
 
-Each of `summary`, `inference`, and `translation` can independently target a local OpenAI-compatible HTTP server (Ollama, LM Studio, vLLM, LocalAI) instead of Gemini. Embeddings stay on Voyage. A common split is to push the high-volume summary + relate traffic to a local model and keep translation (Cypher generation for `contextd ask`) on Gemini for higher quality:
+Each of `summary`, `inference`, and `translation` can independently target a local OpenAI-compatible HTTP server (Ollama, LM Studio, vLLM, llama.cpp's server, LocalAI) instead of Gemini, and embeddings can likewise be served locally. A common split is to push the high-volume summary + relate traffic to a local model and keep translation (Cypher generation for `contextd ask`) on Gemini for higher quality:
 
 ```toml
 [providers]
@@ -711,6 +713,29 @@ json_mode       = true   # sends response_format JSON for summary+inference call
 ```
 
 Quality floor recommendation: the relationship-inference call-site emits strict typed-edge JSON. Models below ~14B parameters tend to fail the JSON shape often enough to slow indexing. Qwen-2.5-14B-Instruct or Llama-3.1-70B-Instruct are reliable choices; smaller models are fine for `summary` only.
+
+#### Running fully offline
+
+To make indexing reach zero cloud calls, also move embeddings to a local server by setting `embedding = "openai_compat"` and configuring the embedding endpoint. With this and all three inference call-sites on `openai_compat`, no `GEMINI_API_KEY` or `VOYAGE_API_KEY` is needed; the only remaining dependency is the storage backend, which already runs locally in Docker.
+
+```toml
+[providers]
+summary     = "openai_compat"
+inference   = "openai_compat"
+translation = "openai_compat"
+embedding   = "openai_compat"
+
+[providers.openai_compat_embedding]
+base_url    = "http://localhost:11434/v1"   # llama.cpp server / Ollama / vLLM
+# api_key_env = "OPENAI_API_KEY"             # only for servers that require a token
+model       = "mxbai-embed-large"            # 1024-dim, matches the vector index
+dimensions  = 1024
+max_batch_size = 64
+max_retries = 5
+request_timeout_seconds = 120.0
+```
+
+The vector index is fixed at **1024 dimensions**, so the embedding model must emit 1024-dim vectors. `mxbai-embed-large` and `bge-large` both do; `nomic-embed-text` (768-dim) does not and would require editing the migration DDL on both backends. The provider validates each returned vector's length against `dimensions` and raises a clear error rather than writing a mismatched vector into the index, so a wrong model choice fails fast instead of corrupting search.
 
 **Migrating an existing config.** The pre-v0.2 single-line `inference = "gemini"` under `[providers]` is replaced by three lines (`summary`, `inference`, `translation`). Pydantic will reject the old shape with `extra fields not permitted` — rename and the rest of the file stays unchanged.
 

@@ -116,3 +116,37 @@ def test_build_voyage_from_config(monkeypatch: pytest.MonkeyPatch) -> None:
     from contextd.providers.base import EmbeddingProvider
 
     assert isinstance(provider, EmbeddingProvider)
+
+
+def test_build_openai_compat_embedding_keyless(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pytest.TempPathFactory
+) -> None:
+    """A local embedding server with no api_key_env builds without any key."""
+    monkeypatch.delenv("VOYAGE_API_KEY", raising=False)
+    user_cfg = tmp_path / "config.toml"  # type: ignore[operator]
+    user_cfg.write_text("""
+[providers]
+embedding = "openai_compat"
+""")
+    cfg = Config.load(user_cfg)
+    from contextd.providers.openai_compat_embedding import OpenAICompatEmbeddingProvider
+
+    provider = build_embedding_provider(cfg)
+    assert isinstance(provider, OpenAICompatEmbeddingProvider)
+
+
+def test_build_openai_compat_embedding_raises_when_api_key_env_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pytest.TempPathFactory
+) -> None:
+    monkeypatch.delenv("FAKE_EMBED_KEY", raising=False)
+    user_cfg = tmp_path / "config.toml"  # type: ignore[operator]
+    user_cfg.write_text("""
+[providers]
+embedding = "openai_compat"
+
+[providers.openai_compat_embedding]
+api_key_env = "FAKE_EMBED_KEY"
+""")
+    cfg = Config.load(user_cfg)
+    with pytest.raises(ProviderFactoryError, match="FAKE_EMBED_KEY"):
+        build_embedding_provider(cfg)

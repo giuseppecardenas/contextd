@@ -8,6 +8,7 @@ from contextd.config import Config, InferenceProviderName
 from contextd.providers.base import EmbeddingProvider, InferenceProvider
 from contextd.providers.gemini import GeminiProvider
 from contextd.providers.openai_compat import OpenAICompatProvider
+from contextd.providers.openai_compat_embedding import OpenAICompatEmbeddingProvider
 from contextd.providers.router import RoutingInferenceProvider
 from contextd.providers.voyage import VoyageProvider
 
@@ -72,4 +73,16 @@ def build_embedding_provider(cfg: Config) -> EmbeddingProvider:
                 "Get a key at https://www.voyageai.com/"
             )
         return VoyageProvider(cfg.providers.voyage, api_key=key)
+    if name == "openai_compat":
+        ecfg = cfg.providers.openai_compat_embedding
+        api_key: str | None = None
+        if ecfg.api_key_env:
+            api_key = os.environ.get(ecfg.api_key_env)
+            if not api_key:
+                raise ProviderFactoryError(
+                    f"providers.openai_compat_embedding.api_key_env = "
+                    f"{ecfg.api_key_env!r} but that env var is unset. Either export "
+                    "it or remove api_key_env to run against a keyless local server."
+                )
+        return OpenAICompatEmbeddingProvider(ecfg, api_key=api_key)
     raise ProviderFactoryError(f"Unknown embedding provider: {name!r}")

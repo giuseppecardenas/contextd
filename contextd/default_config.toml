@@ -1,7 +1,10 @@
 [providers]
 # Inference provider per call-site. Each independently picks "gemini" or
 # "openai_compat" (any local OpenAI-compatible HTTP server: Ollama, LM
-# Studio, vLLM, LocalAI). Embeddings stay on Voyage.
+# Studio, vLLM, llama.cpp's server, LocalAI). The embedding provider picks
+# "voyage" (cloud) or "openai_compat" (local /embeddings endpoint). Setting
+# every call-site plus embedding to "openai_compat" runs the whole indexing
+# pipeline offline with no cloud API calls.
 summary = "gemini"
 inference = "gemini"
 translation = "gemini"
@@ -29,6 +32,21 @@ json_mode = true
 [providers.voyage]
 model = "voyage-4-large"
 max_batch_size = 128
+
+[providers.openai_compat_embedding]
+# Used only when providers.embedding = "openai_compat". Points at a local
+# OpenAI-compatible /embeddings endpoint (llama.cpp server, Ollama, vLLM, ...).
+base_url = "http://localhost:11434/v1"
+# Leave api_key_env unset for keyless local servers; set it to an env var
+# name (e.g. "OPENAI_API_KEY") for servers that require a bearer token.
+# dimensions MUST match the vector-index width in the migrations (1024). The
+# default model emits 1024-dim vectors and drops into the existing index;
+# a different-width model requires editing the migration DDL on both backends.
+model = "mxbai-embed-large"
+dimensions = 1024
+max_batch_size = 64
+max_retries = 5
+request_timeout_seconds = 120.0
 
 [storage]
 backend = "neo4j"
