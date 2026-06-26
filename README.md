@@ -2,8 +2,9 @@
 
 [![CI](https://github.com/giuseppecardenas/contextd/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/giuseppecardenas/contextd/actions/workflows/ci.yml)
 
-Contextd is a locally-hosted knowledge layer for your project files. It indexes markdown, code, and structured data into a hybrid graph + vector store (Neo4j Community or Memgraph, your choice), generates AI-inferred relationships and per-file summaries, and exposes the result to Claude Desktop, Cursor, and any MCP-speaking client through an MCP server. Cold-start any AI session with a compact, semantically-organised overview of your entire corpus.
+Contextd is a locally-hosted knowledge layer for your project files. It indexes a corpus of markdown files into a hybrid graph + vector store (Neo4j Community or Memgraph, your choice), generates AI-inferred relationships and per-file summaries, and exposes the result to Claude Desktop, Cursor, and any MCP-speaking client through an MCP server. Cold-start any AI session with a compact, semantically-organised overview of your entire corpus.
 
+- **Input:** markdown (`.md`) files only. Markdown is the one format contextd is built and tested for today; the default corpus include pattern is `**/*.md`, the section-granular mode parses markdown headings, and the summarisation prompts assume prose-style documents. Pointing contextd at source code or structured data (JSON, CSV, and similar) is untested and unsupported at present, and although the section-granular pipeline contains a fallback path that routes non-markdown files through file-granular indexing, that path has not been exercised against real non-markdown corpora and should not be relied upon.
 - **Storage:** Neo4j Community 5.x (default) or Memgraph 3.x — both run in Docker, both bind port 7687.
 - **Inference:** Google Gemma (`gemma-4-31b-it` default) via the Gemini API for summarisation, relationship inference, and NL→Cypher translation; Voyage AI `voyage-4-large` (1024-dim, 32k-token context) for vector embeddings. Both inference and embeddings can instead run against a local OpenAI-compatible server (llama.cpp, Ollama, vLLM, LM Studio), so the whole pipeline can run fully offline.
 - **Interface:** stdio MCP server (`contextd-mcp`) and CLI (`contextd`).
@@ -600,7 +601,7 @@ The `--from` flag copies the template's settings (ontology overrides, prompt pat
 
 **When to use an adapter vs plain `add-corpus`:**
 
-- **Plain `add-corpus`** — the default ontology and prompts work well for general markdown, code, and structured data.
+- **Plain `add-corpus`** — the default ontology and prompts work well for general markdown corpora.
 - **Adapter** — your corpus has domain-specific vocabulary (e.g., `Registry` should map to `Pattern`), you want a custom summarisation prompt, or you need specific include/exclude patterns or section-level heading bounds.
 
 ---
