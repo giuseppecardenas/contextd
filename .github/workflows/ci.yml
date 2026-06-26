@@ -15,7 +15,13 @@ jobs:
         with:
           python-version: "3.11"
       - uses: astral-sh/setup-uv@v1
-      - run: uv pip install --system -e ".[dev]"
+      - name: Install deps (with retry for macOS socket exhaustion)
+        run: |
+          for i in $(seq 1 5); do
+            uv pip install --system -e ".[dev]" && break
+            echo "Install attempt $i failed, retrying in 5s..."
+            sleep 5
+          done
       - run: ruff check .
       - run: ruff format --check .
       - run: mypy --strict contextd
@@ -32,7 +38,13 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - uses: astral-sh/setup-uv@v1
-      - run: uv pip install --system -e ".[dev]"
+      - name: Install deps (with retry for macOS socket exhaustion)
+        run: |
+          for i in $(seq 1 5); do
+            uv pip install --system -e ".[dev]" && break
+            echo "Install attempt $i failed, retrying in 5s..."
+            sleep 5
+          done
       - run: pytest tests/unit -v --cov=contextd --cov-report=term
 
   # Integration and e2e tests spin up Linux Memgraph/Neo4j containers via
@@ -48,7 +60,13 @@ jobs:
         with:
           python-version: "3.11"
       - uses: astral-sh/setup-uv@v1
-      - run: uv pip install --system -e ".[dev]"
+      - name: Install deps (with retry for macOS socket exhaustion)
+        run: |
+          for i in $(seq 1 5); do
+            uv pip install --system -e ".[dev]" && break
+            echo "Install attempt $i failed, retrying in 5s..."
+            sleep 5
+          done
       - run: pytest tests/integration -v -m integration
 
   e2e:
@@ -59,7 +77,13 @@ jobs:
         with:
           python-version: "3.11"
       - uses: astral-sh/setup-uv@v1
-      - run: uv pip install --system -e ".[dev]"
+      - name: Install deps (with retry for macOS socket exhaustion)
+        run: |
+          for i in $(seq 1 5); do
+            uv pip install --system -e ".[dev]" && break
+            echo "Install attempt $i failed, retrying in 5s..."
+            sleep 5
+          done
       - run: pytest tests/e2e -v -m e2e
 
   abstraction-invariant:

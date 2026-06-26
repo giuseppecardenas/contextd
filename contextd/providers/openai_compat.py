@@ -53,6 +53,11 @@ class OpenAICompatProvider(InferenceProvider):
                 {"role": "user", "content": request.prompt},
             ],
         }
+        # Cap output tokens when configured (prevents runaway generation on
+        # local models that otherwise produce thousands of tokens).
+        if self._cfg.max_output_tokens is not None:
+            body["max_tokens"] = self._cfg.max_output_tokens
+
         # JSON mode for prompts that expect well-formed JSON output.
         # Translation emits Cypher prose, so leave response_format unset there.
         if self._cfg.json_mode and request.call_site != "translation":

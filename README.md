@@ -712,30 +712,110 @@ request_timeout_seconds = 120.0
 json_mode       = true   # sends response_format JSON for summary+inference call-sites
 ```
 
-Quality floor recommendation: the relationship-inference call-site emits strict typed-edge JSON. Models below ~14B parameters tend to fail the JSON shape often enough to slow indexing. Qwen-2.5-14B-Instruct or Llama-3.1-70B-Instruct are reliable choices; smaller models are fine for `summary` only.
+Quality floor: the `inference` call-site (relationship edges) emits strict typed-edge JSON and benefits from larger models (14B+). Smaller models are fine for `summary` only. See the [accuracy caveat](#accuracy-caveat) below for a detailed breakdown and recommended hybrid config.
 
 #### Running fully offline
 
-To make indexing reach zero cloud calls, also move embeddings to a local server by setting `embedding = "openai_compat"` and configuring the embedding endpoint. With this and all three inference call-sites on `openai_compat`, no `GEMINI_API_KEY` or `VOYAGE_API_KEY` is needed; the only remaining dependency is the storage backend, which already runs locally in Docker.
+With all four providers set to `openai_compat`, the entire indexing pipeline can run against locally-hosted models — no `GEMINI_API_KEY` or `VOYAGE_API_KEY` is needed. The only remaining dependency is the storage backend, which already runs locally in Docker.
+
+Below is a concrete, tested setup using **llama.cpp**'s built-in OpenAI-compatible server with two models (one for chat, one for embeddings). The same pattern works with Ollama, vLLM, or LM Studio — just adjust `base_url` and model names.
+
+##### 1. Download models
+
+```bash
+# Embedding model — bge-m3, 1024-dim, 8192-token context (~670 MB).
+# Handles files up to ~24 KB without chunking.
+curl -L -o ~/models/bge-m3-q8_0.gguf \
+  https://huggingface.co/ggml-org/bge-m3-Q8_0-GGUF/resolve/main/bge-m3-q8_0.gguf
+
+# Chat model (~1.6–8 GB depending on choice)
+# Option A — small, fast (Qwen 2.5 1.5B, ~1.5 GB):
+curl -L -o ~/models/qwen2.5-1.5b-instruct-q8_0.gguf \
+  https://huggingface.co/bartowski/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/Qwen2.5-1.5B-Instruct-Q8_0.gguf
+
+# Option B — larger, higher quality (Gemma 4 4B, ~7.5 GB):
+curl -L -o ~/models/gemma-4-E4B-it-Q8_0.gguf \
+  https://huggingface.co/ggml-org/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q8_0.gguf
+```
+
+##### 2. Launch the servers
+
+```bash
+# Embedding server on port 8081 (--ctx-size 8192 = bge-m3's native window)
+llama-server \
+  -m ~/models/bge-m3-q8_0.gguf \
+  --host 127.0.0.1 --port 8081 \
+  --embeddings --pooling cls --ctx-size 8192 &
+
+# Chat server on port 8080 (--ctx-size 0 = model's maximum)
+llama-server \
+  -m ~/models/qwen2.5-1.5b-instruct-q8_0.gguf \
+  --host 127.0.0.1 --port 8080 \
+  --ctx-size 0 &
+
+# Wait for both to be ready
+curl -s http://127.0.0.1:8080/health
+curl -s http://127.0.0.1:8081/health
+```
+
+##### 3. Configure contextd
 
 ```toml
+# ~/.contextd/config.toml
 [providers]
 summary     = "openai_compat"
 inference   = "openai_compat"
 translation = "openai_compat"
 embedding   = "openai_compat"
 
+[providers.openai_compat]
+base_url        = "http://127.0.0.1:8080/v1"
+model_summary   = "qwen2.5-1.5b-instruct"
+model_inference = "qwen2.5-1.5b-instruct"
+model_translation = "qwen2.5-1.5b-instruct"
+max_retries     = 3
+request_timeout_seconds = 300.0
+json_mode       = false            # disabled — small local models often trip on
+max_output_tokens = 256            # grammar-constrained JSON; cap tokens instead
+
 [providers.openai_compat_embedding]
-base_url    = "http://localhost:11434/v1"   # llama.cpp server / Ollama / vLLM
-# api_key_env = "OPENAI_API_KEY"             # only for servers that require a token
-model       = "mxbai-embed-large"            # 1024-dim, matches the vector index
+base_url    = "http://127.0.0.1:8081/v1"
+model       = "bge-m3"
 dimensions  = 1024
-max_batch_size = 64
-max_retries = 5
-request_timeout_seconds = 120.0
+max_batch_size = 8
+max_retries = 3
+request_timeout_seconds = 300.0
 ```
 
-The vector index is fixed at **1024 dimensions**, so the embedding model must emit 1024-dim vectors. `mxbai-embed-large` and `bge-large` both do; `nomic-embed-text` (768-dim) does not and would require editing the migration DDL on both backends. The provider validates each returned vector's length against `dimensions` and raises a clear error rather than writing a mismatched vector into the index, so a wrong model choice fails fast instead of corrupting search.
+##### 4. Index and verify
+
+```bash
+contextd init
+contextd up
+contextd add-corpus ~/my-notes --name notes
+contextd index notes --bootstrap
+```
+
+##### Accuracy caveat
+
+Self-hosted models trade convenience and privacy for accuracy. Cloud models (Gemini, Voyage AI) produce higher-quality summaries, more reliable relationship inference, and better NL→Cypher translation — especially at the `relate` phase, which emits strict typed-edge JSON and benefits from larger models (14B+). When running fully offline:
+
+- **Summaries** are generally solid even on small models (1.5B–4B parameters). The prompt is bounded and the output shape is simple.
+- **Relationship inference** degrades noticeably below ~4B parameters. Small models may produce malformed JSON, hallucinate entity types, or return no edges at all. If edge quality matters, keep inference on Gemini (`inference = "gemini"`) and route only summarisation and embeddings locally.
+- **Embeddings** (bge-m3) are the one component where local quality is on par — the embedding model's output is deterministic and the 1024-dim vectors are directly comparable to Voyage's. bge-m3's 8192-token context window handles most files (~24 KB) without truncation.
+- **NL→Cypher translation** (`contextd ask`) is the hardest task for small models. Expect malformed queries or empty results. For reliable Cypher generation, leave `translation = "gemini"`.
+
+A practical split that preserves privacy for the bulk of the work while keeping the quality-critical parts on cloud models:
+
+```toml
+[providers]
+summary     = "openai_compat"   # high-volume, local model handles it well
+inference   = "gemini"          # quality-critical typed-edge JSON
+translation = "gemini"          # NL→Cypher needs a large model
+embedding   = "openai_compat"   # bge-m3 is on par with cloud embeddings
+```
+
+The vector index is fixed at **1024 dimensions**, so the embedding model must emit 1024-dim vectors. The provider validates each returned vector's length against `dimensions` and raises a clear error rather than writing a mismatched vector into the index, so a wrong model choice fails fast instead of corrupting search.
 
 **Migrating an existing config.** The pre-v0.2 single-line `inference = "gemini"` under `[providers]` is replaced by three lines (`summary`, `inference`, `translation`). Pydantic will reject the old shape with `extra fields not permitted` — rename and the rest of the file stays unchanged.
 

@@ -82,6 +82,7 @@ class OpenAICompatConfig(BaseModel):
     max_retries: int = Field(default=5, ge=0)
     request_timeout_seconds: float = Field(default=120.0, gt=0)
     json_mode: bool = True
+    max_output_tokens: int | None = Field(default=None, ge=1)
 
 
 class ProvidersConfig(BaseModel):
