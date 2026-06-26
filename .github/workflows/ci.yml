@@ -16,6 +16,7 @@ jobs:
           python-version: "3.11"
       - uses: astral-sh/setup-uv@v1
       - name: Install deps (with retry for macOS socket exhaustion)
+        shell: bash
         run: |
           for i in $(seq 1 5); do
             uv pip install --system -e ".[dev]" && break
@@ -39,6 +40,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - uses: astral-sh/setup-uv@v1
       - name: Install deps (with retry for macOS socket exhaustion)
+        shell: bash
         run: |
           for i in $(seq 1 5); do
             uv pip install --system -e ".[dev]" && break
@@ -61,6 +63,7 @@ jobs:
           python-version: "3.11"
       - uses: astral-sh/setup-uv@v1
       - name: Install deps (with retry for macOS socket exhaustion)
+        shell: bash
         run: |
           for i in $(seq 1 5); do
             uv pip install --system -e ".[dev]" && break
@@ -78,6 +81,7 @@ jobs:
           python-version: "3.11"
       - uses: astral-sh/setup-uv@v1
       - name: Install deps (with retry for macOS socket exhaustion)
+        shell: bash
         run: |
           for i in $(seq 1 5); do
             uv pip install --system -e ".[dev]" && break
