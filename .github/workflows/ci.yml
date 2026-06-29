@@ -49,7 +49,7 @@ jobs:
           done
       - run: pytest tests/unit -v --cov=contextd --cov-report=term
 
-  # Integration and e2e tests spin up Linux Memgraph/Neo4j containers via
+  # Integration and e2e tests spin up a Linux Neo4j container via
   # testcontainers. GitHub-hosted windows-latest runners cannot run Linux
   # containers (testcontainers' Ryuk reaper bind-mounts /var/run/docker.sock,
   # which does not exist there), so these jobs run on Linux only. Windows is
@@ -101,7 +101,7 @@ jobs:
           # from coupling to a concrete backend. Integration tests under tests/
           # are legitimately backend-specific — they exercise one SDK's semantics
           # — so the walk is scoped to production code only.
-          if grep -RE "from contextd\.storage\.(memgraph|neo4j)|import contextd\.storage\.(memgraph|neo4j)" contextd/ --exclude-dir=storage; then
+          if grep -RE "from contextd\.storage\.neo4j|import contextd\.storage\.neo4j" contextd/ --exclude-dir=storage; then
             echo "::error::Backend-specific modules imported outside contextd/storage/. See spec §2.5.1."
             exit 1
           fi
