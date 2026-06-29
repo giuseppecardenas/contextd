@@ -5,6 +5,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Hybrid search: the `search` MCP tool now fuses vector (embedding) similarity
+  and full-text (BM25) results via reciprocal rank fusion
+  (`contextd/search/fusion.py`), instead of being full-text only. Rank-based
+  fusion sidesteps the incomparability of cosine similarity and BM25 scores.
+  Restricted to labels with both indexes (`File`, `Section`); other kinds and
+  an unconfigured/failed embedder degrade to full-text.
+- `[search]` config block: `mode` (`hybrid` default / `fulltext` / `vector`),
+  `rrf_k`, `fetch_k`, `vector_weight`, `fulltext_weight`.
+- The MCP server builds a query-time embedder at startup and exposes a `mode`
+  override on the `search` tool.
+
 ### Removed
 
 - Memgraph storage backend and the `gqlalchemy` dependency. Neo4j Community is
@@ -14,6 +27,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- The `search` tool's `score` is now an RRF fused score in hybrid/vector mode
+  (small positive floats), not a raw Lucene BM25 score. In `fulltext` mode it
+  remains the backend's raw relevance score; the two are not comparable across
+  modes.
 - Default embedding model flipped `voyage-3` → `voyage-4-large` (still 1024-dim,
   cosine, drop-in against the existing vector indexes). Higher Voyage free-tier
   quota and 32k-token context per input (vs `voyage-3`'s 8k).

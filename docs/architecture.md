@@ -134,9 +134,15 @@ Migrations are forward-only; no rollback support.
 
 All four implement an ABC (`InferenceProvider` / `EmbeddingProvider`) defined in `contextd/providers/base.py`. Usage is logged to `~/.contextd/state/session-log/` via `CostLog`.
 
-**Fully-offline operation:** set every inference call-site (`summary`, `inference`, `translation`) to `openai_compat` and `providers.embedding = "openai_compat"`, pointing both at a local server. The only remaining external dependency is the storage backend, which runs locally in Docker. The vector index is fixed at 1024 dimensions, so a local embedding model must emit 1024-dim vectors (the default `mxbai-embed-large` does) unless the migration DDL is edited on both backends.
+**Fully-offline operation:** set every inference call-site (`summary`, `inference`, `translation`) to `openai_compat` and `providers.embedding = "openai_compat"`, pointing both at a local server. The only remaining external dependency is the storage backend, which runs locally in Docker. The vector index is fixed at 1024 dimensions, so a local embedding model must emit 1024-dim vectors (the default `mxbai-embed-large` does) unless the Neo4j migration DDL is edited.
 
-**MCP server** — `contextd/mcp_server.py` implements a stdio MCP server registered as the `contextd-mcp` console script. It exposes 8 generic tools plus per-corpus Cypher tools (see [mcp.md](mcp.md)). The server connects to the storage backend over Bolt at startup and holds the connection for the session lifetime.
+**MCP server** — `contextd/mcp_server.py` implements a stdio MCP server registered as the `contextd-mcp` console script. It exposes 8 generic tools plus per-corpus Cypher tools (see [mcp.md](mcp.md)). The server connects to the storage backend over Bolt at startup and holds the connection for the session lifetime. It also builds a query-time embedder at startup (the same `build_embedding_provider` factory the indexer uses); if construction fails — e.g. a missing API key — it logs and continues with `embedder = None`, leaving `search` full-text only.
+
+#### Hybrid retrieval
+
+The `search` tool fuses two rankers — vector (embedding) similarity and full-text (BM25) — into a single ordering using **reciprocal rank fusion** (`contextd/search/fusion.py`). RRF scores each node by `Σ weight / (rrf_k + rank)` over the rankers it appears in, combining *ranks* rather than raw scores. This is the deliberate design choice: Neo4j's normalised cosine similarity (`[0, 1]`) and Lucene BM25 (unbounded) are not comparable as numbers, and rank-based fusion makes the incomparability irrelevant rather than papering over it with a fragile normalisation. The fusion module lives in its own `contextd/search/` package (not under `mcp/`) so the abstraction-invariant grep — which excludes only `storage/` — forbids any backend import from it, and so a future CLI/HTTP caller can reuse it.
+
+Hybrid search needs both a vector and a full-text index on the queried label, so it is restricted to a declared set (`_VECTOR_CAPABLE_LABELS = {File, Section}` in `contextd/mcp/tools.py`) following the capability-flag-over-try/except philosophy. Every other label, an unconfigured/failed embedder, or `mode = "fulltext"` degrades to full-text only; `mode = "vector"` on a non-capable label returns nothing. Ranking knobs (`mode`, `rrf_k`, `fetch_k`, per-modality weights) come from the `[search]` config block.
 
 **CLI** — `contextd` is a short-lived Click process. Each invocation connects to the backend, does its work, and disconnects. See [cli.md](cli.md).
 

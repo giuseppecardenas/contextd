@@ -387,7 +387,7 @@ If `contextd-mcp` is not on your PATH (e.g., when using a venv), use the absolut
 | Tool | What it does |
 |---|---|
 | `describe_project` | Top-N File nodes by inbound-citation count with summaries. Accepts `corpus` and `n` (default 40). |
-| `search` | Full-text search over summaries. Accepts `query`, optional `kind` (default `File`; `Section` also works in section-granular corpora), optional `limit` (default 20). |
+| `search` | Hybrid search over summaries: vector (embedding) similarity and full-text (BM25) results fused by reciprocal rank fusion. Accepts `query`, optional `kind` (default `File`; `Section` also works in section-granular corpora), optional `limit` (default 20), and optional `mode` (`hybrid` / `fulltext` / `vector`). Degrades to full-text when no embedder is configured or the `kind` has no vector index. |
 | `related` | Outbound + inbound traversal within N hops (1–5). Accepts `node_id` and `depth` (default 2). |
 | `inbound` | What cites this node? Accepts `node_id`. |
 | `outbound` | What does this node cite? Accepts `node_id`. |
@@ -644,6 +644,13 @@ allowed_branches               = []   # whitelist; empty = allow all branches
 sweep_interval_seconds         = 900  # 0 disables; how often to check for missed changes
 sweep_rate_sections_per_second = 0.017 # budget rate; default ≈ 1 section/minute
 
+[search]
+mode           = "hybrid"   # "hybrid" (vector+full-text RRF) | "fulltext" | "vector"
+rrf_k          = 60         # RRF damping constant
+fetch_k        = 50         # per-ranker candidate depth before fusion (raised to >= limit)
+vector_weight  = 1.0        # bias toward semantic matches
+fulltext_weight = 1.0       # bias toward lexical matches
+
 [logging]
 level          = "info"
 format         = "json"
@@ -872,7 +879,7 @@ Items that are designed and partially built but not yet wired or shipped:
 
 | Gap | Detail |
 |---|---|
-| **Hybrid search** | `search()` is full-text only. Vector-similarity fallback (hybrid ranking) is deferred; callers needing vector-space matches can call `GraphStore.vector_search` directly for now. |
+| **Per-corpus search tuning** | The `[search]` knobs (mode, `rrf_k`, weights) are global; the MCP server resolves one config at startup and `search` has no corpus argument. Per-corpus overrides are deferred. |
 | **`CONTEXTD_INFERENCE_DAILY_BUDGET`** | The design specifies an env var cap on daily Gemini calls. Not implemented; manual cost monitoring via `contextd costs` is the current guard. |
 | **Per-corpus MCP tool `$` false positives** | `extract_placeholders` uses a simple regex and will match `$` inside Cypher string literals as spurious parameters. Proper Cypher tokenisation is deferred. |
 | **Stale `CheckpointStore` entries on section refresh** | The per-file checkpoint records phase-level completion (summarise, relate) but not per-section granularity. After a differential re-index updates only some sections, the checkpoint still reflects the prior full-file state. Reporting via `contextd status` will show the old completion time until the next full bootstrap. |

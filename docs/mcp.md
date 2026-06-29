@@ -89,15 +89,18 @@ Returns: array of `{path, name, summary, key_points, inbound}` objects ordered b
 
 ### `search`
 
-Full-text search over node summaries.
+Hybrid search over node summaries: vector (embedding) similarity and full-text (BM25) results fused by reciprocal rank fusion (RRF). RRF combines the two rankers by rank position rather than by raw score, which sidesteps the fact that cosine similarity and BM25 are not comparable as numbers.
 
 | Input | Type | Required | Default |
 |---|---|---|---|
 | `query` | string | yes | — |
 | `kind` | string | no | `"File"` |
 | `limit` | integer | no | 20 |
+| `mode` | string | no | server config (`hybrid`) |
 
-Returns: array of matching node objects. Vector-similarity fallback is not yet implemented; this is full-text only.
+`mode` is one of `hybrid`, `fulltext`, or `vector`. The server degrades to full-text automatically when no embedder is configured, the `kind` has no vector index (only `File` and `Section` do), or the embedding call fails; `mode = "vector"` on a non-vector-capable kind returns an empty result rather than a silent lexical fallback. The RRF constant, candidate depth, and per-modality weights are set server-side via the `[search]` config block.
+
+Returns: array of matching node objects (the raw embedding vector is stripped). In `hybrid` / `vector` mode `score` is an RRF fused score; in `fulltext` mode it is the backend's raw relevance score — the two are not comparable across modes.
 
 ---
 
