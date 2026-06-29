@@ -137,9 +137,8 @@ To add a new node type or edge type:
 
 1. **`contextd/ontology/base.json`** — add the node type (with property list) or edge type name.
 2. **If it is a PK-bearing node type:** add it to `contextd/storage/_keys.py::PRIMARY_KEY_BY_LABEL`.
-3. **Migration DDL (both backends):**
-   - `contextd/migrations/memgraph/` — add a new migration file with `CREATE CONSTRAINT ON (n:NewType) ASSERT n.<pk> IS UNIQUE`.
-   - `contextd/migrations/neo4j/` — add a matching migration with Neo4j constraint syntax.
+3. **Migration DDL:**
+   - `contextd/migrations/neo4j/` — add a new migration file with `CREATE CONSTRAINT ... REQUIRE n.<pk> IS UNIQUE` (Neo4j 5.x constraint syntax).
 4. **Tests** — add a unit test to `tests/unit/test_ontology.py` asserting the new type validates correctly.
 
 Node types that do not require a primary-key uniqueness constraint (e.g. types always created subordinate to another node) still need an entry in `PRIMARY_KEY_BY_LABEL` for `upsert_node` and `delete_edges` to work correctly — use whichever property best uniquely identifies the node within its label.

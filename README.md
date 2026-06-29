@@ -2,10 +2,10 @@
 
 [![CI](https://github.com/giuseppecardenas/contextd/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/giuseppecardenas/contextd/actions/workflows/ci.yml)
 
-Contextd is a locally-hosted knowledge layer for your project files. It indexes a corpus of markdown files into a hybrid graph + vector store (Neo4j Community or Memgraph, your choice), generates AI-inferred relationships and per-file summaries, and exposes the result to Claude Desktop, Cursor, and any MCP-speaking client through an MCP server. Cold-start any AI session with a compact, semantically-organised overview of your entire corpus.
+Contextd is a locally-hosted knowledge layer for your project files. It indexes a corpus of markdown files into a hybrid graph + vector store (Neo4j Community), generates AI-inferred relationships and per-file summaries, and exposes the result to Claude Desktop, Cursor, and any MCP-speaking client through an MCP server. Cold-start any AI session with a compact, semantically-organised overview of your entire corpus.
 
 - **Input:** markdown (`.md`) files only. Markdown is the one format contextd is built and tested for today; the default corpus include pattern is `**/*.md`, the section-granular mode parses markdown headings, and the summarisation prompts assume prose-style documents. Pointing contextd at source code or structured data (JSON, CSV, and similar) is untested and unsupported at present, and although the section-granular pipeline contains a fallback path that routes non-markdown files through file-granular indexing, that path has not been exercised against real non-markdown corpora and should not be relied upon.
-- **Storage:** Neo4j Community 5.x (default) or Memgraph 3.x — both run in Docker, both bind port 7687.
+- **Storage:** Neo4j Community 5.x — runs in Docker, binds port 7687 over Bolt.
 - **Inference:** Google Gemma (`gemma-4-31b-it` default) via the Gemini API for summarisation, relationship inference, and NL→Cypher translation; Voyage AI `voyage-4-large` (1024-dim, 32k-token context) for vector embeddings. Both inference and embeddings can instead run against a local OpenAI-compatible server (llama.cpp, Ollama, vLLM, LM Studio), so the whole pipeline can run fully offline.
 - **Interface:** stdio MCP server (`contextd-mcp`) and CLI (`contextd`).
 - **Platforms:** runs natively on Linux, macOS, and Windows 11. The daemon, IPC, file-watching, and Docker invocation are platform-agnostic — Windows is not a WSL-only afterthought. WSL2 is still a fine host on Windows if you prefer it, but a native Python install on Windows is equally supported.
@@ -68,14 +68,14 @@ Every edge carries one of three `origin` values:
 
 ### The GraphStore abstraction
 
-All higher layers (indexer, MCP server, CLI) talk to the backend through the `GraphStore` ABC. The concrete backend — `Neo4jBackend` or `MemgraphBackend` — is selected by a single line in `~/.contextd/config.toml`:
+All higher layers (indexer, MCP server, CLI) talk to the backend through the `GraphStore` ABC, never to a concrete backend directly. Today the only backend is `Neo4jBackend`, constructed by the storage factory from `~/.contextd/config.toml`:
 
 ```toml
 [storage]
-backend = "neo4j"   # or "memgraph"
+backend = "neo4j"
 ```
 
-Switching backends is a `contextd down && contextd up` cycle; no code change or re-installation needed.
+The ABC and the factory seam are deliberately retained so a second backend could be added later (widen `BackendName`, add a factory branch and a migrations dir) without changing any consumer.
 
 ### Ontology
 
@@ -116,7 +116,7 @@ $env:GEMINI_API_KEY = "<your-key>"
 $env:VOYAGE_API_KEY = "<your-key>"
 ```
 
-Requirements (both platforms): Python 3.11+, Docker (Docker Desktop on Windows/macOS or any Docker engine with Compose v2 on Linux). Docker Desktop on Windows is supported — `contextd up` calls `docker compose` against the same daemon that `docker` does from PowerShell. On Windows, Docker Desktop must be set to Linux containers (the default) for the Neo4j/Memgraph images.
+Requirements (both platforms): Python 3.11+, Docker (Docker Desktop on Windows/macOS or any Docker engine with Compose v2 on Linux). Docker Desktop on Windows is supported — `contextd up` calls `docker compose` against the same daemon that `docker` does from PowerShell. On Windows, Docker Desktop must be set to Linux containers (the default) for the Neo4j image.
 
 The remaining steps in this README are written with `bash` syntax. The equivalent PowerShell forms differ only in shell-specific surface (`export` ↔ `$env:`, `~/.contextd/` ↔ `$env:USERPROFILE\.contextd\`); the `contextd` CLI invocations themselves are identical on both platforms.
 
@@ -193,8 +193,6 @@ Runs `docker compose --profile neo4j up -d` (using `~/.contextd/docker-compose.y
 ✓ migrations applied
 ready
 ```
-
-To use Memgraph instead, set `backend = "memgraph"` in `~/.contextd/config.toml` before running `contextd up`.
 
 ### Step 3 — Register the corpus
 
@@ -543,7 +541,7 @@ python -m venv .venv
 pip install -e ".[dev]"
 ```
 
-Requirements: Python 3.11+, Docker Desktop (with Linux containers enabled — required for Neo4j/Memgraph images).
+Requirements: Python 3.11+, Docker Desktop (with Linux containers enabled — required for the Neo4j image).
 
 ### WSL2 alternative
 
@@ -620,7 +618,7 @@ Key global config fields (full reference in [docs/architecture.md](docs/architec
 
 ```toml
 [storage]
-backend = "neo4j"           # "neo4j" (default) or "memgraph"
+backend = "neo4j"           # Neo4j Community (the only backend)
 
 [providers]
 # Inference provider per call-site. Each independently picks "gemini"
@@ -844,7 +842,7 @@ contextd costs --since 2026-04-01
 Contextd is a single-user local tool. Its security posture reflects that:
 
 - **API keys** (`GEMINI_API_KEY`, `VOYAGE_API_KEY`) are read from env vars at process startup. They are never written to disk by Contextd.
-- **Graph store** binds to `127.0.0.1:7687` only. Neither Neo4j nor Memgraph is exposed beyond the loopback interface in the default compose config.
+- **Graph store** binds to `127.0.0.1:7687` only. Neo4j is not exposed beyond the loopback interface in the default compose config.
 - **MCP read-only guard.** The `query_graph` tool and all per-corpus Cypher tools pass through `assert_read_only` before execution. The guard rejects Cypher containing `CREATE`, `MERGE`, `DELETE`, `SET`, `REMOVE`, `DROP`, `DETACH`, `FOREACH`, and `CALL` with side-effecting procedures. This guards against prompt-injection attacks that attempt to write to the graph through the MCP surface.
 - **Do not expose Contextd's MCP server over a network.** It is designed for stdio transport to a locally-running MCP client. Running it as a shared network service is out of scope and untested.
 

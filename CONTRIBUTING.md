@@ -33,9 +33,9 @@ All four must exit 0. No exceptions.
 
 Additional test scopes (require Docker):
 
-- `pytest tests/integration` — runs against live Memgraph + Neo4j containers
-  (testcontainers spins them up automatically)
-- `pytest tests/e2e` — full pipeline against both backends
+- `pytest tests/integration` — runs against a live Neo4j container
+  (testcontainers spins it up automatically)
+- `pytest tests/e2e` — full pipeline against Neo4j
 
 ## Architectural invariants
 
@@ -80,6 +80,6 @@ These constraints are enforced in CI and are load-bearing for correctness:
 Please include:
 
 - Contextd version (`contextd --version`) and Python version
-- Backend in use (Neo4j or Memgraph) and container image tag
+- Neo4j container image tag
 - Minimal reproduction steps
 - Full error output (stack trace or log lines)

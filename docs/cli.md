@@ -29,14 +29,11 @@ Run once on a fresh install. Safe to re-run — existing files are not overwritt
 Starts the storage backend container for the configured backend (default: `neo4j`), then applies pending migrations. Requires Docker on PATH.
 
 ```bash
-# Start Neo4j (the default)
-contextd up
-
-# Start Memgraph (after changing config.toml)
+# Start the Neo4j backend container + indexer daemon
 contextd up
 ```
 
-The backend is selected from `[storage] backend` in `config.toml`. The docker-compose profile matching the backend name is activated (`--profile neo4j` or `--profile memgraph`). Both bind port 7687; only one runs at a time.
+The backend is Neo4j, declared by `[storage] backend = "neo4j"` in `config.toml`. The matching docker-compose profile (`--profile neo4j`) is activated; the container binds port 7687.
 
 ---
 

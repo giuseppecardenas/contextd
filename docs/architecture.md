@@ -43,11 +43,11 @@ Markdown files are routed through the section-level pipeline; non-markdown files
 
 ### Layer 2 — Storage
 
-The storage layer is a pluggable graph + vector store selected by `[storage] backend` in `~/.contextd/config.toml`. Two backends ship: **Neo4j Community** (default) and **Memgraph** — both run in Docker, both bind port 7687 over the Bolt protocol, and only one runs at a time via docker-compose profiles.
+The storage layer is a graph + vector store running on **Neo4j Community** in Docker, bound to port 7687 over the Bolt protocol. The layer is structured behind an abstract base class so a second backend could be added without touching consumers, but Neo4j is the only backend that ships today.
 
 #### GraphStore ABC
 
-`contextd/storage/base.py` defines the `GraphStore` abstract base class. All higher layers (indexer, MCP server, CLI) depend exclusively on this ABC. Backend-specific modules (`memgraph.py`, `neo4j.py`) are confined to `contextd/storage/`; a CI grep step in `.github/workflows/ci.yml` enforces the separation.
+`contextd/storage/base.py` defines the `GraphStore` abstract base class. All higher layers (indexer, MCP server, CLI) depend exclusively on this ABC. The backend-specific module (`neo4j.py`) is confined to `contextd/storage/`; a CI grep step in `.github/workflows/ci.yml` enforces the separation, keeping the seam open for a future second backend.
 
 The ABC surface:
 
@@ -72,7 +72,7 @@ The ABC surface:
 
 | Field | Type | Purpose |
 |---|---|---|
-| `name` | `BackendName` | `"memgraph"` or `"neo4j"` — identifies the active backend |
+| `name` | `BackendName` | `"neo4j"` — identifies the active backend |
 | `concurrent_writers` | `int` | Maximum concurrent writers; `-1` means unlimited |
 | `supports_vector_index` | `bool` | Whether the backend exposes a native cosine-similarity vector index |
 | `supports_full_text_index` | `bool` | Whether the backend exposes a native full-text search index |
@@ -100,25 +100,24 @@ PRIMARY_KEY_BY_LABEL = {
 
 #### Factory and backend selection
 
-`contextd/storage/factory.py::build_graph_store(cfg)` reads `cfg.storage.backend` and returns the matching concrete instance via deferred import. Deferred import keeps each backend SDK out of the import path when the other backend is active — this is what the abstraction-invariant grep checks.
+`contextd/storage/factory.py::build_graph_store(cfg)` reads `cfg.storage.backend` and returns the concrete `Neo4jBackend` via deferred import. The deferred import keeps the Neo4j SDK out of the consumer import path — this is what the abstraction-invariant grep checks, and it preserves a single instantiation point should a second backend be added.
 
-#### Backend comparison
+#### Backend
 
-| Property | Neo4j Community (default) | Memgraph |
-|---|---|---|
-| Bolt port | 7687 | 7687 |
-| Vector index | Native (no plugin) | Native |
-| Full-text index | Native | Native |
-| Graph algorithms | Limited (no GDS on Community) | Built-in (`pagerank`, `community_detection.louvain`) |
-| Docker image | `neo4j:5` | `memgraph:latest` (v3.x — do NOT use `memgraph-platform:latest`, pinned at v2.14) |
-| Compose profile | `--profile neo4j` | `--profile memgraph` |
+| Property | Neo4j Community |
+|---|---|
+| Bolt port | 7687 |
+| Vector index | Native (no plugin) |
+| Full-text index | Native |
+| Graph algorithms | Limited (no GDS on Community) |
+| Docker image | `neo4j:5` |
+| Compose profile | `--profile neo4j` |
 
 #### Migrations
 
-`contextd/storage/migration.py` implements a `MigrationRunner` that applies migrations in order and records the schema version in a `Meta` node. Migration files are split by backend:
+`contextd/storage/migration.py` implements a `MigrationRunner` that applies migrations in order and records the schema version in a `Meta` node. Migration files live in:
 
-- `contextd/migrations/memgraph/` — Memgraph-specific DDL (vector index syntax, uniqueness constraints)
-- `contextd/migrations/neo4j/` — Neo4j-specific DDL (vector index options, constraint syntax)
+- `contextd/migrations/neo4j/` — Neo4j DDL (vector index options, full-text indexes, constraint syntax)
 
 Migrations are forward-only; no rollback support.
 

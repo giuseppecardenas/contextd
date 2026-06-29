@@ -6,7 +6,7 @@ The Contextd MCP server exposes the graph store to Claude Desktop, Cursor, and a
 
 ## Transport
 
-The server speaks the [Model Context Protocol](https://modelcontextprotocol.io/) over stdio. It is registered as the `contextd-mcp` console script and launched by the MCP client — Claude Desktop or Cursor spawns it as a subprocess, connects over stdin/stdout, and keeps it alive for the session. The server connects to the storage backend (Neo4j or Memgraph) over Bolt at startup and holds the connection until the client disconnects.
+The server speaks the [Model Context Protocol](https://modelcontextprotocol.io/) over stdio. It is registered as the `contextd-mcp` console script and launched by the MCP client — Claude Desktop or Cursor spawns it as a subprocess, connects over stdin/stdout, and keeps it alive for the session. The server connects to the storage backend (Neo4j) over Bolt at startup and holds the connection until the client disconnects.
 
 The server source lives at `contextd/mcp_server.py`. Tool implementations are in `contextd/mcp/tools.py` (generic tools) and `contextd/mcp/corpus_tools.py` (per-corpus tools).
 

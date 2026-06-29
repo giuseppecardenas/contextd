@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Contextd is a locally-hosted GraphRAG knowledge layer. It indexes markdown, code, and structured-data corpora into a hybrid graph + vector store (Memgraph or Neo4j Community, pluggable via config), generates per-file (or per-section) summaries and AI-inferred typed relationships via external LLM APIs (Gemini for inference, Voyage AI for embeddings), and exposes the result to AI assistants through a Model Context Protocol server. The tool is designed for single-user local use — everything runs on one machine; no multi-user concerns.
+Contextd is a locally-hosted GraphRAG knowledge layer. It indexes markdown, code, and structured-data corpora into a hybrid graph + vector store (Neo4j Community), generates per-file (or per-section) summaries and AI-inferred typed relationships via external LLM APIs (Gemini for inference, Voyage AI for embeddings), and exposes the result to AI assistants through a Model Context Protocol server. The tool is designed for single-user local use — everything runs on one machine; no multi-user concerns.
 
 ## Current Phase: Active Implementation
 
@@ -33,11 +33,11 @@ The project is mid-build against a detailed milestone plan. The plan drives buil
 
 **Spec-delta cleanup:** between M9 and M10, a 20-commit sweep resolved 25 of 27 deferred items (git log `c9bc877..803328c`). Three remaining items resolved pre-M11: SD #72 (corpus injection, `6a5c4a0`), SD #74 (stale Section GC, `f65abab`), SD #80 (`cli.py` module split, `5a278b0`). SD #71 (Kuzu embedding mutability) resolved by Kuzu excision in M11.
 
-**Test suite:** 350 unit + ~89 integration + 2 e2e ≈ 441 collected (parametrized on both backends). `ruff check`, `ruff format --check`, `mypy --strict`, and the abstraction-invariant grep all clean. Integration + e2e suites run Memgraph via Docker (memgraph:latest v3.x) + Neo4j Community via Docker (`neo4j:5` image) and now also run in CI on every push/PR to main. Integration + e2e tests require Docker; they fail at fixture setup if the Docker daemon is unreachable (expected in dev shells without Docker — use `pytest tests/unit` for fast iteration).
+**Test suite:** `ruff check`, `ruff format --check`, `mypy --strict`, and the abstraction-invariant grep all clean. Integration + e2e suites run Neo4j Community via Docker (`neo4j:5` image) and also run in CI on every push/PR to main. Integration + e2e tests require Docker; they fail at fixture setup if the Docker daemon is unreachable (expected in dev shells without Docker — use `pytest tests/unit` for fast iteration). The `backend` fixture is single-valued (Neo4j) since Memgraph was excised.
 
 **Local CI discipline:** the four local gates (ruff check / ruff format --check / mypy --strict / pytest) do not cover every GitHub Actions job. Before pushing, also run the abstraction-invariant grep locally — the exact command is in `.github/workflows/ci.yml` under the `abstraction-invariant` job. A prior-session M3 push went out with the abstraction-invariant job red for 3 commits because the local check was skipped.
 
-**Memgraph / Docker:** Docker Desktop WSL2 integration is now enabled. Use `memgraph:latest` (v3.9), NOT `memgraph-platform:latest` (pinned at v2.14 — predates vector-index support).
+**Neo4j / Docker:** Docker Desktop WSL2 integration is enabled. The backend runs as `neo4j:5` via `contextd up` (`docker compose --profile neo4j`). Memgraph was excised — Neo4j Community is the sole storage backend; the `GraphStore` ABC, factory, and abstraction-invariant grep are kept so a second backend could be re-added without recoupling consumers.
 
 ## Session-Start Required Reads
 
@@ -66,7 +66,7 @@ These are non-negotiable. Skipping them means working without context that's loa
 
 These constraints are enforced in CI and are load-bearing for correctness:
 
-- **Backend-specific modules must not be imported outside `contextd/storage/`.** Enforced by a grep step in `.github/workflows/ci.yml`. Consumers (indexer, MCP server, CLI) depend on the `GraphStore` ABC only, never on `memgraph.py` or `neo4j.py` directly. The factory in `contextd/storage/factory.py` returns the concrete via deferred imports; this is the only place backend modules are named.
+- **Backend-specific modules must not be imported outside `contextd/storage/`.** Enforced by a grep step in `.github/workflows/ci.yml`. Consumers (indexer, MCP server, CLI) depend on the `GraphStore` ABC only, never on `neo4j.py` directly. The factory in `contextd/storage/factory.py` returns the concrete via a deferred import; this is the only place the backend module is named.
 - **Every edge carries `origin ∈ {inferred, structural, manual}`.** Wipe-and-replace on re-index operates only on `origin="inferred"`; structural and manual edges are preserved.
 - **AI-inferred edges are ontology-validated at write time.** `Ontology.validate_edge()` rejects types not declared in `contextd/ontology/base.json`. This is the primary defence against hallucinated relationship types.
 - **Section-granular mode is opt-in per corpus.** The file-granular default treats whole files as first-class nodes; section mode promotes subheadings to first-class nodes with `CONTAINS`/`PARENT_OF`/`NEXT_SIBLING` edges. See `docs/architecture.md`.
@@ -80,9 +80,9 @@ These constraints are enforced in CI and are load-bearing for correctness:
 - MCP: `mcp` SDK (stdio transport to Claude Desktop / Cursor)
 - Inference: `google-genai` SDK, `gemma-4-31b-it` by default (Gemma family; 15 RPM free-tier quota is the typical binding constraint, not per-call latency)
 - Embeddings: `voyageai` SDK, `voyage-4-large` (1024-dim)
-- Storage: `gqlalchemy` (Memgraph Bolt) / `neo4j-driver` 5.x (Neo4j Community), behind `GraphStore` ABC
+- Storage: `neo4j-driver` 5.x (Neo4j Community), behind `GraphStore` ABC
 - Parsing: `markdown-it-py` for section extraction
-- Testing: `pytest` + `testcontainers-python` (Memgraph); VCR cassettes mock external APIs
+- Testing: `pytest` + `testcontainers-python` (Neo4j); VCR cassettes mock external APIs
 - Lint / format / type: `ruff check`, `ruff format`, `mypy --strict`
 - CI: GitHub Actions (lint-and-type, unit matrix on Ubuntu/macOS × Python 3.11/3.12, abstraction-invariant grep)
 

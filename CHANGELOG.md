@@ -5,6 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Removed
+
+- Memgraph storage backend and the `gqlalchemy` dependency. Neo4j Community is
+  now the sole storage backend. The `GraphStore` ABC, the storage factory, and
+  the abstraction-invariant CI grep are retained so a second backend can be
+  added later without recoupling consumers.
+
 ### Changed
 
 - Default embedding model flipped `voyage-3` → `voyage-4-large` (still 1024-dim,
