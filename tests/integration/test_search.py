@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 
+from contextd.mcp import tools
 from contextd.storage.base import GraphStore
 
 pytestmark = pytest.mark.integration
@@ -189,3 +190,86 @@ def test_full_text_search_section_summary(backend: GraphStore) -> None:
 
     empty = backend.full_text_search(label="Section", property_name="summary", query="quantum", k=5)
     assert empty == []
+
+
+# ---------- hybrid search via tools.search ----------
+
+
+class _StubEmbedder:
+    """Returns a fixed query vector so the hybrid path runs end-to-end against
+    a real backend without a live embedding provider."""
+
+    def __init__(self, vector: list[float]) -> None:
+        self._vector = vector
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        return [self._vector for _ in texts]
+
+    def last_usage(self) -> None:
+        return None
+
+    @property
+    def dimensions(self) -> int:
+        return _DIM
+
+
+def _seed_sections(backend: GraphStore, *, with_embeddings: bool = True) -> None:
+    sections = [
+        ("a.md#intro", "database migration forward only", _basis_vector(0)),
+        ("b.md#unrelated", "unrelated foo bar text", _basis_vector(1)),
+        ("c.md#schema", "migration of schema with indexes", _basis_vector(0, 1)),
+    ]
+    for sec_id, summary, vec in sections:
+        props: dict[str, object] = {"id": sec_id, "summary": summary, "corpus": "c"}
+        if with_embeddings:
+            props["embedding"] = vec
+        backend.upsert_node("Section", props)
+
+
+def test_hybrid_search_fuses_vector_and_fulltext(seeded_backend: GraphStore) -> None:
+    """'migration' is a lexical hit on a.md and c.md; the query vector is
+    aligned with a.md. a.md is top-ranked in both rankers, so RRF puts it
+    first, and the orthogonal non-lexical b.md (vector-only) ranks last."""
+    embedder = _StubEmbedder(_basis_vector(0))
+    results = tools.search(
+        seeded_backend, "migration", kind="File", limit=10, embedder=embedder, mode="hybrid"
+    )
+    paths = [r["path"] for r in results]
+    assert paths[0] == "a.md"
+    assert paths[-1] == "b.md"
+    assert set(paths) == {"a.md", "b.md", "c.md"}
+    assert "embedding" not in results[0]
+
+
+def test_hybrid_degrades_to_fulltext_when_embeddings_absent(backend: GraphStore) -> None:
+    """When File nodes carry no embedding (as in section-granular corpora where
+    File.embedding is NULL), the vector leg returns nothing and fusion reduces
+    to full-text: only the lexical matches a.md and c.md come back."""
+    _seed_corpus(backend, with_embeddings=False)
+    embedder = _StubEmbedder(_basis_vector(0))
+    results = tools.search(
+        backend, "migration", kind="File", limit=10, embedder=embedder, mode="hybrid"
+    )
+    assert {r["path"] for r in results} == {"a.md", "c.md"}
+
+
+def test_hybrid_search_section_label_keys_by_id(backend: GraphStore) -> None:
+    """kind='Section' fuses on the Section primary key (id), not path."""
+    _seed_sections(backend, with_embeddings=True)
+    embedder = _StubEmbedder(_basis_vector(0))
+    results = tools.search(
+        backend, "migration", kind="Section", limit=10, embedder=embedder, mode="hybrid"
+    )
+    ids = [r["id"] for r in results]
+    assert ids[0] == "a.md#intro"
+    assert "a.md#intro" in ids and "c.md#schema" in ids
+
+
+def test_search_fulltext_mode_returns_only_lexical_hits(seeded_backend: GraphStore) -> None:
+    """mode='fulltext' ignores the embedder entirely and returns the legacy
+    full-text result set."""
+    embedder = _StubEmbedder(_basis_vector(0))
+    results = tools.search(
+        seeded_backend, "migration", kind="File", limit=10, embedder=embedder, mode="fulltext"
+    )
+    assert {r["path"] for r in results} == {"a.md", "c.md"}
