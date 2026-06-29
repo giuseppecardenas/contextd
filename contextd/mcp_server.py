@@ -27,13 +27,15 @@ from mcp.server.stdio import stdio_server
 from mcp.types import Tool
 
 from contextd._paths import contextd_home
-from contextd.config import Config
+from contextd.config import Config, SearchConfig
 from contextd.mcp import tools
 from contextd.mcp.corpus_tools import (
     CorpusTool,
     build_tool_descriptors,
     dispatch_corpus_tool,
 )
+from contextd.providers.base import EmbeddingProvider
+from contextd.providers.factory import ProviderFactoryError, build_embedding_provider
 from contextd.storage.base import GraphStore
 from contextd.storage.factory import build_graph_store
 
@@ -51,7 +53,11 @@ _GENERIC_TOOL_DESCRIPTORS: list[Tool] = [
     ),
     Tool(
         name="search",
-        description="Full-text search over summaries for the given node kind (default: File).",
+        description=(
+            "Hybrid search (vector + full-text, RRF-fused) over summaries for the "
+            "given node kind (default: File). Falls back to full-text when no "
+            "embedder is configured or the kind has no vector index."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -64,6 +70,11 @@ _GENERIC_TOOL_DESCRIPTORS: list[Tool] = [
                     "type": "integer",
                     "default": 20,
                     "description": "Maximum rows to return.",
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["hybrid", "fulltext", "vector"],
+                    "description": "Override ranking mode (default from server config: hybrid).",
                 },
             },
             "required": ["query"],
@@ -150,6 +161,9 @@ def _dispatch_tool(
     arguments: dict[str, Any],
     store: GraphStore,
     corpus_registry: dict[str, CorpusTool] | None = None,
+    *,
+    embedder: EmbeddingProvider | None = None,
+    search_cfg: SearchConfig | None = None,
 ) -> Any:
     """Route a tool-call to the right tools.X body.
 
@@ -160,6 +174,11 @@ def _dispatch_tool(
     ``<corpus>.<tool>`` namespace separator).  The ``corpus_registry``
     must be provided for those calls; if it is None or the name is not
     registered, a ValueError is raised.
+
+    ``embedder`` and ``search_cfg`` are threaded through to the ``search``
+    tool for hybrid ranking; both are optional so tests can dispatch the
+    other tools without constructing them (``search`` then runs full-text
+    only against ``SearchConfig`` defaults).
     """
     if "." in name:
         reg = corpus_registry or {}
@@ -175,7 +194,23 @@ def _dispatch_tool(
             )
             return _text(ov.nodes)
         case "search":
-            return _text(tools.search(store, **arguments))
+            cfg_s = search_cfg or SearchConfig()
+            # Server-side knobs (rrf_k/fetch_k/weights) come from config, never
+            # from client arguments; only `mode` is a client-facing override.
+            return _text(
+                tools.search(
+                    store,
+                    arguments["query"],
+                    kind=arguments.get("kind"),
+                    limit=arguments.get("limit", 20),
+                    embedder=embedder,
+                    mode=arguments.get("mode", cfg_s.mode),
+                    rrf_k=cfg_s.rrf_k,
+                    fetch_k=cfg_s.fetch_k,
+                    vector_weight=cfg_s.vector_weight,
+                    fulltext_weight=cfg_s.fulltext_weight,
+                )
+            )
         case "related":
             return _text(tools.related(store, **arguments))
         case "inbound":
@@ -202,6 +237,17 @@ async def run() -> None:
     store = build_graph_store(cfg)
     store.connect()
     try:
+        # Build the query-time embedder for hybrid search. A missing API key
+        # (or unset api_key_env for a local server) raises ProviderFactoryError;
+        # we swallow it and leave embedder=None so the server still starts and
+        # `search` degrades to full-text. A *down* local server does not raise
+        # here — it raises at first embed(), which tools.search catches.
+        embedder: EmbeddingProvider | None
+        try:
+            embedder = build_embedding_provider(cfg)
+        except ProviderFactoryError:
+            embedder = None
+
         server: Server[Any] = Server("contextd")
 
         # Build the full tool list (generic 8 + per-corpus) and the
@@ -218,7 +264,14 @@ async def run() -> None:
         @server.call_tool()  # type: ignore[untyped-decorator]
         async def _call(name: str, arguments: dict[str, Any]) -> Any:
             try:
-                return _dispatch_tool(name, arguments, store, corpus_registry)
+                return _dispatch_tool(
+                    name,
+                    arguments,
+                    store,
+                    corpus_registry,
+                    embedder=embedder,
+                    search_cfg=cfg.search,
+                )
             except Exception as exc:
                 # Render the error as the tool's text payload so the MCP
                 # client sees a structured response instead of a protocol

@@ -99,6 +99,44 @@ def test_dispatch_unknown_tool_raises_valueerror() -> None:
         _dispatch_tool("not_a_tool", {}, store)
 
 
+def test_search_descriptor_exposes_mode_enum() -> None:
+    search = next(t for t in _GENERIC_TOOL_DESCRIPTORS if t.name == "search")
+    mode_schema = search.inputSchema["properties"]["mode"]
+    assert mode_schema["enum"] == ["hybrid", "fulltext", "vector"]
+
+
+def test_dispatch_search_threads_embedder_and_config() -> None:
+    """The search arm embeds the query and uses fetch_k from server config —
+    server-side knobs come from SearchConfig, not client arguments."""
+    from contextd.config import SearchConfig
+
+    store = MagicMock()
+    store.full_text_search.return_value = []
+    store.vector_search.return_value = []
+    emb = MagicMock()
+    emb.embed.return_value = [[0.1] * 1024]
+    payload = _dispatch_tool(
+        "search",
+        {"query": "q", "kind": "File"},
+        store,
+        embedder=emb,
+        search_cfg=SearchConfig(fetch_k=33),
+    )
+    assert payload[0]["type"] == "text"
+    emb.embed.assert_called_once_with(["q"])
+    _, vkwargs = store.vector_search.call_args
+    assert vkwargs["k"] == 33
+
+
+def test_dispatch_search_defaults_to_fulltext_without_embedder() -> None:
+    store = MagicMock()
+    store.full_text_search.return_value = []
+    payload = _dispatch_tool("search", {"query": "q"}, store)
+    assert payload[0]["type"] == "text"
+    store.full_text_search.assert_called_once_with("File", "summary", "q", k=50)
+    store.vector_search.assert_not_called()
+
+
 # -- Per-corpus tool dispatch via _dispatch_tool --------------------------
 
 
