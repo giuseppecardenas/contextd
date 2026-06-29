@@ -75,6 +75,17 @@ sweep_rate_sections_per_second = 0.017
 [mcp]
 transport = "stdio"
 
+[search]
+# Ranking strategy for the `search` MCP tool. "hybrid" (default) fuses
+# vector-similarity and full-text results via reciprocal rank fusion,
+# degrading to full-text when no embedder is configured or the queried
+# kind has no vector index. "fulltext" / "vector" force a single ranker.
+mode = "hybrid"
+rrf_k = 60             # RRF damping constant; larger flattens top-rank weighting
+fetch_k = 50           # per-ranker candidate depth before fusion (raised to >= limit)
+vector_weight = 1.0    # bias toward semantic matches
+fulltext_weight = 1.0  # bias toward lexical matches
+
 [logging]
 level = "info"
 format = "json"

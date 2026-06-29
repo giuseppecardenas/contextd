@@ -182,3 +182,69 @@ def test_sweep_interval_zero_is_valid() -> None:
 def test_sweep_rate_below_minimum_rejected() -> None:
     with pytest.raises(ValidationError):
         IndexerConfig(sweep_rate_sections_per_second=0.0)
+
+
+def test_search_config_defaults() -> None:
+    from contextd.config import SearchConfig
+
+    cfg = SearchConfig()
+    assert cfg.mode == "hybrid"
+    assert cfg.rrf_k == 60
+    assert cfg.fetch_k == 50
+    assert cfg.vector_weight == 1.0
+    assert cfg.fulltext_weight == 1.0
+
+
+def test_load_default_has_hybrid_search() -> None:
+    cfg = Config.load_default()
+    assert cfg.search.mode == "hybrid"
+    assert cfg.search.rrf_k == 60
+    assert cfg.search.fetch_k == 50
+
+
+def test_search_config_rejects_both_weights_zero() -> None:
+    from contextd.config import SearchConfig
+
+    with pytest.raises(ValidationError, match="must not both be zero"):
+        SearchConfig(vector_weight=0.0, fulltext_weight=0.0)
+
+
+def test_search_config_one_zero_weight_is_valid() -> None:
+    from contextd.config import SearchConfig
+
+    cfg = SearchConfig(vector_weight=0.0)
+    assert cfg.vector_weight == 0.0
+    assert cfg.fulltext_weight == 1.0
+
+
+def test_search_config_rejects_rrf_k_zero() -> None:
+    from contextd.config import SearchConfig
+
+    with pytest.raises(ValidationError):
+        SearchConfig(rrf_k=0)
+
+
+def test_search_config_rejects_unknown_mode(tmp_path: Path) -> None:
+    user_cfg = tmp_path / "config.toml"
+    user_cfg.write_text("""
+[search]
+mode = "fuzzy"
+""")
+    with pytest.raises(ConfigError, match=r"hybrid.*fulltext.*vector|search"):
+        Config.load(user_cfg)
+
+
+def test_search_config_override(tmp_path: Path) -> None:
+    user_cfg = tmp_path / "config.toml"
+    user_cfg.write_text("""
+[search]
+mode = "fulltext"
+rrf_k = 30
+fetch_k = 100
+""")
+    cfg = Config.load(user_cfg)
+    assert cfg.search.mode == "fulltext"
+    assert cfg.search.rrf_k == 30
+    assert cfg.search.fetch_k == 100
+    # Unspecified weights fall back to defaults.
+    assert cfg.search.vector_weight == 1.0

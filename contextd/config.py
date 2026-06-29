@@ -12,7 +12,7 @@ from importlib import resources
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 BackendName = Literal["neo4j"]
 SafetyBlock = Literal[
@@ -156,6 +156,39 @@ class LoggingConfig(BaseModel):
     log_backup_count: int = Field(default=5, ge=0)
 
 
+SearchMode = Literal["hybrid", "fulltext", "vector"]
+
+
+class SearchConfig(BaseModel):
+    """Hybrid-search ranking knobs consumed by the ``search`` MCP tool.
+
+    ``mode`` selects the retrieval strategy: ``hybrid`` (default) fuses
+    vector-similarity and full-text results via reciprocal rank fusion (see
+    :mod:`contextd.search.fusion`), degrading to full-text when no embedder
+    is available or the queried label has no vector index; ``fulltext`` and
+    ``vector`` force a single ranker. ``rrf_k`` is the RRF damping constant
+    (larger flattens the top-rank weighting). ``fetch_k`` is the per-ranker
+    candidate depth pulled before fusion; the tool raises it to at least the
+    caller's ``limit``. ``vector_weight`` / ``fulltext_weight`` bias the two
+    rankers and must not both be zero, which would zero every fused score.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    mode: SearchMode = "hybrid"
+    rrf_k: int = Field(default=60, ge=1)
+    fetch_k: int = Field(default=50, ge=1)
+    vector_weight: float = Field(default=1.0, ge=0.0)
+    fulltext_weight: float = Field(default=1.0, ge=0.0)
+
+    @model_validator(mode="after")
+    def _weights_not_both_zero(self) -> SearchConfig:
+        if self.vector_weight == 0.0 and self.fulltext_weight == 0.0:
+            raise ValueError(
+                "search.vector_weight and search.fulltext_weight must not both be zero"
+            )
+        return self
+
+
 class Config(BaseModel):
     model_config = ConfigDict(extra="forbid")
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
@@ -164,6 +197,7 @@ class Config(BaseModel):
     indexer: IndexerConfig = Field(default_factory=IndexerConfig)
     mcp: McpConfig = Field(default_factory=McpConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    search: SearchConfig = Field(default_factory=SearchConfig)
 
     @classmethod
     def load_default(cls) -> Config:
