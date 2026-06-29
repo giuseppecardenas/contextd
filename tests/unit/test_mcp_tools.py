@@ -82,7 +82,9 @@ def test_search_strips_embedding_and_flattens_node() -> None:
 
     rows = tools.search(store, "alpha", kind="Section", limit=5)
 
-    store.full_text_search.assert_called_once_with("Section", "summary", "alpha", k=5)
+    # No embedder supplied → full-text-only path; the ranker is over-fetched
+    # at fetch_k (default 50) and truncated to limit after.
+    store.full_text_search.assert_called_once_with("Section", "summary", "alpha", k=50)
     assert len(rows) == 2
     for row in rows:
         assert "embedding" not in row
@@ -103,7 +105,7 @@ def test_search_defaults_to_file_label() -> None:
     store = MagicMock()
     store.full_text_search.return_value = []
     tools.search(store, "query text")
-    store.full_text_search.assert_called_once_with("File", "summary", "query text", k=20)
+    store.full_text_search.assert_called_once_with("File", "summary", "query text", k=50)
 
 
 def test_search_handles_rows_without_embedding() -> None:
@@ -115,3 +117,78 @@ def test_search_handles_rows_without_embedding() -> None:
     ]
     rows = tools.search(store, "q", kind="Pattern")
     assert rows == [{"name": "target1", "summary": "s", "score": 1.0}]
+
+
+def _fake_embedder() -> MagicMock:
+    emb = MagicMock()
+    emb.embed.return_value = [[0.1] * 1024]
+    return emb
+
+
+def test_search_hybrid_calls_both_backends_and_embeds_once() -> None:
+    store = MagicMock()
+    store.full_text_search.return_value = [{"node": {"path": "a.md", "summary": "x"}, "score": 2.0}]
+    store.vector_search.return_value = [
+        {"node": {"path": "a.md", "summary": "x", "embedding": [0.1] * 1024}, "score": 0.9}
+    ]
+    emb = _fake_embedder()
+    rows = tools.search(store, "q", kind="File", limit=10, embedder=emb)
+
+    emb.embed.assert_called_once_with(["q"])
+    store.full_text_search.assert_called_once_with("File", "summary", "q", k=50)
+    store.vector_search.assert_called_once()
+    vargs, vkwargs = store.vector_search.call_args
+    assert vargs[0] == "File" and vargs[1] == "embedding"
+    assert vkwargs["k"] == 50
+    # Fused output keeps the node flattened with embedding stripped.
+    assert rows[0]["path"] == "a.md"
+    assert "embedding" not in rows[0]
+
+
+def test_search_no_embedder_skips_vector_leg() -> None:
+    store = MagicMock()
+    store.full_text_search.return_value = []
+    tools.search(store, "q", kind="File")
+    store.vector_search.assert_not_called()
+
+
+def test_search_noncapable_label_skips_vector_leg() -> None:
+    """Pattern has no vector index, so even with an embedder the vector leg is
+    not attempted and the query is never embedded."""
+    store = MagicMock()
+    store.full_text_search.return_value = []
+    emb = _fake_embedder()
+    tools.search(store, "q", kind="Pattern", embedder=emb)
+    store.vector_search.assert_not_called()
+    emb.embed.assert_not_called()
+
+
+def test_search_mode_fulltext_skips_vector_and_embed() -> None:
+    store = MagicMock()
+    store.full_text_search.return_value = []
+    emb = _fake_embedder()
+    tools.search(store, "q", kind="File", embedder=emb, mode="fulltext")
+    store.vector_search.assert_not_called()
+    emb.embed.assert_not_called()
+
+
+def test_search_mode_vector_on_noncapable_label_returns_empty() -> None:
+    """An explicit vector request on a label with no vector index returns []
+    (not a silent lexical fallback) so the caller knows it got nothing."""
+    store = MagicMock()
+    emb = _fake_embedder()
+    rows = tools.search(store, "q", kind="Pattern", embedder=emb, mode="vector")
+    assert rows == []
+    store.full_text_search.assert_not_called()
+    store.vector_search.assert_not_called()
+
+
+def test_search_embed_failure_degrades_to_fulltext() -> None:
+    """If embedding raises, search must fall back to full-text, not error."""
+    store = MagicMock()
+    store.full_text_search.return_value = [{"node": {"path": "a.md", "summary": "x"}, "score": 1.0}]
+    emb = MagicMock()
+    emb.embed.side_effect = RuntimeError("embedding endpoint unreachable")
+    rows = tools.search(store, "q", kind="File", embedder=emb)
+    assert rows[0]["path"] == "a.md"
+    store.vector_search.assert_not_called()
