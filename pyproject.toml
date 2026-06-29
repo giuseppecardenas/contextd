@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
 authors = [{ name = "Giuseppe Cardenas" }]
-keywords = ["mcp", "knowledge-graph", "rag", "graphrag", "memgraph", "neo4j"]
+keywords = ["mcp", "knowledge-graph", "rag", "graphrag", "neo4j"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -30,7 +30,6 @@ dependencies = [
     "markdown-it-py>=3.0",
     "mcp>=0.9",
     "neo4j>=5.15",
-    "gqlalchemy>=1.5",
     "google-genai>=0.3",
     "voyageai>=0.2",
     "psutil>=5.9",
@@ -90,11 +89,6 @@ warn_unreachable = true
 warn_return_any = true
 disallow_any_unimported = true
 
-[[tool.mypy.overrides]]
-module = ["gqlalchemy", "gqlalchemy.*"]
-ignore_missing_imports = true
-disallow_any_unimported = false
-
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
@@ -112,10 +106,6 @@ filterwarnings = [
     # _UnionGenericAlias deprecation at module import. Filter must precede
     # any provider-test category resolution.
     "ignore:'_UnionGenericAlias' is deprecated:DeprecationWarning",
-    # gqlalchemy raises this whenever it materialises a node whose label is
-    # not mapped to a Python ORM class. We intentionally don't map — the
-    # GraphStore layer returns plain dicts — so this warning is structural.
-    "ignore::gqlalchemy.exceptions.GQLAlchemySubclassNotFoundWarning",
     # testcontainers 4.x emits DeprecationWarning from its own @wait_container_is_ready
     # decorator + wait_for_logs helper (paths their Neo4jContainer still uses
     # internally). We're pinned to 4.x; remove these filters when the library
@@ -124,6 +114,6 @@ filterwarnings = [
     "ignore:The wait_for_logs function with string or callable predicates:DeprecationWarning",
 ]
 markers = [
-    "integration: tests that require Docker (Memgraph) or other external services",
+    "integration: tests that require Docker (Neo4j) or other external services",
     "e2e: end-to-end tests that run a full bootstrap pipeline against a real graph backend",
 ]
