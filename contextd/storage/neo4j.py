@@ -84,8 +84,8 @@ class Neo4jBackend(GraphStore):
         dst_label: str | None = None,
     ) -> None:
         # Both labels required: a MERGE without the endpoint label match silently
-        # binds zero rows on schema-free Neo4j (unlike Memgraph's OR-across-PKs
-        # fallback), which would fail to create the edge with no visible error.
+        # binds zero rows on schema-free Neo4j, which would fail to create the
+        # edge with no visible error.
         if src_label is None or dst_label is None:
             raise ValueError(
                 "Neo4jBackend.upsert_edge requires both src_label and dst_label; "
@@ -174,9 +174,9 @@ class Neo4jBackend(GraphStore):
 
         Note: Neo4j normalises similarity via ``(1 + dot) / 2``, so
         orthogonal vectors score 0.5 (not 0.0); identical direction scores
-        1.0; anti-parallel scores 0.0. Threshold filtering is client-side
-        for parity with the Memgraph path (server-side WHERE after CALL
-        requires WITH re-projection).
+        1.0; anti-parallel scores 0.0. Threshold filtering is applied
+        client-side (a server-side WHERE after the CALL would require a WITH
+        re-projection).
         """
         assert self._driver is not None
         validate_identifier(label, kind="label")

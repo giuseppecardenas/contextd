@@ -14,8 +14,7 @@ Split layout (SD #80):
 - ``cli/_shared.py``  — ``PipelineDeps``, ``_load_cfg``, ``console`` (private helpers)
 
 All commands route through the global config (``~/.contextd/config.toml``).
-The factory layer decides whether to stand up Memgraph or Neo4j based on
-``[storage] backend``.
+The factory layer stands up the Neo4j backend based on ``[storage] backend``.
 """
 
 from __future__ import annotations

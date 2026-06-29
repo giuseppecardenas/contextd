@@ -1,8 +1,8 @@
 """Unit tests for MCP tool behaviour — Cypher shape, clamps, and descriptors.
 
-Integration coverage (queries actually executing against Memgraph + Neo4j)
-lives in tests/integration/test_mcp_tools.py; this file exercises the
-pure-Python surface that doesn't need a backend.
+Integration coverage (queries actually executing against Neo4j) lives in
+tests/integration/test_mcp_tools.py; this file exercises the pure-Python
+surface that doesn't need a backend.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from contextd.mcp import tools
 
 def test_related_clamps_depth_above_max() -> None:
     """Defence in depth: a direct caller passing depth=100 must not
-    reach Memgraph as `[r*1..100]`. Spec-delta #32 clamps at the MCP
+    reach the backend as `[r*1..100]`. Spec-delta #32 clamps at the MCP
     descriptor level; this mirrors the clamp in-function."""
     store = MagicMock()
     store.exec_read.return_value = []

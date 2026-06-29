@@ -52,12 +52,9 @@ def test_migration_0004_backfills_only_nodes_with_outgoing_inferred(
     # fixture already applied all migrations at connect time — MigrationRunner
     # would skip the already-recorded migration 4. coalesce makes the DDL
     # idempotent regardless.
-    from contextd.migrations.memgraph import ALL_MIGRATIONS as MEMGRAPH_MIGRATIONS
     from contextd.migrations.neo4j import ALL_MIGRATIONS as NEO4J_MIGRATIONS
-    from contextd.storage.memgraph import MemgraphBackend
 
-    migrations = MEMGRAPH_MIGRATIONS if isinstance(backend, MemgraphBackend) else NEO4J_MIGRATIONS
-    _0004 = next(m for m in migrations if m.id == 4)
+    _0004 = next(m for m in NEO4J_MIGRATIONS if m.id == 4)
     _0004.up(backend, _0004.id)
 
     rows = backend.exec_read(

@@ -22,9 +22,9 @@ def _setup_home(tmp_path: Path) -> Path:
     # string is parsed as a Unicode escape and fails the test fixture.
     config = f"""
 [storage]
-backend = "memgraph"
+backend = "neo4j"
 
-[storage.memgraph]
+[storage.neo4j]
 docker_compose_file = "{home.as_posix()}/docker-compose.yml"
 """
     (home / "config.toml").write_text(config)

@@ -54,7 +54,6 @@ def test_load_default_returns_valid_config() -> None:
     assert cfg.providers.translation == "gemini"
     assert cfg.providers.embedding == "voyage"
     assert cfg.storage.backend == "neo4j"
-    assert cfg.storage.memgraph.port == 7687
     assert cfg.storage.neo4j.port == 7687
     assert cfg.inference.summary_max_words == 100
     assert cfg.indexer.debounce_seconds == 30
@@ -139,16 +138,17 @@ summary_max_words = 200
 def test_load_user_overrides_defaults(tmp_path: Path) -> None:
     user_cfg = tmp_path / "config.toml"
     user_cfg.write_text("""
-[storage]
-backend = "memgraph"
+[storage.neo4j]
+port = 7999
 
 [indexer]
 debounce_seconds = 15
 """)
     cfg = Config.load(user_cfg)
-    assert cfg.storage.backend == "memgraph"
+    assert cfg.storage.neo4j.port == 7999
     assert cfg.indexer.debounce_seconds == 15
     # Unspecified fields fall back to defaults.
+    assert cfg.storage.backend == "neo4j"
     assert cfg.providers.summary == "gemini"
     assert cfg.providers.inference == "gemini"
     assert cfg.providers.translation == "gemini"
@@ -160,7 +160,7 @@ def test_rejects_unknown_backend(tmp_path: Path) -> None:
 [storage]
 backend = "redis"
 """)
-    with pytest.raises(ConfigError, match=r"memgraph.*neo4j"):
+    with pytest.raises(ConfigError, match=r"neo4j"):
         Config.load(user_cfg)
 
 

@@ -1,6 +1,5 @@
 import pytest
 
-from contextd.migrations.memgraph import ALL_MIGRATIONS as MEMGRAPH_MIGRATIONS
 from contextd.migrations.neo4j import ALL_MIGRATIONS as NEO4J_MIGRATIONS
 from contextd.storage.base import GraphStore
 
@@ -149,13 +148,7 @@ def test_migrations_are_idempotent(backend: GraphStore) -> None:
     The backend fixture has already run ALL_MIGRATIONS once; this test calls
     apply_migrations a second time with the same list.
     """
-    name = backend.capabilities.name
-    if name == "memgraph":
-        migrations = MEMGRAPH_MIGRATIONS
-    elif name == "neo4j":
-        migrations = NEO4J_MIGRATIONS
-    else:
-        raise AssertionError(f"unexpected backend: {name}")
+    migrations = NEO4J_MIGRATIONS
 
     # Capture the applied set before the second apply.
     before = backend.exec_read("MATCH (m:Meta {schema_version: 0}) RETURN m.applied AS applied")
@@ -190,21 +183,6 @@ def test_upsert_node_missing_pk_raises(backend: GraphStore) -> None:
     surprising Cypher binder exception deep in the backend."""
     with pytest.raises(ValueError, match="missing required primary key 'path'"):
         backend.upsert_node("File", {"hash": "h1", "corpus": "c"})
-
-
-def test_memgraph_upsert_edge_without_labels_works(backend: GraphStore) -> None:
-    """Memgraph's label kwargs are advisory; omitting them falls back to
-    OR-matching against path/id/name and still round-trips."""
-    if backend.capabilities.name != "memgraph":
-        pytest.skip("Advisory-endpoint behaviour is Memgraph-only.")
-    backend.upsert_node("File", {"path": "a.md", "hash": "h1", "corpus": "c"})
-    backend.upsert_node("File", {"path": "b.md", "hash": "h2", "corpus": "c"})
-    backend.upsert_edge("a.md", "b.md", "REFERENCES", origin="structural")
-    rows = backend.exec_read(
-        "MATCH (a:File {path: 'a.md'})-[r:REFERENCES]->(b:File {path: 'b.md'}) "
-        "RETURN r.origin AS origin"
-    )
-    assert rows[0]["origin"] == "structural"
 
 
 def test_upsert_node_rejects_unsafe_label(backend: GraphStore) -> None:

@@ -1,7 +1,7 @@
 """Backend input-validation helpers.
 
 Backend methods accept ``label``, ``edge_type``, and ``property_name`` as
-``str`` and splice them into Cypher because neither Memgraph nor Neo4j support
+``str`` and splice them into Cypher because Neo4j does not support
 parameterising identifier positions (labels, relationship types, property
 names in CREATE/SET patterns). The upstream callers — the indexer and the
 ontology-validation layer — already restrict these to known values, but

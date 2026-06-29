@@ -14,7 +14,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-BackendName = Literal["memgraph", "neo4j"]
+BackendName = Literal["neo4j"]
 SafetyBlock = Literal[
     "BLOCK_NONE", "BLOCK_ONLY_HIGH", "BLOCK_MEDIUM_AND_ABOVE", "BLOCK_LOW_AND_ABOVE"
 ]
@@ -99,15 +99,6 @@ class ProvidersConfig(BaseModel):
     voyage: VoyageConfig = Field(default_factory=VoyageConfig)
 
 
-class MemgraphConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    host: str = "127.0.0.1"
-    port: int = 7687
-    docker_compose_file: str = "~/.contextd/docker-compose.yml"
-    memory_limit_gb: float = 1.0
-    cpu_limit: float = 1.0
-
-
 class Neo4jConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     host: str = "127.0.0.1"
@@ -124,15 +115,13 @@ class Neo4jConfig(BaseModel):
 
 class StorageConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    backend: BackendName = (
-        "neo4j"  # was "memgraph"; flipped in M11.8 for reference-Cypher reliability
-    )
-    memgraph: MemgraphConfig = Field(default_factory=MemgraphConfig)
+    backend: BackendName = "neo4j"
     neo4j: Neo4jConfig = Field(default_factory=Neo4jConfig)
-    # The `Literal["memgraph", "neo4j"]` type constraint on BackendName
-    # above is enforced by pydantic v2 before any @field_validator runs — a
-    # manual validator was redundant and has been removed. Adding a new backend
-    # requires updating BackendName + the factory + the migrations dirs.
+    # Neo4j is the sole storage backend. ``BackendName`` is kept as a Literal
+    # (rather than inlined) so that adding a second backend later requires only
+    # widening the Literal, adding a factory branch, and a migrations dir —
+    # the GraphStore ABC seam and the abstraction-invariant CI grep already
+    # keep consumers decoupled from the concrete backend.
 
 
 class InferenceConfig(BaseModel):

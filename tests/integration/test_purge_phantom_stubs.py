@@ -7,7 +7,7 @@ inferred edges). Legacy backslash path identities are rewritten to the
 canonical forward-slash form so a re-index updates the existing node instead of
 creating a twin.
 
-Parametrized on both backends via the top-level `backend` fixture.
+Exercised against the Neo4j `backend` fixture.
 """
 
 from __future__ import annotations
@@ -21,12 +21,9 @@ pytestmark = pytest.mark.integration
 
 
 def _migration_0005(backend: GraphStore) -> Migration:
-    from contextd.migrations.memgraph import ALL_MIGRATIONS as MEMGRAPH_MIGRATIONS
     from contextd.migrations.neo4j import ALL_MIGRATIONS as NEO4J_MIGRATIONS
-    from contextd.storage.memgraph import MemgraphBackend
 
-    migrations = MEMGRAPH_MIGRATIONS if isinstance(backend, MemgraphBackend) else NEO4J_MIGRATIONS
-    return next(m for m in migrations if m.id == 5)
+    return next(m for m in NEO4J_MIGRATIONS if m.id == 5)
 
 
 def _seed(backend: GraphStore) -> None:

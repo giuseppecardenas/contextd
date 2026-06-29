@@ -11,7 +11,7 @@ from click.testing import CliRunner
 import contextd.cli
 
 
-def _setup_contextd_home(tmp_path: Path, backend: str = "memgraph") -> Path:
+def _setup_contextd_home(tmp_path: Path, backend: str = "neo4j") -> Path:
     home = tmp_path / ".contextd"
     home.mkdir()
     # ``home.as_posix()`` keeps backslash-free TOML on Windows; pathlib still
@@ -30,7 +30,7 @@ docker_compose_file = "{home.as_posix()}/docker-compose.yml"
 
 
 def test_status_lists_corpora(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    home = _setup_contextd_home(tmp_path, backend="memgraph")
+    home = _setup_contextd_home(tmp_path)
     (home / "corpora" / "demo.toml").write_text("""
 [corpus]
 name = "demo"
@@ -40,48 +40,20 @@ root = "/tmp/demo"
     result = CliRunner().invoke(contextd.cli.cli, ["status"])
     assert result.exit_code == 0
     assert "demo" in result.output
-    assert "memgraph" in result.output
+    assert "neo4j" in result.output
 
 
 def test_status_no_corpora(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    home = _setup_contextd_home(tmp_path, backend="memgraph")
+    home = _setup_contextd_home(tmp_path)
     monkeypatch.setenv("CONTEXTD_HOME", str(home))
     result = CliRunner().invoke(contextd.cli.cli, ["status"])
     assert result.exit_code == 0
-    assert "memgraph" in result.output
+    assert "neo4j" in result.output
     assert "0 registered" in result.output
 
 
-def test_up_memgraph_calls_docker_compose(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    home = _setup_contextd_home(tmp_path, backend="memgraph")
-    monkeypatch.setenv("CONTEXTD_HOME", str(home))
-    # Mock shutil.which so the test is deterministic regardless of whether
-    # the runner has docker on PATH — mirrors test_up_neo4j_calls_compose_with_profile.
-    monkeypatch.setattr("shutil.which", lambda _x: "/usr/bin/docker")
-    fake_proc = MagicMock()
-    fake_proc.pid = 12345
-    with (
-        patch("subprocess.run") as mock_run,
-        patch("contextd.storage.factory.build_graph_store") as mock_build,
-        patch("contextd.cli.infra.subprocess.Popen", return_value=fake_proc),
-    ):
-        mock_run.return_value.returncode = 0
-        fake_store = mock_build.return_value
-        fake_store.connect.return_value = None
-        fake_store.apply_migrations.return_value = None
-        fake_store.close.return_value = None
-        result = CliRunner().invoke(contextd.cli.cli, ["up"])
-    assert result.exit_code == 0, result.output
-    # Verify docker compose up -d was called with --profile memgraph.
-    calls = [c.args[0] for c in mock_run.call_args_list]
-    compose_calls = [c for c in calls if "compose" in c]
-    assert any("--profile" in c and "memgraph" in c and "up" in c for c in compose_calls)
-
-
-def test_down_memgraph_calls_docker_compose_down(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    home = _setup_contextd_home(tmp_path, backend="memgraph")
+def test_down_calls_docker_compose_down(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    home = _setup_contextd_home(tmp_path)
     monkeypatch.setenv("CONTEXTD_HOME", str(home))
     with patch("subprocess.run") as mock_run:
         result = CliRunner().invoke(contextd.cli.cli, ["down"])
@@ -89,12 +61,12 @@ def test_down_memgraph_calls_docker_compose_down(
     assert any("down" in c.args[0] for c in mock_run.call_args_list)
 
 
-def test_up_memgraph_without_docker_raises_clickexception(
+def test_up_without_docker_raises_clickexception(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """When docker is absent and backend=memgraph, `up` must surface a
-    clean ClickException instead of a FileNotFoundError traceback."""
-    home = _setup_contextd_home(tmp_path, backend="memgraph")
+    """When docker is absent, `up` must surface a clean ClickException
+    instead of a FileNotFoundError traceback."""
+    home = _setup_contextd_home(tmp_path)
     monkeypatch.setenv("CONTEXTD_HOME", str(home))
     with patch("shutil.which", return_value=None):
         result = CliRunner().invoke(contextd.cli.cli, ["up"])
@@ -165,7 +137,7 @@ def test_up_writes_pid_file(tmp_path: Path) -> None:
 def test_up_skips_daemon_launch_when_already_running(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    home = _setup_contextd_home(tmp_path, backend="memgraph")
+    home = _setup_contextd_home(tmp_path)
     monkeypatch.setenv("CONTEXTD_HOME", str(home))
     # Pre-existing PID file that points at a live process.
     (home / "state").mkdir(exist_ok=True)
@@ -189,7 +161,7 @@ def test_up_skips_daemon_launch_when_already_running(
 
 
 def test_up_clears_stale_pid_and_launches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    home = _setup_contextd_home(tmp_path, backend="memgraph")
+    home = _setup_contextd_home(tmp_path)
     monkeypatch.setenv("CONTEXTD_HOME", str(home))
     # Pre-existing PID file that points at a dead process.
     (home / "state").mkdir(exist_ok=True)

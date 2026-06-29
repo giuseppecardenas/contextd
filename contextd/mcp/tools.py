@@ -89,8 +89,8 @@ def related(store: GraphStore, node_id: str, *, depth: int = 2) -> list[dict[str
     Defence in depth: the MCP tool descriptor's JSON schema already clamps
     via ``"minimum": 1, "maximum": 5`` (spec-delta #32), but a direct
     function caller (tests, future CLI wiring) could still pass out-of-range
-    ints. We clamp here too so that backend-specific depth limits (e.g.,
-    Memgraph's unbounded walk) are never reachable by accident.
+    ints. We clamp here too so an unbounded variable-length walk is never
+    reachable by accident.
     """
     clamped = min(max(depth, _RELATED_MIN_DEPTH), _RELATED_MAX_DEPTH)
     cypher = f"""

@@ -1,9 +1,9 @@
 """Rejects Cypher containing write keywords.
 
 Spec §7.4: all MCP tools are read-only. The guard is a thin keyword
-check — sufficient because Memgraph and Neo4j both tokenize identically,
+check — sufficient because the Neo4j Cypher tokenizer is well-defined,
 and the read-only surface (MATCH, WITH, UNWIND, RETURN, and read-only
-CALL procedures like db.labels() or text_search.search_all) is small.
+CALL procedures like db.labels() or db.index.fulltext.queryNodes) is small.
 
 The leading negative-lookbehind ``(?<![.\\w])`` ensures we don't
 false-positive on dotted property access — ``RETURN n.set AS prop``

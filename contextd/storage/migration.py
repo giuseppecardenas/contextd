@@ -1,8 +1,7 @@
 """Forward-only migration runner.
 
-Each backend ships its own migrations (contextd/migrations/memgraph/*.py
-and contextd/migrations/neo4j/*.py) because schema DDL differs. The
-Meta singleton node records applied IDs; the runner skips any migration
+The Neo4j backend ships its migrations in contextd/migrations/neo4j/*.py.
+The Meta singleton node records applied IDs; the runner skips any migration
 whose ID is already present.
 """
 

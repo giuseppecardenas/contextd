@@ -148,26 +148,18 @@ def _stop_daemon() -> None:
 
 
 def _compose_file_for(cfg: Config) -> Path:
-    """Resolve the docker-compose.yml path from the active backend's config.
+    """Resolve the docker-compose.yml path from the Neo4j backend's config.
 
-    Honours the ``docker_compose_file`` field on ``MemgraphConfig`` /
-    ``Neo4jConfig`` so a user ``config.toml`` override is respected. The
-    default value points at ``~/.contextd/docker-compose.yml`` which is
-    what ``contextd init`` deploys.
+    Honours the ``docker_compose_file`` field on ``Neo4jConfig`` so a user
+    ``config.toml`` override is respected. The default value points at
+    ``~/.contextd/docker-compose.yml`` which is what ``contextd init`` deploys.
     """
-    backend = cfg.storage.backend
-    if backend == "memgraph":
-        compose_file_str = cfg.storage.memgraph.docker_compose_file
-    elif backend == "neo4j":
-        compose_file_str = cfg.storage.neo4j.docker_compose_file
-    else:
-        raise RuntimeError(f"unexpected backend for compose dispatch: {backend!r}")
-    return Path(compose_file_str).expanduser()
+    return Path(cfg.storage.neo4j.docker_compose_file).expanduser()
 
 
 def _wait_for_backend_ready(store: GraphStore, timeout: float = 60.0) -> None:
-    # `docker compose up -d` returns when the container starts, but Neo4j and
-    # Memgraph need an additional ~10-60s on cold start before Bolt accepts a
+    # `docker compose up -d` returns when the container starts, but Neo4j
+    # needs an additional ~10-60s on cold start before Bolt accepts a
     # handshake. Without this probe, the very next exec_read (inside
     # MigrationRunner) races the backend and fails with ServiceUnavailable.
     deadline = time.monotonic() + timeout
@@ -217,16 +209,9 @@ def up() -> None:
     store.connect()
     try:
         _wait_for_backend_ready(store)
-        if backend == "memgraph":
-            from contextd.migrations.memgraph import ALL_MIGRATIONS
+        from contextd.migrations.neo4j import ALL_MIGRATIONS
 
-            store.apply_migrations(ALL_MIGRATIONS)
-        elif backend == "neo4j":
-            from contextd.migrations.neo4j import ALL_MIGRATIONS
-
-            store.apply_migrations(ALL_MIGRATIONS)
-        else:
-            raise RuntimeError(f"unexpected backend: {backend!r}")
+        store.apply_migrations(ALL_MIGRATIONS)
         console.print("[green]✓[/] migrations applied")
     finally:
         store.close()

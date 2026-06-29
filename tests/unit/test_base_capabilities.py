@@ -3,7 +3,7 @@ from contextd.storage.base import BackendCapabilities
 
 def test_capabilities_is_frozen() -> None:
     caps = BackendCapabilities(
-        name="memgraph",
+        name="neo4j",
         concurrent_writers=-1,  # unlimited sentinel
         supports_vector_index=True,
         supports_full_text_index=True,
@@ -23,7 +23,7 @@ def test_capabilities_is_frozen() -> None:
 
 def test_unlimited_sentinel() -> None:
     caps = BackendCapabilities(
-        name="memgraph",
+        name="neo4j",
         concurrent_writers=-1,
         supports_vector_index=True,
         supports_full_text_index=True,

@@ -52,7 +52,7 @@ def extract_placeholders(cypher: str) -> frozenset[str]:
     """Extract parameter names from Cypher ``$name`` placeholders.
 
     Matches the pattern used by ``exec_read``/``exec_write`` — consistent
-    with how Neo4j and Memgraph drivers bind parameters.
+    with how the Neo4j driver binds parameters.
 
     See module docstring for the known ``$identifier``-in-string-literal
     false-positive limitation.

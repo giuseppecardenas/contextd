@@ -19,7 +19,7 @@ def _setup_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # accepts forward-slash paths there, but ``\U`` in a double-quoted TOML
     # string is parsed as a Unicode escape and fails the test fixture.
     (home / "config.toml").write_text(
-        f'[storage]\nbackend = "memgraph"\n\n[storage.memgraph]\n'
+        f'[storage]\nbackend = "neo4j"\n\n[storage.neo4j]\n'
         f'docker_compose_file = "{home.as_posix()}/docker-compose.yml"\n'
     )
     (home / "corpora").mkdir()

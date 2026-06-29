@@ -52,12 +52,11 @@ def _seed_corpus(backend: GraphStore, *, with_embeddings: bool = True) -> None:
 
 
 def _rebuild_fts_index_if_needed(backend: GraphStore) -> None:
-    """No-op on the current backend roster.
+    """No-op for Neo4j.
 
-    Memgraph's TEXT INDEX and Neo4j's FULLTEXT INDEX both pick up late
-    writes without an explicit rebuild. The helper is retained for a
-    uniform call-site signature and a place to hang future backend-
-    specific workarounds.
+    Neo4j's FULLTEXT INDEX picks up late writes without an explicit
+    rebuild. The helper is retained for a uniform call-site signature and
+    a place to hang future backend-specific workarounds.
     """
     return
 
@@ -102,19 +101,11 @@ def test_vector_search_threshold_filters(seeded_backend: GraphStore) -> None:
     """A threshold above the orthogonal-vector score drops it and keeps the
     aligned (cos=1) and 45° (cos≈0.7071) results.
 
-    The ABC normalises the contract as a similarity floor on [0, 1], but the
-    scoring origin differs by backend:
-
-    - Memgraph: raw cosine similarity (orthogonal = 0.0).
-    - Neo4j: (1 + dot) / 2 normalisation (orthogonal = 0.5, documented in
-      ``Neo4jBackend.vector_search``).
-
-    We pick ``threshold=0.6`` so the orthogonal vector is dropped on every
-    backend (0.0 < 0.6 on Memgraph; 0.5 < 0.6 on Neo4j) while the
-    45° vector (0.7071 raw / ≈0.854 Neo4j) and aligned vector still pass.
-    Threshold calibration is inherently backend-aware because of the
-    scoring-origin difference; picking a value that works under both
-    regimes is the portable shape.
+    The ABC normalises the contract as a similarity floor on [0, 1]. Neo4j
+    applies (1 + dot) / 2 normalisation (orthogonal = 0.5, documented in
+    ``Neo4jBackend.vector_search``). We pick ``threshold=0.6`` so the
+    orthogonal vector is dropped (0.5 < 0.6) while the 45° vector (≈0.854)
+    and the aligned vector (1.0) still pass.
     """
     query = _basis_vector(0)
     results = seeded_backend.vector_search(

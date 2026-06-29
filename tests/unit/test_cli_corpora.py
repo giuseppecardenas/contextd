@@ -17,7 +17,7 @@ def _setup_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home = tmp_path / ".contextd"
     home.mkdir()
     (home / "config.toml").write_text(
-        '[storage]\nbackend = "memgraph"\n\n[storage.memgraph]\n'
+        '[storage]\nbackend = "neo4j"\n\n[storage.neo4j]\n'
         f'docker_compose_file = "{home}/docker-compose.yml"\n'
     )
     monkeypatch.setenv("CONTEXTD_HOME", str(home))
@@ -103,7 +103,7 @@ def test_list_corpora_when_corpora_dir_missing(
     home.mkdir()
     # Deliberately do NOT mkdir corpora/.
     (home / "config.toml").write_text(
-        f'[storage]\nbackend = "memgraph"\n\n[storage.memgraph]\n'
+        f'[storage]\nbackend = "neo4j"\n\n[storage.neo4j]\n'
         f'docker_compose_file = "{home}/docker-compose.yml"\n'
     )
     monkeypatch.setenv("CONTEXTD_HOME", str(home))

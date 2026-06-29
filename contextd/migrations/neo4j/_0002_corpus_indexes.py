@@ -1,14 +1,9 @@
 """Corpus-property indexes for multi-corpus filter queries.
 
-Parallel to Memgraph's _0001_baseline corpus indexes (which it bundles
-into the baseline). Neo4j 5.x uses ``CREATE INDEX ... FOR (n:Label) ON
-(n.corpus)`` — the bracketless ``ON :Label(prop)`` shorthand that
-Memgraph accepts is not valid Neo4j syntax.
-
-Split into its own migration rather than folded into _0001_baseline so
-the baseline stays a clean mirror of the Memgraph baseline's constraint
-+ vector + fulltext scope; corpus-scoped filtering is a separate
-concern tied to SD #72's cross-corpus query injection.
+Neo4j 5.x uses ``CREATE INDEX ... FOR (n:Label) ON (n.corpus)``. Split into
+its own migration rather than folded into _0001_baseline so the baseline
+stays a clean constraint + vector + fulltext scope; corpus-scoped filtering
+is a separate concern tied to SD #72's cross-corpus query injection.
 """
 
 from typing import Any

@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
-BackendName = Literal["memgraph", "neo4j"]
+BackendName = Literal["neo4j"]
 Origin = Literal["inferred", "structural", "manual"]
 
 
@@ -36,12 +36,13 @@ class BackendCapabilities:
 
 
 class GraphStore(ABC):
-    """Common interface for pluggable graph stores (Memgraph, Neo4j).
+    """Common interface for the graph + vector store (Neo4j).
 
-    All higher layers (indexer, MCP server, CLI) depend on this ABC.
-    Backend-specific imports are confined to ``contextd/storage/memgraph.py``
-    and ``contextd/storage/neo4j.py``; a CI grep step (see .github/workflows/
-    ci.yml) enforces the separation.
+    All higher layers (indexer, MCP server, CLI) depend on this ABC rather
+    than on the concrete backend. Backend-specific imports are confined to
+    ``contextd/storage/neo4j.py``; a CI grep step (see .github/workflows/
+    ci.yml) enforces the separation, keeping the seam open for a future
+    second backend without coupling consumers to today's single one.
     """
 
     @abstractmethod
@@ -73,11 +74,9 @@ class GraphStore(ABC):
 
         ``edge_type`` is the relationship type (REFERENCES, CONTAINS, …).
         ``src_label`` / ``dst_label`` are the endpoint *node* labels; they
-        are required on Neo4j (a MERGE without the endpoint label match
-        silently binds zero rows on schema-free Neo4j, which fails to
-        create the edge with no visible error) and advisory on Memgraph
-        (which uses them to narrow the MATCH and otherwise falls back to
-        OR-matching across shared PK shapes).
+        are required on Neo4j because a MERGE without the endpoint label
+        match silently binds zero rows on schema-free Neo4j, which fails to
+        create the edge with no visible error.
         """
 
     @abstractmethod
@@ -124,11 +123,11 @@ class GraphStore(ABC):
 
         ``threshold`` is a cosine-similarity floor in ``[0.0, 1.0]`` (higher is
         more similar). Implementations MUST raise ``ValueError`` on non-finite
-        inputs. The returned dicts have ``node`` and ``score`` keys on both
-        backends. ``score`` is cosine similarity in ``[0, 1]`` (higher is more
+        inputs. The returned dicts have ``node`` and ``score`` keys.
+        ``score`` is cosine similarity in ``[0, 1]`` (higher is more
         similar). Neo4j normalises via ``(1 + dot) / 2`` so orthogonal vectors
-        score 0.5 (not 0.0); Memgraph returns raw cosine similarity. Callers
-        that pick thresholds must be aware of this backend-specific origin.
+        score 0.5 (not 0.0) and identical-direction vectors score 1.0;
+        callers that pick thresholds must account for this normalisation.
         """
 
     @abstractmethod
