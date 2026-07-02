@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import pytest
+
 from contextd.mcp import tools
 
 
@@ -210,3 +212,156 @@ def test_search_embed_failure_degrades_to_fulltext() -> None:
     rows = tools.search(store, "q", kind="File", embedder=emb)
     assert rows[0]["path"] == "a.md"
     store.vector_search.assert_not_called()
+
+
+# -- get_node -------------------------------------------------------------
+
+
+def test_get_node_returns_props_without_embedding() -> None:
+    store = MagicMock()
+    store.exec_read.return_value = [
+        {"labels": ["Ticket"], "props": {"id": "INTENG-1", "title": "t", "embedding": [0.1] * 1024}}
+    ]
+    result = tools.get_node(store, "INTENG-1")
+    assert result == {"labels": ["Ticket"], "id": "INTENG-1", "title": "t"}
+    cypher, params = store.exec_read.call_args[0]
+    assert params == {"id": "INTENG-1"}
+    assert "INTENG-1" not in cypher  # bound as param, never f-strung
+
+
+def test_get_node_returns_none_when_absent() -> None:
+    store = MagicMock()
+    store.exec_read.return_value = []
+    assert tools.get_node(store, "nope") is None
+
+
+# -- explain_relationship -------------------------------------------------
+
+
+def test_explain_relationship_binds_params_and_returns_provenance() -> None:
+    store = MagicMock()
+    store.exec_read.return_value = [
+        {
+            "source": "a.md",
+            "target": "INTENG-1",
+            "edge_type": "REFERENCES",
+            "outbound": True,
+            "origin": "inferred",
+            "confidence": 0.9,
+            "reason": "why",
+        }
+    ]
+    rows = tools.explain_relationship(store, "a.md", "INTENG-1")
+    cypher, params = store.exec_read.call_args[0]
+    assert params == {"source": "a.md", "target": "INTENG-1"}
+    assert "a.md" not in cypher
+    assert rows[0]["reason"] == "why"
+    assert rows[0]["origin"] == "inferred"
+
+
+# -- ticket_dossier -------------------------------------------------------
+
+
+def test_ticket_dossier_groups_neighbors() -> None:
+    store = MagicMock()
+    store.exec_read.return_value = [
+        {
+            "ticket": "INTENG-1",
+            "ticket_props": {"id": "INTENG-1", "title": "t"},
+            "edge_type": "DOCUMENTS",
+            "outbound": False,
+            "neighbor_labels": ["File"],
+            "neighbor": "a.md",
+            "neighbor_summary": "sum",
+            "neighbor_title": None,
+        }
+    ]
+    result = tools.ticket_dossier(store, "INTENG-1")
+    assert result["found"] is True
+    assert result["properties"] == {"id": "INTENG-1", "title": "t"}
+    assert result["neighbors"] == [
+        {
+            "edge_type": "DOCUMENTS",
+            "direction": "inbound",
+            "labels": ["File"],
+            "node": "a.md",
+            "summary": "sum",
+            "title": None,
+        }
+    ]
+
+
+def test_ticket_dossier_isolated_ticket_has_empty_neighbors() -> None:
+    """OPTIONAL MATCH yields one all-null neighbor row; it must not appear."""
+    store = MagicMock()
+    store.exec_read.return_value = [
+        {
+            "ticket": "INTENG-9",
+            "ticket_props": {"id": "INTENG-9"},
+            "edge_type": None,
+            "outbound": None,
+            "neighbor_labels": None,
+            "neighbor": None,
+            "neighbor_summary": None,
+            "neighbor_title": None,
+        }
+    ]
+    result = tools.ticket_dossier(store, "INTENG-9")
+    assert result["found"] is True
+    assert result["neighbors"] == []
+
+
+def test_ticket_dossier_not_found() -> None:
+    store = MagicMock()
+    store.exec_read.return_value = []
+    assert tools.ticket_dossier(store, "NOPE-1") == {
+        "ticket": "NOPE-1",
+        "found": False,
+        "properties": {},
+        "neighbors": [],
+    }
+
+
+# -- find_reusable --------------------------------------------------------
+
+
+def test_find_reusable_keeps_only_reusable_true() -> None:
+    store = MagicMock()
+    store.full_text_search.return_value = [
+        {"node": {"id": "A1", "description": "d", "reusable": True}, "score": 2.0},
+        {"node": {"id": "A2", "description": "d2", "reusable": False}, "score": 1.5},
+        {"node": {"id": "A3", "description": "d3"}, "score": 1.0},  # reusable unset
+    ]
+    rows = tools.find_reusable(store, "script")
+    store.full_text_search.assert_called_once_with("Artifact", "description", "script", k=50)
+    assert [r["id"] for r in rows] == ["A1"]
+    assert rows[0]["score"] == 2.0
+
+
+# -- list_entities --------------------------------------------------------
+
+
+def test_list_entities_rejects_unknown_kind() -> None:
+    store = MagicMock()
+    with pytest.raises(ValueError, match="Unknown entity kind"):
+        tools.list_entities(store, "Widget")
+
+
+def test_list_entities_rejects_unknown_property() -> None:
+    store = MagicMock()
+    with pytest.raises(ValueError, match="Unknown property"):
+        tools.list_entities(store, "Ticket", prop="bogus", value="x")
+
+
+def test_list_entities_interpolates_validated_label_and_binds_values() -> None:
+    store = MagicMock()
+    store.exec_read.return_value = [
+        {"labels": ["Ticket"], "props": {"id": "INTENG-1", "status": "open"}}
+    ]
+    rows = tools.list_entities(store, "Ticket", prop="status", value="open", corpus="c", limit=10)
+    cypher, params = store.exec_read.call_args[0]
+    assert "MATCH (n:Ticket)" in cypher
+    assert "n.status = $value" in cypher
+    assert "n.corpus = $corpus" in cypher
+    assert params == {"corpus": "c", "value": "open"}
+    assert rows == [{"labels": ["Ticket"], "id": "INTENG-1", "status": "open"}]

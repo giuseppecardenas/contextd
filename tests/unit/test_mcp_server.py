@@ -36,7 +36,7 @@ def test_mcp_server_main_is_sync_wrapper() -> None:
 # -- _GENERIC_TOOL_DESCRIPTORS surface (SD #77) ---------------------------
 
 
-def test_generic_tool_descriptors_registers_expected_eight() -> None:
+def test_generic_tool_descriptors_registers_expected_set() -> None:
     """Directly-inspectable registry means tests can assert the MCP surface
     without running the async server. Previously _list was closure-bound.
 
@@ -53,6 +53,11 @@ def test_generic_tool_descriptors_registers_expected_eight() -> None:
         "get_file_summary",
         "section_tree",
         "query_graph",
+        "get_node",
+        "explain_relationship",
+        "ticket_dossier",
+        "find_reusable",
+        "list_entities",
     }
 
 
@@ -178,9 +183,9 @@ def test_dispatch_corpus_tool_missing_arg_returns_error(tmp_path: Path) -> None:
 
 
 def test_build_all_tool_descriptors_no_corpora_dir(tmp_path: Path) -> None:
-    """When corpora/ does not exist, only the 8 generic tools are returned."""
+    """When corpora/ does not exist, only the generic tools are returned."""
     all_descs, registry = _build_all_tool_descriptors(tmp_path)
-    assert len(all_descs) == 8
+    assert len(all_descs) == len(_GENERIC_TOOL_DESCRIPTORS)
     assert registry == {}
 
 
@@ -209,5 +214,5 @@ find_file = "{cypher_file.as_posix()}"
     all_descs, registry = _build_all_tool_descriptors(tmp_path)
     names = [t.name for t in all_descs]
     assert "my-corpus.find_file" in names
-    assert len(all_descs) == 9
+    assert len(all_descs) == len(_GENERIC_TOOL_DESCRIPTORS) + 1
     assert "my-corpus.find_file" in registry

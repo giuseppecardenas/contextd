@@ -6,14 +6,33 @@ from dataclasses import dataclass
 from typing import Any, Final, Literal
 
 from contextd.mcp.readonly_guard import assert_read_only
+from contextd.ontology.schema import Ontology
 from contextd.providers.base import EmbeddingProvider
 from contextd.search.fusion import flatten_row, reciprocal_rank_fusion
 from contextd.storage.base import GraphStore
+
+# Base-ontology node types, loaded once. Used to validate the ``kind`` label and
+# any property name that ``list_entities`` interpolates into Cypher, so a
+# client-supplied label/property can never inject — only declared identifiers
+# reach the query text; all values are bound as parameters.
+_ONTOLOGY: Final[Ontology] = Ontology.load_base()
+_ALLOWED_LABELS: Final[frozenset[str]] = frozenset(_ONTOLOGY.node_types)
 
 
 @dataclass
 class Overview:
     nodes: list[dict[str, Any]]
+
+
+def _node_without_embedding(props: dict[str, Any]) -> dict[str, Any]:
+    """Drop the embedding vector from a node property map.
+
+    The 1024-float vector is ~12 KB and would blow past an MCP client's
+    per-result token budget; every tool that returns full node properties
+    routes them through here (the search path uses ``flatten_row`` for the
+    same reason).
+    """
+    return {k: v for k, v in props.items() if k != "embedding"}
 
 
 def describe_project(store: GraphStore, *, corpus: str | None = None, n: int = 40) -> Overview:
@@ -234,3 +253,170 @@ def section_tree(store: GraphStore, file_path: str) -> list[dict[str, Any]]:
     ORDER BY s.level, s.ordinal
     """
     return store.exec_read(cypher, {"path": file_path})
+
+
+def get_node(store: GraphStore, node_id: str) -> dict[str, Any] | None:
+    """Return a single node's labels and properties, matched by path/id/name.
+
+    The generic, entity-aware counterpart to :func:`get_file_summary` (which
+    reads only ``:File``). Resolves ``node_id`` against the same identity
+    predicates the traversal tools use, so it works for the newly-populated
+    entity nodes (Ticket, Artifact, Pattern, …) that ``get_file_summary``
+    cannot read. The embedding vector is stripped. Returns ``None`` when no
+    node matches.
+    """
+    rows = store.exec_read(
+        """
+        MATCH (n)
+        WHERE n.path = $id OR n.id = $id OR n.name = $id
+        RETURN labels(n) AS labels, properties(n) AS props
+        LIMIT 1
+        """,
+        {"id": node_id},
+    )
+    if not rows:
+        return None
+    return {"labels": rows[0]["labels"], **_node_without_embedding(rows[0]["props"])}
+
+
+def explain_relationship(store: GraphStore, source: str, target: str) -> list[dict[str, Any]]:
+    """Explain the direct edges between two nodes: type, provenance, reason.
+
+    Matches ``source`` and ``target`` by path/id/name and returns every direct
+    edge in either direction. Each row carries ``edge_type``, an ``outbound``
+    flag (True when the edge runs source→target), the edge ``origin``
+    (inferred / structural / manual), its ``confidence`` (0.0-1.0 on inferred
+    edges), and the inferrer's ``reason`` string — the populated fields that
+    justify why the link exists. Returns ``[]`` when the two nodes share no
+    direct edge.
+    """
+    cypher = """
+    MATCH (a)-[r]-(b)
+    WHERE (a.path = $source OR a.id = $source OR a.name = $source)
+      AND (b.path = $target OR b.id = $target OR b.name = $target)
+    RETURN
+      coalesce(a.path, a.id, a.name) AS source,
+      coalesce(b.path, b.id, b.name) AS target,
+      type(r) AS edge_type,
+      startNode(r) = a AS outbound,
+      r.origin AS origin,
+      r.confidence AS confidence,
+      r.reason AS reason
+    """
+    return store.exec_read(cypher, {"source": source, "target": target})
+
+
+def ticket_dossier(store: GraphStore, ticket_id: str) -> dict[str, Any]:
+    """Assemble a ticket's whole neighborhood in one call.
+
+    Collapses the multi-call manual traversal the start-of-task workflow
+    otherwise needs. Returns the ticket's own properties plus every directly
+    connected node, each annotated with the connecting ``edge_type``, the
+    ``direction`` relative to the ticket, and the neighbor's ``summary`` /
+    ``title`` — the File and Section summaries are the real content, since the
+    Ticket node itself is typically a thin identifier. ``found`` is ``False``
+    (and ``neighbors`` empty) when no such ticket exists.
+    """
+    rows = store.exec_read(
+        """
+        MATCH (t:Ticket)
+        WHERE t.id = $id OR t.name = $id
+        WITH t LIMIT 1
+        OPTIONAL MATCH (t)-[r]-(n)
+        RETURN
+          coalesce(t.id, t.name) AS ticket,
+          properties(t) AS ticket_props,
+          type(r) AS edge_type,
+          startNode(r) = t AS outbound,
+          labels(n) AS neighbor_labels,
+          coalesce(n.path, n.id, n.name) AS neighbor,
+          n.summary AS neighbor_summary,
+          n.title AS neighbor_title
+        """,
+        {"id": ticket_id},
+    )
+    if not rows:
+        return {"ticket": ticket_id, "found": False, "properties": {}, "neighbors": []}
+    neighbors: list[dict[str, Any]] = []
+    for row in rows:
+        # OPTIONAL MATCH yields one all-null neighbor row for a ticket with no
+        # edges; skip it so an isolated ticket returns an empty neighbor list.
+        if row["edge_type"] is None:
+            continue
+        neighbors.append(
+            {
+                "edge_type": row["edge_type"],
+                "direction": "outbound" if row["outbound"] else "inbound",
+                "labels": row["neighbor_labels"],
+                "node": row["neighbor"],
+                "summary": row["neighbor_summary"],
+                "title": row["neighbor_title"],
+            }
+        )
+    return {
+        "ticket": rows[0]["ticket"],
+        "found": True,
+        "properties": _node_without_embedding(rows[0]["ticket_props"] or {}),
+        "neighbors": neighbors,
+    }
+
+
+def find_reusable(store: GraphStore, query: str, *, limit: int = 20) -> list[dict[str, Any]]:
+    """Return reusable Artifact nodes ranked by full-text relevance to ``query``.
+
+    Serves the reuse discipline (check for an existing artifact before creating
+    a new one). Full-text-searches ``Artifact.description`` and keeps only the
+    artifacts flagged ``reusable = true``. Requires entity content extraction to
+    have populated ``Artifact.description`` / ``reusable``; a graph indexed
+    before that returns ``[]``.
+    """
+    rows = store.full_text_search("Artifact", "description", query, k=max(limit, _DEFAULT_FETCH_K))
+    results: list[dict[str, Any]] = []
+    for row in rows:
+        node = row["node"]
+        if node.get("reusable") is True:
+            results.append(flatten_row(node, row["score"]))
+        if len(results) >= limit:
+            break
+    return results
+
+
+def list_entities(
+    store: GraphStore,
+    kind: str,
+    *,
+    prop: str | None = None,
+    value: str | None = None,
+    corpus: str | None = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """List nodes of an entity ``kind`` with their properties (embedding stripped).
+
+    Exploits the typed entity layer — e.g. all ``Integration`` nodes, or
+    ``Ticket`` nodes filtered by an equality predicate. ``kind`` must be a
+    declared ontology node type, and ``prop`` (when given) must be a declared
+    property of that type; both are validated against the ontology before being
+    interpolated into the query, so neither can inject. ``value`` and ``corpus``
+    are bound as parameters. Raises ``ValueError`` on an unknown kind/property.
+    """
+    if kind not in _ALLOWED_LABELS:
+        raise ValueError(f"Unknown entity kind: {kind!r}")
+    filters: list[str] = []
+    params: dict[str, Any] = {}
+    if corpus is not None:
+        filters.append("n.corpus = $corpus")
+        params["corpus"] = corpus
+    if prop is not None:
+        if prop not in _ONTOLOGY.node_types.get(kind, ()):
+            raise ValueError(f"Unknown property {prop!r} for kind {kind!r}")
+        filters.append(f"n.{prop} = $value")
+        params["value"] = value
+    where = ("WHERE " + " AND ".join(filters)) if filters else ""
+    cypher = f"""
+    MATCH (n:{kind})
+    {where}
+    RETURN labels(n) AS labels, properties(n) AS props
+    LIMIT {int(limit)}
+    """
+    rows = store.exec_read(cypher, params)
+    return [{"labels": row["labels"], **_node_without_embedding(row["props"])} for row in rows]

@@ -142,6 +142,79 @@ _GENERIC_TOOL_DESCRIPTORS: list[Tool] = [
             "required": ["cypher"],
         },
     ),
+    Tool(
+        name="get_node",
+        description=(
+            "Full labels + properties for one node, matched by path/id/name. "
+            "Entity-aware counterpart to get_file_summary (which is File-only)."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {"node_id": {"type": "string"}},
+            "required": ["node_id"],
+        },
+    ),
+    Tool(
+        name="explain_relationship",
+        description=(
+            "Direct edges between two nodes with provenance: edge type, "
+            "direction, origin (inferred/structural/manual), confidence, and the "
+            "inferrer's reason."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "source": {"type": "string"},
+                "target": {"type": "string"},
+            },
+            "required": ["source", "target"],
+        },
+    ),
+    Tool(
+        name="ticket_dossier",
+        description=(
+            "A ticket's whole neighborhood in one call: connected files, risks, "
+            "artifacts, and related tickets, each with edge type and summary."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {"ticket_id": {"type": "string"}},
+            "required": ["ticket_id"],
+        },
+    ),
+    Tool(
+        name="find_reusable",
+        description=(
+            "Reusable Artifact nodes ranked by full-text relevance to the query "
+            "(reusable=true only). Check before creating new artifacts."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "limit": {"type": "integer", "default": 20},
+            },
+            "required": ["query"],
+        },
+    ),
+    Tool(
+        name="list_entities",
+        description=(
+            "List nodes of an entity kind (e.g. Integration, Ticket) with their "
+            "properties, optionally filtered by a property equality and/or corpus."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "kind": {"type": "string"},
+                "prop": {"type": "string"},
+                "value": {"type": "string"},
+                "corpus": {"type": "string"},
+                "limit": {"type": "integer", "default": 50},
+            },
+            "required": ["kind"],
+        },
+    ),
 ]
 
 
@@ -223,6 +296,16 @@ def _dispatch_tool(
             return _text(tools.section_tree(store, **arguments))
         case "query_graph":
             return _text(tools.query_graph(store, arguments["cypher"]))
+        case "get_node":
+            return _text(tools.get_node(store, **arguments))
+        case "explain_relationship":
+            return _text(tools.explain_relationship(store, **arguments))
+        case "ticket_dossier":
+            return _text(tools.ticket_dossier(store, **arguments))
+        case "find_reusable":
+            return _text(tools.find_reusable(store, **arguments))
+        case "list_entities":
+            return _text(tools.list_entities(store, **arguments))
         case _:
             raise ValueError(f"Unknown tool: {name}")
 
