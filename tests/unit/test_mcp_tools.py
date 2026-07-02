@@ -163,6 +163,24 @@ def test_search_noncapable_label_skips_vector_leg() -> None:
     emb.embed.assert_not_called()
 
 
+def test_search_entity_label_uses_mapped_content_property() -> None:
+    """Entity kinds are searched against their declared content field, not the
+    File/Section `summary` property, so entity content is actually reachable."""
+    store = MagicMock()
+    store.full_text_search.return_value = []
+    tools.search(store, "auth bug", kind="Ticket")
+    store.full_text_search.assert_called_once_with("Ticket", "title", "auth bug", k=50)
+
+
+def test_search_artifact_label_uses_description_property() -> None:
+    store = MagicMock()
+    store.full_text_search.return_value = []
+    tools.search(store, "reusable script", kind="Artifact")
+    store.full_text_search.assert_called_once_with(
+        "Artifact", "description", "reusable script", k=50
+    )
+
+
 def test_search_mode_fulltext_skips_vector_and_embed() -> None:
     store = MagicMock()
     store.full_text_search.return_value = []

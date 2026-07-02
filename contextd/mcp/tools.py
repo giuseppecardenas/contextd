@@ -54,11 +54,31 @@ _VECTOR_CAPABLE_LABELS: Final[frozenset[str]] = frozenset({"File", "Section"})
 """Labels that carry BOTH a vector index and a full-text index and can
 therefore be searched hybridly. File and Section get both indexes from the
 Neo4j baseline + section-fulltext migrations; every other label is full-text
-only (Artifact) or neither (Pattern, Risk, …) and degrades to full-text.
+only (Artifact/Ticket/Pattern/Risk via the entity-content migrations) or
+neither (Technology, Client, …) and degrades to full-text.
 
 This is the third place index coverage is encoded — the migration DDL and
 ``contextd/storage/_keys.py`` are the others — and must change in lock-step
 with any future vector-index migration."""
+
+_SEARCH_PROPERTY_BY_LABEL: Final[dict[str, str]] = {
+    "File": "summary",
+    "Section": "summary",
+    "Artifact": "description",
+    "Ticket": "title",
+    "Pattern": "description",
+    "Risk": "description",
+}
+"""Full-text property searched per label. File/Section carry AI summaries;
+entity types carry their declared content field (populated by the indexer and
+indexed by the baseline/_0006 full-text migrations). Labels absent here fall
+back to ``summary`` — which only matches if such an index exists for them."""
+
+
+def _search_property(label: str) -> str:
+    """Return the full-text property to query for ``label`` (default summary)."""
+    return _SEARCH_PROPERTY_BY_LABEL.get(label, "summary")
+
 
 _DEFAULT_FETCH_K = 50
 
@@ -120,7 +140,7 @@ def search(
 
     ft_rows: list[dict[str, Any]] = []
     if mode != "vector":
-        ft_rows = store.full_text_search(label, "summary", query, k=fetch)
+        ft_rows = store.full_text_search(label, _search_property(label), query, k=fetch)
 
     vec_rows: list[dict[str, Any]] = []
     if want_vector:
