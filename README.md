@@ -64,7 +64,7 @@ Every edge carries one of three `origin` values:
 | `inferred` | AI-inferred semantic relationship. Wipe-and-replace on re-index. |
 | `manual` | Hand-authored. Never overwritten on re-index. |
 
-**Inferred edges attach to real nodes, never placeholders.** When inference references a `File` or `Section` (node types created only by indexing on-disk content), the edge is wired to the existing node — matched by canonical path/id, or for files by unique basename — or dropped if nothing matches. It never mints a stub. Only abstract entity types (`Pattern`, `Risk`, `Ticket`, `Technology`, …) are created on demand as inference targets. Node identity is a canonical forward-slash path, so re-indexing a file updates its node in place instead of creating a separator-variant duplicate.
+**Inferred edges attach to real nodes, never placeholders.** When inference references a `File` or `Section` (node types created only by indexing on-disk content), the edge is wired to the existing node — matched by canonical path/id, or for files by unique basename — or dropped if nothing matches. It never mints a stub. Only abstract entity types (`Pattern`, `Risk`, `Ticket`, `Technology`, …) are created on demand as inference targets, and these are populated with content properties the model extracts from the referencing file (filtered to each type's declared ontology fields, with the primary key protected). Node identity is a canonical forward-slash path, so re-indexing a file updates its node in place instead of creating a separator-variant duplicate.
 
 ### The GraphStore abstraction
 
@@ -214,10 +214,10 @@ contextd index notes --bootstrap
 
 Runs the five-phase bootstrap pipeline:
 
-1. **enumerate** — discovers files, computes embeddings at CREATE time.
+1. **enumerate** — discovers files, computes embeddings at CREATE time, stamps each node's `updated` timestamp.
 2. **embed** — accounting stub (embeddings already written in phase 1).
 3. **summarise** — calls Gemma once per file to generate `summary` and `key_points`.
-4. **relate** — calls Gemma once per file to infer typed edges between nodes.
+4. **relate** — calls Gemma once per file to infer typed edges between nodes and to populate the referenced entity nodes' content properties (title, description, and so on).
 5. **close** — persists corpus stats and checkpoint state.
 
 Progress is printed per phase:
@@ -881,6 +881,7 @@ Contextd is a single-user local tool. Its security posture reflects that:
 | Neo4j container won't start on port 7687 | Another backend already bound to the port | `contextd down` first, then switch `backend` in config and `contextd up` |
 | Edits from Windows don't trigger re-indexing | WSL2 inotify doesn't see Windows-side writes | Lower `sweep_interval_seconds` in config (see [periodic sweep](#periodic-sweep-wsl2--windows-side-edits)); or touch the file from WSL |
 | Large MCP search payloads | Embedding vectors included in results (pre-`96c409a`) | Update to latest; the `search` tool now strips embedding vectors from results |
+| Entity nodes (`Ticket`, `Artifact`, …) have no content, or `find_reusable` returns nothing | `~/.contextd/prompts/relate.md` predates entity-content extraction — prompt templates are copied to the home dir at `contextd init` and are not auto-updated, so the feature silently no-ops on an install created earlier | Copy the packaged `contextd/prompts/relate.md` over `~/.contextd/prompts/relate.md`, then `contextd index <corpus> --bootstrap --refresh inferred` to backfill entity content |
 
 ---
 
