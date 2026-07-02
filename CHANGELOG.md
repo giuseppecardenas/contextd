@@ -39,6 +39,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The MCP server builds a query-time embedder at startup and exposes a `mode`
   override on the `search` tool.
 
+**Upgrade note (existing installs):** entity content extraction depends on the
+updated `relate` prompt. `PromptRenderer` reads templates from
+`~/.contextd/prompts/` with no fallback to the packaged default, so an install
+created before this change keeps a stale `relate.md` and the feature silently
+no-ops (the extra template variable is ignored, no error). Refresh it by
+copying the packaged template over `~/.contextd/prompts/relate.md`, then
+re-index (`contextd index <corpus> --bootstrap --refresh inferred`) to backfill
+entity content on the existing graph.
+
 ### Removed
 
 - Memgraph storage backend and the `gqlalchemy` dependency. Neo4j Community is
