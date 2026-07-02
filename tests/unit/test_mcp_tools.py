@@ -7,6 +7,7 @@ surface that doesn't need a backend.
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -476,3 +477,63 @@ def test_timeline_topic_anchor_binds_topic() -> None:
     nodes_cypher, nodes_params = store.exec_read.call_args_list[0][0]
     assert nodes_params == {"topic": "logging"}
     assert "CONTAINS toLower($topic)" in nodes_cypher
+
+
+# -- ask ------------------------------------------------------------------
+
+
+def test_ask_translates_then_runs_and_returns_both() -> None:
+    store = MagicMock()
+    store.exec_read.return_value = [{"path": "a.md"}]
+    translator = MagicMock()
+    translator.translate.return_value = "MATCH (n:File) RETURN n.path AS path"
+    result = tools.ask(store, translator, "which files?", corpus="notes")
+    translator.translate.assert_called_once_with("which files?", corpus="notes")
+    assert result == {
+        "cypher": "MATCH (n:File) RETURN n.path AS path",
+        "rows": [{"path": "a.md"}],
+    }
+
+
+def test_ask_without_translator_raises() -> None:
+    store = MagicMock()
+    with pytest.raises(ValueError, match="no inference provider"):
+        tools.ask(store, None, "q")
+
+
+# -- grep_corpus ----------------------------------------------------------
+
+
+def test_grep_corpus_matches_file_contents(tmp_path: Path) -> None:
+    """grep_corpus reads real files (the graph has no bodies) and returns
+    line matches scoped to a corpus's include globs."""
+    root = tmp_path / "notes"
+    root.mkdir()
+    (root / "a.md").write_text("first line\nFLAG_XYZ appears here\nlast line\n")
+    (root / "b.md").write_text("nothing relevant\n")
+    corpora = tmp_path / "corpora"
+    corpora.mkdir()
+    (corpora / "c.toml").write_text(
+        f'[corpus]\nname = "c"\nroot = "{root.as_posix()}"\ninclude = ["**/*.md"]\n'
+    )
+
+    matches = tools.grep_corpus(tmp_path, r"FLAG_[A-Z]+", corpus="c")
+
+    assert len(matches) == 1
+    assert matches[0]["corpus"] == "c"
+    assert matches[0]["line"] == 2
+    assert "FLAG_XYZ" in matches[0]["text"]
+
+
+def test_grep_corpus_respects_limit(tmp_path: Path) -> None:
+    root = tmp_path / "notes"
+    root.mkdir()
+    (root / "a.md").write_text("hit\nhit\nhit\nhit\n")
+    corpora = tmp_path / "corpora"
+    corpora.mkdir()
+    (corpora / "c.toml").write_text(
+        f'[corpus]\nname = "c"\nroot = "{root.as_posix()}"\ninclude = ["**/*.md"]\n'
+    )
+
+    matches = tools.grep_corpus(tmp_path, "hit", corpus="c", limit=2)
+    assert len(matches) == 2

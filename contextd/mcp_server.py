@@ -28,14 +28,21 @@ from mcp.types import Tool
 
 from contextd._paths import contextd_home
 from contextd.config import Config, SearchConfig
+from contextd.inference.prompts import PromptRenderer
+from contextd.inference.translate import QueryTranslator
 from contextd.mcp import tools
 from contextd.mcp.corpus_tools import (
     CorpusTool,
     build_tool_descriptors,
     dispatch_corpus_tool,
 )
+from contextd.ontology.schema import Ontology
 from contextd.providers.base import EmbeddingProvider
-from contextd.providers.factory import ProviderFactoryError, build_embedding_provider
+from contextd.providers.factory import (
+    ProviderFactoryError,
+    build_embedding_provider,
+    build_inference_provider,
+)
 from contextd.storage.base import GraphStore
 from contextd.storage.factory import build_graph_store
 
@@ -277,6 +284,39 @@ _GENERIC_TOOL_DESCRIPTORS: list[Tool] = [
             },
         },
     ),
+    Tool(
+        name="ask",
+        description=(
+            "Natural-language question answered by translating to Cypher and "
+            "running it. Returns the generated cypher and the rows. Requires an "
+            "inference provider; one LLM call per invocation."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "question": {"type": "string"},
+                "corpus": {"type": "string"},
+            },
+            "required": ["question"],
+        },
+    ),
+    Tool(
+        name="grep_corpus",
+        description=(
+            "Regex search over corpus file contents on disk, for exact strings "
+            "(flag names, ids, config keys) that summaries paraphrase away. "
+            "Scoped to one corpus or all."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "pattern": {"type": "string"},
+                "corpus": {"type": "string"},
+                "limit": {"type": "integer", "default": 100},
+            },
+            "required": ["pattern"],
+        },
+    ),
 ]
 
 
@@ -299,6 +339,8 @@ def _dispatch_tool(
     *,
     embedder: EmbeddingProvider | None = None,
     search_cfg: SearchConfig | None = None,
+    translator: QueryTranslator | None = None,
+    home: Path | None = None,
 ) -> Any:
     """Route a tool-call to the right tools.X body.
 
@@ -376,6 +418,26 @@ def _dispatch_tool(
             return _text(tools.whats_new(store, **arguments))
         case "timeline":
             return _text(tools.timeline(store, **arguments))
+        case "ask":
+            return _text(
+                tools.ask(
+                    store,
+                    translator,
+                    arguments["question"],
+                    corpus=arguments.get("corpus"),
+                )
+            )
+        case "grep_corpus":
+            if home is None:
+                raise ValueError("grep_corpus requires the contextd home directory")
+            return _text(
+                tools.grep_corpus(
+                    home,
+                    arguments["pattern"],
+                    corpus=arguments.get("corpus"),
+                    limit=arguments.get("limit", 100),
+                )
+            )
         case _:
             raise ValueError(f"Unknown tool: {name}")
 
@@ -401,6 +463,20 @@ async def run() -> None:
         except ProviderFactoryError:
             embedder = None
 
+        # Build the NL->Cypher translator for the `ask` tool, mirroring the
+        # embedder's degrade-to-None pattern: a missing inference provider (no
+        # API key, etc.) leaves the server running with `ask` disabled rather
+        # than failing startup.
+        translator: QueryTranslator | None
+        try:
+            translator = QueryTranslator(
+                provider=build_inference_provider(cfg),
+                renderer=PromptRenderer(home / "prompts"),
+                ontology=Ontology.load_base(),
+            )
+        except ProviderFactoryError:
+            translator = None
+
         server: Server[Any] = Server("contextd")
 
         # Build the full tool list (generic 8 + per-corpus) and the
@@ -424,6 +500,8 @@ async def run() -> None:
                     corpus_registry,
                     embedder=embedder,
                     search_cfg=cfg.search,
+                    translator=translator,
+                    home=home,
                 )
             except Exception as exc:
                 # Render the error as the tool's text payload so the MCP

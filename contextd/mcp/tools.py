@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
-from typing import Any, Final, Literal
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 from contextd.mcp.readonly_guard import assert_read_only
 from contextd.ontology.schema import Ontology
 from contextd.providers.base import EmbeddingProvider
 from contextd.search.fusion import flatten_row, reciprocal_rank_fusion
 from contextd.storage.base import GraphStore
+
+if TYPE_CHECKING:
+    from contextd.inference.translate import QueryTranslator
 
 # Base-ontology node types, loaded once. Used to validate the ``kind`` label and
 # any property name that ``list_entities`` interpolates into Cypher, so a
@@ -603,3 +608,80 @@ def timeline(
         "nodes": store.exec_read(nodes_cypher, params),
         "supersedes": store.exec_read(supersedes_cypher, params),
     }
+
+
+def ask(
+    store: GraphStore,
+    translator: QueryTranslator | None,
+    question: str,
+    *,
+    corpus: str | None = None,
+) -> dict[str, Any]:
+    """Answer a natural-language question by translating it to Cypher and running it.
+
+    Reuses the same NL→Cypher translator as the CLI ``ask`` command. Returns
+    both the generated ``cypher`` and the resulting ``rows`` so the caller can
+    inspect what ran and always has the node-level path underneath the answer
+    (this tool must never be the only route to the underlying nodes). The
+    translator applies the read-only guard to its own output before this runs,
+    so the query is guaranteed read-only. Raises ``ValueError`` when no
+    inference provider is configured (``translator is None``), and surfaces the
+    translator's own errors (e.g. a missing ``prompts/translate`` template) to
+    the caller.
+    """
+    if translator is None:
+        raise ValueError("ask is unavailable: no inference provider is configured")
+    cypher = translator.translate(question, corpus=corpus)
+    return {"cypher": cypher, "rows": store.exec_read(cypher, {})}
+
+
+def grep_corpus(
+    home: Path,
+    pattern: str,
+    *,
+    corpus: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """Regex search over corpus file *contents* on disk, scoped to a corpus.
+
+    The graph stores summaries and metadata, not file bodies, so exact strings
+    a summary paraphrases away (a flag name, an id, a config key) are only
+    findable by reading the source files. This walks the corpus's declared
+    include/exclude globs (reusing the indexer's ``enumerate_corpus_files``) and
+    returns up to ``limit`` line matches as ``{corpus, path, line, text}``.
+    ``corpus`` selects one registered corpus; when omitted, every registered
+    corpus is searched. Invalid regex raises ``re.error`` to the caller.
+    """
+    from contextd.corpus_config import CorpusConfig
+    from contextd.indexer.pipeline import enumerate_corpus_files
+
+    regex = re.compile(pattern)
+    corpora_dir = home / "corpora"
+    toml_paths = (
+        [corpora_dir / f"{corpus}.toml"]
+        if corpus is not None
+        else sorted(corpora_dir.glob("*.toml"))
+    )
+    matches: list[dict[str, Any]] = []
+    for toml_path in toml_paths:
+        if not toml_path.exists():
+            continue
+        cfg = CorpusConfig.load(toml_path)
+        for file_path in enumerate_corpus_files(cfg):
+            try:
+                text = file_path.read_text(errors="replace")
+            except OSError:
+                continue
+            for line_no, line in enumerate(text.splitlines(), start=1):
+                if regex.search(line):
+                    matches.append(
+                        {
+                            "corpus": cfg.corpus.name,
+                            "path": str(file_path),
+                            "line": line_no,
+                            "text": line.strip()[:400],
+                        }
+                    )
+                    if len(matches) >= limit:
+                        return matches
+    return matches

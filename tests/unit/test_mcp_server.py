@@ -62,6 +62,8 @@ def test_generic_tool_descriptors_registers_expected_set() -> None:
         "find_contradictions",
         "whats_new",
         "timeline",
+        "ask",
+        "grep_corpus",
     }
 
 
@@ -144,6 +146,26 @@ def test_dispatch_search_defaults_to_fulltext_without_embedder() -> None:
     assert payload[0]["type"] == "text"
     store.full_text_search.assert_called_once_with("File", "summary", "q", k=50)
     store.vector_search.assert_not_called()
+
+
+def test_dispatch_ask_threads_translator() -> None:
+    """The ask arm uses the threaded translator to produce Cypher, then runs it."""
+    store = MagicMock()
+    store.exec_read.return_value = [{"path": "a.md"}]
+    translator = MagicMock()
+    translator.translate.return_value = "MATCH (n:File) RETURN n.path AS path"
+    result = _dispatch_tool("ask", {"question": "which files?"}, store, translator=translator)
+    payload = json.loads(result[0]["text"])
+    assert payload["cypher"] == "MATCH (n:File) RETURN n.path AS path"
+    assert payload["rows"] == [{"path": "a.md"}]
+
+
+def test_dispatch_grep_corpus_requires_home() -> None:
+    """grep_corpus needs the home dir; _dispatch_tool raises without it (the
+    _call handler is what renders raised errors as payloads in the live server)."""
+    store = MagicMock()
+    with pytest.raises(ValueError, match="home directory"):
+        _dispatch_tool("grep_corpus", {"pattern": "x"}, store, home=None)
 
 
 # -- Per-corpus tool dispatch via _dispatch_tool --------------------------
