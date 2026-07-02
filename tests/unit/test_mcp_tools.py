@@ -365,3 +365,54 @@ def test_list_entities_interpolates_validated_label_and_binds_values() -> None:
     assert "n.corpus = $corpus" in cypher
     assert params == {"corpus": "c", "value": "open"}
     assert rows == [{"labels": ["Ticket"], "id": "INTENG-1", "status": "open"}]
+
+
+# -- check_freshness ------------------------------------------------------
+
+
+def test_check_freshness_requires_a_scope() -> None:
+    store = MagicMock()
+    with pytest.raises(ValueError, match="requires node_id or corpus"):
+        tools.check_freshness(store)
+
+
+def test_check_freshness_node_scope_binds_id_and_types() -> None:
+    store = MagicMock()
+    store.exec_read.return_value = []
+    tools.check_freshness(store, node_id="a.md")
+    cypher, params = store.exec_read.call_args[0]
+    assert params == {"types": ["SUPERSEDES", "CONTRADICTS", "NEEDS_UPDATE"], "id": "a.md"}
+    assert "type(r) IN $types" in cypher
+    assert "a.md" not in cypher  # bound, not f-strung
+
+
+def test_check_freshness_corpus_scope_binds_corpus() -> None:
+    store = MagicMock()
+    store.exec_read.return_value = []
+    tools.check_freshness(store, corpus="notes")
+    cypher, params = store.exec_read.call_args[0]
+    assert params["corpus"] == "notes"
+    assert "a.corpus = $corpus" in cypher
+
+
+# -- find_contradictions --------------------------------------------------
+
+
+def test_find_contradictions_no_topic_has_no_where() -> None:
+    store = MagicMock()
+    store.exec_read.return_value = []
+    tools.find_contradictions(store)
+    cypher, params = store.exec_read.call_args[0]
+    assert "CONTRADICTS" in cypher
+    assert "WHERE" not in cypher
+    assert params == {}
+
+
+def test_find_contradictions_topic_adds_summary_filter() -> None:
+    store = MagicMock()
+    store.exec_read.return_value = []
+    tools.find_contradictions(store, topic="logging")
+    cypher, params = store.exec_read.call_args[0]
+    assert params == {"topic": "logging"}
+    assert "CONTAINS toLower($topic)" in cypher
+    assert "logging" not in cypher  # bound, not f-strung

@@ -420,3 +420,87 @@ def list_entities(
     """
     rows = store.exec_read(cypher, params)
     return [{"labels": row["labels"], **_node_without_embedding(row["props"])} for row in rows]
+
+
+# Edge types that signal a node may be stale or in conflict. Read directly off
+# the graph; the values are unvalidated inferences, so callers should treat a
+# hit as a prompt to check rather than proof.
+_FRESHNESS_EDGE_TYPES: Final[list[str]] = ["SUPERSEDES", "CONTRADICTS", "NEEDS_UPDATE"]
+
+
+def check_freshness(
+    store: GraphStore,
+    *,
+    node_id: str | None = None,
+    corpus: str | None = None,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    """Return freshness-signalling edges (SUPERSEDES / CONTRADICTS / NEEDS_UPDATE).
+
+    Scope by ``node_id`` (edges incident to one node, either direction) or by
+    ``corpus`` (every such edge with an endpoint in the corpus). Each row gives
+    ``source``/``target`` identities, the ``edge_type``, and the edge
+    ``origin``/``confidence``/``reason`` so a caller can judge whether a hit is
+    still true before acting on it. Raises ``ValueError`` if neither scope is
+    given. The underlying edges are unvalidated inferences and are typically
+    few; an empty result means none were inferred, not that the node is
+    definitively current.
+    """
+    if not node_id and not corpus:
+        raise ValueError("check_freshness requires node_id or corpus")
+    params: dict[str, Any] = {"types": _FRESHNESS_EDGE_TYPES}
+    if node_id:
+        scope = (
+            "(a.path = $id OR a.id = $id OR a.name = $id "
+            "OR b.path = $id OR b.id = $id OR b.name = $id)"
+        )
+        params["id"] = node_id
+    else:
+        scope = "(a.corpus = $corpus OR b.corpus = $corpus)"
+        params["corpus"] = corpus
+    cypher = f"""
+    MATCH (a)-[r]->(b)
+    WHERE type(r) IN $types AND {scope}
+    RETURN coalesce(a.path, a.id, a.name) AS source,
+           coalesce(b.path, b.id, b.name) AS target,
+           type(r) AS edge_type,
+           r.origin AS origin,
+           r.confidence AS confidence,
+           r.reason AS reason
+    LIMIT {int(limit)}
+    """
+    return store.exec_read(cypher, params)
+
+
+def find_contradictions(
+    store: GraphStore, topic: str | None = None, *, limit: int = 50
+) -> list[dict[str, Any]]:
+    """Return CONTRADICTS edge pairs, optionally narrowed by ``topic``.
+
+    Surfaces conflicting guidance so a caller can reconcile it rather than
+    following the first match. When ``topic`` is given, only pairs where either
+    endpoint's summary contains the topic (case-insensitive) are returned. Each
+    row carries both endpoints' identities and summaries plus the edge
+    ``confidence``/``reason``. This edge type is sparse in practice, so an empty
+    result is common and expected.
+    """
+    params: dict[str, Any] = {}
+    where = ""
+    if topic:
+        params["topic"] = topic
+        where = (
+            "WHERE toLower(coalesce(a.summary, '')) CONTAINS toLower($topic) "
+            "OR toLower(coalesce(b.summary, '')) CONTAINS toLower($topic)"
+        )
+    cypher = f"""
+    MATCH (a)-[r:CONTRADICTS]->(b)
+    {where}
+    RETURN coalesce(a.path, a.id, a.name) AS source,
+           coalesce(b.path, b.id, b.name) AS target,
+           a.summary AS source_summary,
+           b.summary AS target_summary,
+           r.confidence AS confidence,
+           r.reason AS reason
+    LIMIT {int(limit)}
+    """
+    return store.exec_read(cypher, params)

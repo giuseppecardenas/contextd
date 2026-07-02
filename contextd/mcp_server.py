@@ -215,6 +215,36 @@ _GENERIC_TOOL_DESCRIPTORS: list[Tool] = [
             "required": ["kind"],
         },
     ),
+    Tool(
+        name="check_freshness",
+        description=(
+            "Freshness signals (SUPERSEDES/CONTRADICTS/NEEDS_UPDATE edges) for a "
+            "node or across a corpus, so a caller can judge whether a hit is "
+            "still current. Supply node_id or corpus."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "node_id": {"type": "string"},
+                "corpus": {"type": "string"},
+                "limit": {"type": "integer", "default": 200},
+            },
+        },
+    ),
+    Tool(
+        name="find_contradictions",
+        description=(
+            "CONTRADICTS edge pairs, optionally narrowed to a topic, so "
+            "conflicting guidance can be reconciled. Sparse; often empty."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "topic": {"type": "string"},
+                "limit": {"type": "integer", "default": 50},
+            },
+        },
+    ),
 ]
 
 
@@ -306,6 +336,10 @@ def _dispatch_tool(
             return _text(tools.find_reusable(store, **arguments))
         case "list_entities":
             return _text(tools.list_entities(store, **arguments))
+        case "check_freshness":
+            return _text(tools.check_freshness(store, **arguments))
+        case "find_contradictions":
+            return _text(tools.find_contradictions(store, **arguments))
         case _:
             raise ValueError(f"Unknown tool: {name}")
 

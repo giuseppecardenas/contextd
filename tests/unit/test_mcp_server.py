@@ -58,6 +58,8 @@ def test_generic_tool_descriptors_registers_expected_set() -> None:
         "ticket_dossier",
         "find_reusable",
         "list_entities",
+        "check_freshness",
+        "find_contradictions",
     }
 
 
