@@ -91,3 +91,120 @@ def test_query_graph_rejects_writes(backend) -> None:
 
     with pytest.raises(ReadOnlyGuardError):
         tools.query_graph(backend, "CREATE (n:File {path: 'x'})")
+
+
+def test_get_node_and_list_entities_read_populated_entity(backend) -> None:  # type: ignore[no-untyped-def]
+    """A populated entity node is fully readable via get_node and enumerable
+    via list_entities — the gap the entity-content work closes."""
+    from contextd.mcp import tools
+
+    backend.upsert_node(
+        "Ticket",
+        {"id": "INTENG-1", "title": "Fix auth", "status": "open", "corpus": "c"},
+    )
+
+    node = tools.get_node(backend, "INTENG-1")
+    assert node is not None
+    assert node["labels"] == ["Ticket"]
+    assert node["title"] == "Fix auth"
+    assert node["status"] == "open"
+
+    listed = tools.list_entities(backend, "Ticket", prop="status", value="open", corpus="c")
+    assert [row["id"] for row in listed] == ["INTENG-1"]
+
+
+def test_search_reaches_entity_content(backend) -> None:  # type: ignore[no-untyped-def]
+    """search(kind='Ticket') hits Ticket_title_ft (migration _0006) via the
+    per-label property mapping — entity content is actually searchable."""
+    from contextd.mcp import tools
+
+    backend.upsert_node("Ticket", {"id": "INTENG-1", "title": "authentication bug", "corpus": "c"})
+    backend.upsert_node("Ticket", {"id": "INTENG-2", "title": "unrelated billing", "corpus": "c"})
+
+    hits = tools.search(backend, "authentication", kind="Ticket", limit=5)
+    assert [h["id"] for h in hits] == ["INTENG-1"]
+
+
+def test_explain_relationship_returns_edge_provenance(backend) -> None:  # type: ignore[no-untyped-def]
+    from contextd.mcp import tools
+
+    backend.upsert_node("File", {"path": "a.md", "hash": "h", "corpus": "c"})
+    backend.upsert_node("Ticket", {"id": "INTENG-1", "title": "t", "corpus": "c"})
+    backend.upsert_edge(
+        "a.md",
+        "INTENG-1",
+        "REFERENCES",
+        origin="inferred",
+        properties={"confidence": 0.9, "reason": "the file references the ticket"},
+        src_label="File",
+        dst_label="Ticket",
+    )
+
+    rows = tools.explain_relationship(backend, "a.md", "INTENG-1")
+    assert len(rows) == 1
+    assert rows[0]["edge_type"] == "REFERENCES"
+    assert rows[0]["origin"] == "inferred"
+    assert rows[0]["confidence"] == 0.9
+    assert rows[0]["reason"] == "the file references the ticket"
+    assert rows[0]["outbound"] is True
+
+
+def test_find_reusable_filters_by_reusable_flag(backend) -> None:  # type: ignore[no-untyped-def]
+    """Both Artifacts match the query text; only the reusable one is returned."""
+    from contextd.mcp import tools
+
+    backend.upsert_node(
+        "Artifact",
+        {"id": "A1", "description": "reusable deployment script", "reusable": True, "corpus": "c"},
+    )
+    backend.upsert_node(
+        "Artifact",
+        {"id": "A2", "description": "one-off deployment note", "reusable": False, "corpus": "c"},
+    )
+
+    rows = tools.find_reusable(backend, "deployment")
+    assert [r["id"] for r in rows] == ["A1"]
+
+
+def test_check_freshness_surfaces_needs_update(backend) -> None:  # type: ignore[no-untyped-def]
+    from contextd.mcp import tools
+
+    backend.upsert_node("File", {"path": "old.md", "hash": "h", "corpus": "c"})
+    backend.upsert_node("File", {"path": "new.md", "hash": "h", "corpus": "c"})
+    backend.upsert_edge(
+        "old.md",
+        "new.md",
+        "NEEDS_UPDATE",
+        origin="inferred",
+        properties={"confidence": 0.8, "reason": "superseded guidance"},
+        src_label="File",
+        dst_label="File",
+    )
+
+    rows = tools.check_freshness(backend, node_id="old.md")
+    assert any(
+        r["edge_type"] == "NEEDS_UPDATE" and r["reason"] == "superseded guidance" for r in rows
+    )
+
+
+def test_whats_new_returns_recently_updated_nodes(backend) -> None:  # type: ignore[no-untyped-def]
+    import datetime as dt
+
+    from contextd.mcp import tools
+
+    backend.upsert_node(
+        "File",
+        {
+            "path": "fresh.md",
+            "hash": "h",
+            "corpus": "c",
+            "summary": "s",
+            "updated": dt.datetime(2026, 6, 1, tzinfo=dt.UTC),
+        },
+    )
+
+    hits = tools.whats_new(backend, "2026-01-01T00:00:00Z", corpus="c")
+    assert [h["node"] for h in hits] == ["fresh.md"]
+
+    none = tools.whats_new(backend, "2026-12-01T00:00:00Z", corpus="c")
+    assert none == []
