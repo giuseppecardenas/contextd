@@ -60,6 +60,8 @@ def test_generic_tool_descriptors_registers_expected_set() -> None:
         "list_entities",
         "check_freshness",
         "find_contradictions",
+        "whats_new",
+        "timeline",
     }
 
 

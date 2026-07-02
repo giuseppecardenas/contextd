@@ -504,3 +504,102 @@ def find_contradictions(
     LIMIT {int(limit)}
     """
     return store.exec_read(cypher, params)
+
+
+def whats_new(
+    store: GraphStore, since: str, *, corpus: str | None = None, limit: int = 50
+) -> list[dict[str, Any]]:
+    """Return nodes changed at or after ``since``, newest first.
+
+    ``since`` is an ISO-8601 timestamp; it is parsed by Neo4j's ``datetime()``
+    and compared against the node ``updated`` stamp the indexer writes at
+    enumerate time. Only File and Section nodes carry ``updated`` (they are the
+    on-disk-backed, content-bearing nodes), so this reports changed source
+    documents — which is what a caller catching up on an evolving corpus wants.
+    Optionally scoped to a ``corpus``. Returns ``[]`` on a graph indexed before
+    the ``updated`` stamp existed (re-bootstrap to backfill).
+    """
+    filters = ["n.updated IS NOT NULL", "n.updated >= datetime($since)"]
+    params: dict[str, Any] = {"since": since}
+    if corpus is not None:
+        filters.append("n.corpus = $corpus")
+        params["corpus"] = corpus
+    where = "WHERE " + " AND ".join(filters)
+    cypher = f"""
+    MATCH (n)
+    {where}
+    RETURN coalesce(n.path, n.id, n.name) AS node,
+           labels(n) AS labels,
+           n.summary AS summary,
+           n.updated AS updated
+    ORDER BY n.updated DESC
+    LIMIT {int(limit)}
+    """
+    return store.exec_read(cypher, params)
+
+
+def timeline(
+    store: GraphStore,
+    node_id: str | None = None,
+    topic: str | None = None,
+    *,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """Chronological view of nodes relevant to an anchor, with SUPERSEDES chains.
+
+    Anchor by ``node_id`` (the node and its direct neighbors) or by ``topic``
+    (nodes whose summary contains the topic, case-insensitive). Returns
+    ``nodes`` ordered newest-first by ``updated`` (falling back to
+    ``inferred_at``), plus ``supersedes`` — the SUPERSEDES edges in scope,
+    each as a newer→older pair — so the caller sees how a decision evolved
+    rather than a flat neighbor set. Raises ``ValueError`` if neither anchor is
+    given.
+    """
+    if not node_id and not topic:
+        raise ValueError("timeline requires node_id or topic")
+    params: dict[str, Any] = {}
+    if node_id:
+        params["id"] = node_id
+        node_match = (
+            "MATCH (anchor) WHERE anchor.path = $id OR anchor.id = $id OR anchor.name = $id "
+            "WITH anchor LIMIT 1 "
+            "MATCH (anchor)-[]-(n) WITH DISTINCT n"
+        )
+        sup_scope = (
+            "(a.path = $id OR a.id = $id OR a.name = $id "
+            "OR b.path = $id OR b.id = $id OR b.name = $id)"
+        )
+    else:
+        params["topic"] = topic
+        node_match = (
+            "MATCH (n) WHERE toLower(coalesce(n.summary, '')) CONTAINS toLower($topic) "
+            "WITH DISTINCT n"
+        )
+        sup_scope = (
+            "(toLower(coalesce(a.summary, '')) CONTAINS toLower($topic) "
+            "OR toLower(coalesce(b.summary, '')) CONTAINS toLower($topic))"
+        )
+    nodes_cypher = f"""
+    {node_match}
+    WHERE n.updated IS NOT NULL OR n.inferred_at IS NOT NULL
+    RETURN coalesce(n.path, n.id, n.name) AS node,
+           labels(n) AS labels,
+           n.summary AS summary,
+           n.updated AS updated,
+           n.inferred_at AS inferred_at
+    ORDER BY coalesce(n.updated, n.inferred_at) DESC
+    LIMIT {int(limit)}
+    """
+    supersedes_cypher = f"""
+    MATCH (a)-[r:SUPERSEDES]->(b)
+    WHERE {sup_scope}
+    RETURN coalesce(a.path, a.id, a.name) AS newer,
+           coalesce(b.path, b.id, b.name) AS older,
+           r.confidence AS confidence,
+           r.reason AS reason
+    LIMIT {int(limit)}
+    """
+    return {
+        "nodes": store.exec_read(nodes_cypher, params),
+        "supersedes": store.exec_read(supersedes_cypher, params),
+    }

@@ -416,3 +416,63 @@ def test_find_contradictions_topic_adds_summary_filter() -> None:
     assert params == {"topic": "logging"}
     assert "CONTAINS toLower($topic)" in cypher
     assert "logging" not in cypher  # bound, not f-strung
+
+
+# -- whats_new ------------------------------------------------------------
+
+
+def test_whats_new_binds_since_and_orders_by_updated() -> None:
+    store = MagicMock()
+    store.exec_read.return_value = []
+    tools.whats_new(store, "2026-06-01T00:00:00Z", corpus="notes")
+    cypher, params = store.exec_read.call_args[0]
+    assert params == {"since": "2026-06-01T00:00:00Z", "corpus": "notes"}
+    assert "n.updated >= datetime($since)" in cypher
+    assert "ORDER BY n.updated DESC" in cypher
+    assert "n.corpus = $corpus" in cypher
+
+
+# -- timeline -------------------------------------------------------------
+
+
+def test_timeline_requires_an_anchor() -> None:
+    store = MagicMock()
+    with pytest.raises(ValueError, match="requires node_id or topic"):
+        tools.timeline(store)
+
+
+def test_timeline_node_anchor_returns_nodes_and_supersedes() -> None:
+    store = MagicMock()
+    store.exec_read.side_effect = [
+        [
+            {
+                "node": "a.md",
+                "labels": ["File"],
+                "summary": "s",
+                "updated": None,
+                "inferred_at": None,
+            }
+        ],
+        [{"newer": "a.md", "older": "old.md", "confidence": 0.9, "reason": "why"}],
+    ]
+    result = tools.timeline(store, node_id="a.md")
+    # Two reads: the ordered nodes, then the SUPERSEDES chains.
+    assert store.exec_read.call_count == 2
+    nodes_params = store.exec_read.call_args_list[0][0][1]
+    assert nodes_params == {"id": "a.md"}
+    assert result["nodes"][0]["node"] == "a.md"
+    assert result["supersedes"][0] == {
+        "newer": "a.md",
+        "older": "old.md",
+        "confidence": 0.9,
+        "reason": "why",
+    }
+
+
+def test_timeline_topic_anchor_binds_topic() -> None:
+    store = MagicMock()
+    store.exec_read.side_effect = [[], []]
+    tools.timeline(store, topic="logging")
+    nodes_cypher, nodes_params = store.exec_read.call_args_list[0][0]
+    assert nodes_params == {"topic": "logging"}
+    assert "CONTAINS toLower($topic)" in nodes_cypher

@@ -245,6 +245,38 @@ _GENERIC_TOOL_DESCRIPTORS: list[Tool] = [
             },
         },
     ),
+    Tool(
+        name="whats_new",
+        description=(
+            "Nodes changed at or after an ISO-8601 timestamp, newest first — "
+            "changed source documents for catching up on an evolving corpus. "
+            "Optionally scoped to a corpus."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "since": {"type": "string", "description": "ISO-8601 timestamp."},
+                "corpus": {"type": "string"},
+                "limit": {"type": "integer", "default": 50},
+            },
+            "required": ["since"],
+        },
+    ),
+    Tool(
+        name="timeline",
+        description=(
+            "Chronological view of nodes relevant to a node or topic, plus the "
+            "SUPERSEDES chains among them, to show how a decision evolved."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "node_id": {"type": "string"},
+                "topic": {"type": "string"},
+                "limit": {"type": "integer", "default": 50},
+            },
+        },
+    ),
 ]
 
 
@@ -340,6 +372,10 @@ def _dispatch_tool(
             return _text(tools.check_freshness(store, **arguments))
         case "find_contradictions":
             return _text(tools.find_contradictions(store, **arguments))
+        case "whats_new":
+            return _text(tools.whats_new(store, **arguments))
+        case "timeline":
+            return _text(tools.timeline(store, **arguments))
         case _:
             raise ValueError(f"Unknown tool: {name}")
 
