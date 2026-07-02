@@ -387,12 +387,23 @@ If `contextd-mcp` is not on your PATH (e.g., when using a venv), use the absolut
 | Tool | What it does |
 |---|---|
 | `describe_project` | Top-N File nodes by inbound-citation count with summaries. Accepts `corpus` and `n` (default 40). |
-| `search` | Hybrid search over summaries: vector (embedding) similarity and full-text (BM25) results fused by reciprocal rank fusion. Accepts `query`, optional `kind` (default `File`; `Section` also works in section-granular corpora), optional `limit` (default 20), and optional `mode` (`hybrid` / `fulltext` / `vector`). Degrades to full-text when no embedder is configured or the `kind` has no vector index. |
+| `search` | Hybrid search: vector (embedding) similarity and full-text (BM25) fused by reciprocal rank fusion. Accepts `query`, optional `kind` (default `File`; `Section`, and the entity kinds `Artifact` / `Ticket` / `Pattern` / `Risk`, are searched against their content field), optional `limit` (default 20), and optional `mode` (`hybrid` / `fulltext` / `vector`). Degrades to full-text when no embedder is configured or the `kind` has no vector index. |
 | `related` | Outbound + inbound traversal within N hops (1–5). Accepts `node_id` and `depth` (default 2). |
 | `inbound` | What cites this node? Accepts `node_id`. |
 | `outbound` | What does this node cite? Accepts `node_id`. |
 | `get_file_summary` | Summary + key points for a single file. Accepts `path`. |
+| `get_node` | Full labels + properties for one node, matched by path/id/name (embedding stripped). The entity-aware counterpart to `get_file_summary`. Accepts `node_id`. |
 | `section_tree` | Outline of a file (section-granular corpora only). Accepts `file_path`. |
+| `explain_relationship` | Direct edges between two nodes with provenance: edge type, direction, `origin`, `confidence`, and the inferrer's `reason`. Accepts `source` and `target`. |
+| `ticket_dossier` | A ticket's whole neighborhood in one call (connected files, risks, artifacts, related tickets), each with edge type and summary. Accepts `ticket_id`. |
+| `find_reusable` | Reusable `Artifact` nodes ranked by full-text relevance (`reusable = true` only). Accepts `query` and optional `limit`. |
+| `list_entities` | Nodes of an entity `kind` with their properties, optionally filtered by a property equality (`prop`/`value`) and/or `corpus`. Accepts `kind` and optional `prop`, `value`, `corpus`, `limit`. |
+| `check_freshness` | Freshness signals (`SUPERSEDES` / `CONTRADICTS` / `NEEDS_UPDATE` edges) for a node or across a corpus, with `origin`/`confidence`/`reason`. Accepts `node_id` or `corpus`. |
+| `find_contradictions` | `CONTRADICTS` edge pairs, optionally narrowed by `topic`. Sparse; often empty. |
+| `whats_new` | Nodes changed at or after an ISO-8601 timestamp, newest first (the File/Section `updated` stamp). Accepts `since` and optional `corpus`, `limit`. |
+| `timeline` | Chronological view of nodes relevant to a node or `topic`, plus the `SUPERSEDES` chains among them. Accepts `node_id` or `topic`. |
+| `ask` | Natural-language question translated to Cypher and run; returns the generated `cypher` and `rows`. Requires an inference provider (one LLM call per invocation). Accepts `question` and optional `corpus`. |
+| `grep_corpus` | Regex search over corpus file contents on disk, for exact strings that summaries paraphrase away. Accepts `pattern` and optional `corpus`, `limit`. |
 | `query_graph` | Read-only Cypher escape hatch. Accepts `cypher`. Write keywords are rejected by a guard. |
 
 ### Per-corpus tools

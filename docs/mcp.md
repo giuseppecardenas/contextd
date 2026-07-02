@@ -70,7 +70,7 @@ For per-corpus tools, the guard runs **twice**: once at server startup when the 
 
 ---
 
-## Generic tools (8)
+## Generic tools (19)
 
 These are always present regardless of which corpora are registered.
 
@@ -99,6 +99,8 @@ Hybrid search over node summaries: vector (embedding) similarity and full-text (
 | `mode` | string | no | server config (`hybrid`) |
 
 `mode` is one of `hybrid`, `fulltext`, or `vector`. The server degrades to full-text automatically when no embedder is configured, the `kind` has no vector index (only `File` and `Section` do), or the embedding call fails; `mode = "vector"` on a non-vector-capable kind returns an empty result rather than a silent lexical fallback. The RRF constant, candidate depth, and per-modality weights are set server-side via the `[search]` config block.
+
+The full-text property searched is resolved per label: `File` and `Section` are searched on `summary`, while the entity kinds `Artifact`, `Pattern`, and `Risk` are searched on `description` and `Ticket` on `title` (the content fields the indexer populates and migrations `_0001` / `_0006` index). Entity kinds have no vector index, so they always run full-text only.
 
 Returns: array of matching node objects (the raw embedding vector is stripped). In `hybrid` / `vector` mode `score` is an RRF fused score; in `fulltext` mode it is the backend's raw relevance score — the two are not comparable across modes.
 
@@ -153,6 +155,18 @@ Returns: `{summary, key_points}` or `null` if the file is not indexed.
 
 ---
 
+### `get_node`
+
+Full labels and properties for a single node, matched by `path`, `id`, or `name` (the raw embedding vector is stripped). The entity-aware counterpart to `get_file_summary`: it reads any node type, so a `Ticket`, `Artifact`, or `Pattern` surfaced by `search` can be read in full.
+
+| Input | Type | Required |
+|---|---|---|
+| `node_id` | string | yes |
+
+Returns: `{labels, ...properties}` or `null` if no node matches.
+
+---
+
 ### `section_tree`
 
 Hierarchical outline of a file — section-granular corpora only.
@@ -162,6 +176,142 @@ Hierarchical outline of a file — section-granular corpora only.
 | `file_path` | string | yes |
 
 Returns: array of `{id, title, level, ordinal, summary}` ordered by level then ordinal.
+
+---
+
+### `explain_relationship`
+
+Every direct edge between two nodes, with provenance. Matches both endpoints by `path`/`id`/`name` and returns each edge in either direction.
+
+| Input | Type | Required |
+|---|---|---|
+| `source` | string | yes |
+| `target` | string | yes |
+
+Returns: array of `{source, target, edge_type, outbound, origin, confidence, reason}`. `outbound` is `true` when the edge runs source→target; `origin` is `inferred` / `structural` / `manual`; `confidence` and `reason` are the properties inferred edges carry.
+
+---
+
+### `ticket_dossier`
+
+A ticket's whole neighborhood in one call — collapses the multi-hop manual traversal the start-of-task workflow otherwise needs.
+
+| Input | Type | Required |
+|---|---|---|
+| `ticket_id` | string | yes |
+
+Returns: `{ticket, found, properties, neighbors}`, where each neighbor is `{edge_type, direction, labels, node, summary, title}`. `found` is `false` (and `neighbors` empty) when no such ticket exists.
+
+---
+
+### `find_reusable`
+
+Reusable `Artifact` nodes ranked by full-text relevance to the query. Serves the "check for an existing artifact before creating a new one" discipline.
+
+| Input | Type | Required | Default |
+|---|---|---|---|
+| `query` | string | yes | — |
+| `limit` | integer | no | 20 |
+
+Returns: array of matching `Artifact` nodes with `reusable = true`, embedding stripped, each with a relevance `score`. Requires entity content extraction to have populated `Artifact.description` / `reusable`.
+
+---
+
+### `list_entities`
+
+Nodes of an entity `kind` with their properties, optionally filtered.
+
+| Input | Type | Required | Default |
+|---|---|---|---|
+| `kind` | string | yes | — |
+| `prop` | string | no | — |
+| `value` | string | no | — |
+| `corpus` | string | no | all |
+| `limit` | integer | no | 50 |
+
+`kind` must be a declared ontology node type and `prop` (when given) a declared property of that type; both are validated before interpolation, and `value`/`corpus` are bound as parameters. Returns: array of `{labels, ...properties}` (embedding stripped).
+
+---
+
+### `check_freshness`
+
+Freshness-signalling edges (`SUPERSEDES` / `CONTRADICTS` / `NEEDS_UPDATE`) so a caller can judge whether a recalled hit is still current.
+
+| Input | Type | Required |
+|---|---|---|
+| `node_id` | string | one of node_id / corpus |
+| `corpus` | string | one of node_id / corpus |
+| `limit` | integer | no (default 200) |
+
+Scope by `node_id` (edges incident to one node) or `corpus` (every such edge with an endpoint in the corpus). Returns: array of `{source, target, edge_type, origin, confidence, reason}`. These edges are sparse, unvalidated inferences — an empty result means none were inferred, not that the node is definitively current.
+
+---
+
+### `find_contradictions`
+
+`CONTRADICTS` edge pairs, optionally narrowed by topic.
+
+| Input | Type | Required | Default |
+|---|---|---|---|
+| `topic` | string | no | — |
+| `limit` | integer | no | 50 |
+
+When `topic` is given, only pairs where either endpoint's summary contains it (case-insensitive) are returned. Returns: array of `{source, target, source_summary, target_summary, confidence, reason}`. Sparse in practice; often empty.
+
+---
+
+### `whats_new`
+
+Nodes changed at or after an ISO-8601 timestamp, newest first — the changed source documents for catching up on an evolving corpus.
+
+| Input | Type | Required | Default |
+|---|---|---|---|
+| `since` | string | yes | — |
+| `corpus` | string | no | all |
+| `limit` | integer | no | 50 |
+
+Compares against the `updated` stamp the indexer writes on `File` / `Section` nodes. Returns: array of `{node, labels, summary, updated}`. Returns empty on a graph indexed before the `updated` stamp existed (re-bootstrap to backfill).
+
+---
+
+### `timeline`
+
+Chronological view of nodes relevant to an anchor, plus the `SUPERSEDES` chains among them, to show how a decision evolved rather than a flat neighbor set.
+
+| Input | Type | Required |
+|---|---|---|
+| `node_id` | string | one of node_id / topic |
+| `topic` | string | one of node_id / topic |
+| `limit` | integer | no (default 50) |
+
+Anchor by `node_id` (the node and its direct neighbors) or `topic` (nodes whose summary contains it). Returns: `{nodes, supersedes}` — `nodes` ordered newest-first by `updated` (falling back to `inferred_at`), and `supersedes` the in-scope `SUPERSEDES` edges as newer→older pairs.
+
+---
+
+### `ask`
+
+Natural-language question answered by translating it to Cypher (reusing the CLI `ask` translator) and running it.
+
+| Input | Type | Required |
+|---|---|---|
+| `question` | string | yes |
+| `corpus` | string | no |
+
+Returns: `{cypher, rows}` — the generated Cypher and its result rows, so the caller sees what ran and always has the node-level path underneath the answer. Requires a configured inference provider (one LLM call per invocation); the translator applies the read-only guard to its own output. Errors (no provider, missing `prompts/translate` template) are surfaced as an `{"error": ...}` payload.
+
+---
+
+### `grep_corpus`
+
+Regex search over corpus file *contents* on disk, for exact strings (a flag name, an id, a config key) that summaries paraphrase away. The graph stores summaries and metadata, not file bodies, so disk is the only source.
+
+| Input | Type | Required | Default |
+|---|---|---|---|
+| `pattern` | string | yes | — |
+| `corpus` | string | no | all |
+| `limit` | integer | no | 100 |
+
+Walks the corpus's declared include/exclude globs (reusing the indexer's file enumeration). Returns: array of `{corpus, path, line, text}` line matches, capped at `limit`.
 
 ---
 

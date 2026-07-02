@@ -7,6 +7,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Entity content extraction: the `relate` phase now populates typed entity
+  nodes (Ticket, Artifact, Pattern, and the other stub-able types) with content
+  properties instead of leaving them bare `{pk, corpus}` stubs. The relate call
+  emits an optional per-relationship `properties` object, filtered at parse
+  time to each target type's declared ontology properties (minus indexer-owned
+  system fields); the primary key is stripped at the upsert site so
+  `target_name` is never overwritten. Content is last-writer-wins across the
+  files that reference an entity.
+- `updated` timestamp stamped on `File` and `Section` nodes at enumerate time,
+  giving the temporal tools a content-change signal.
+- Migration `_0006_entity_content_indexes`: full-text indexes `Ticket_title_ft`,
+  `Pattern_description_ft`, and `Risk_description_ft` so entity content is
+  searchable (`Artifact_description_ft` already existed from the baseline).
+- Eleven new read-only MCP tools: `get_node`, `explain_relationship`,
+  `ticket_dossier`, `find_reusable`, `list_entities`, `check_freshness`,
+  `find_contradictions`, `whats_new`, `timeline`, `ask` (NL→Cypher, promoting
+  the CLI translator to the MCP surface), and `grep_corpus` (regex over corpus
+  file contents on disk).
+- `search` now resolves the full-text property per label, so entity kinds
+  (`Artifact`, `Ticket`, `Pattern`, `Risk`) are searched against their content
+  field rather than the File/Section `summary` property.
 - Hybrid search: the `search` MCP tool now fuses vector (embedding) similarity
   and full-text (BM25) results via reciprocal rank fusion
   (`contextd/search/fusion.py`), instead of being full-text only. Rank-based

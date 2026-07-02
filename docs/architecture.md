@@ -17,15 +17,15 @@ Entry point: `contextd/indexer/pipeline.py`. The public functions are:
 
 **File-granular bootstrap phases** (when `corpus.granularity = "file"`):
 
-1. `phase_enumerate` — create `File` nodes, compute embeddings, record MD5 hashes.
+1. `phase_enumerate` — create `File` nodes, compute embeddings, record MD5 hashes, stamp `updated`.
 2. `phase_embed` — accounting stub (embedding done at CREATE in phase 1).
 3. `phase_summarise` — summarise each file; write `summary`, `key_points`, `confidence`.
-4. `phase_relate` — infer typed edges between `File` nodes; wipe-and-replace `origin="inferred"` edges only.
+4. `phase_relate` — infer typed edges between `File` nodes (wipe-and-replace `origin="inferred"` edges only) and populate the referenced entity nodes' content properties from the model's per-relationship `properties` object, filtered to each target type's declared ontology fields with the primary key protected.
 5. `phase_close` — register the corpus as a `Corpus` node; persist stats.
 
 **Section-granular bootstrap phases** (when `corpus.granularity = "section"`):
 
-1. `phase_enumerate_sections` — parse headings; create `File` + `Section` nodes with `CONTAINS`/`PARENT_OF`/`NEXT_SIBLING` structural edges; compute section embeddings at CREATE time.
+1. `phase_enumerate_sections` — parse headings; create `File` + `Section` nodes with `CONTAINS`/`PARENT_OF`/`NEXT_SIBLING` structural edges; compute section embeddings at CREATE time; stamp `updated` on both.
 2. `phase_embed_sections` — accounting stub.
 3. `phase_summarise_sections` — summarise each section; write `summary`, `key_points`.
 4. `phase_relate_sections` — infer typed edges from `Section` nodes; wipe-and-replace `inferred` edges only.
@@ -136,7 +136,7 @@ All four implement an ABC (`InferenceProvider` / `EmbeddingProvider`) defined in
 
 **Fully-offline operation:** set every inference call-site (`summary`, `inference`, `translation`) to `openai_compat` and `providers.embedding = "openai_compat"`, pointing both at a local server. The only remaining external dependency is the storage backend, which runs locally in Docker. The vector index is fixed at 1024 dimensions, so a local embedding model must emit 1024-dim vectors (the default `mxbai-embed-large` does) unless the Neo4j migration DDL is edited.
 
-**MCP server** — `contextd/mcp_server.py` implements a stdio MCP server registered as the `contextd-mcp` console script. It exposes 8 generic tools plus per-corpus Cypher tools (see [mcp.md](mcp.md)). The server connects to the storage backend over Bolt at startup and holds the connection for the session lifetime. It also builds a query-time embedder at startup (the same `build_embedding_provider` factory the indexer uses); if construction fails — e.g. a missing API key — it logs and continues with `embedder = None`, leaving `search` full-text only.
+**MCP server** — `contextd/mcp_server.py` implements a stdio MCP server registered as the `contextd-mcp` console script. It exposes 19 generic tools plus per-corpus Cypher tools (see [mcp.md](mcp.md)). Beyond the File-centric primitives (`describe_project`, `search`, `related`, `inbound`, `outbound`, `get_file_summary`, `section_tree`, `query_graph`) it exposes the typed graph directly: `get_node`, `explain_relationship` (edge provenance: `origin`/`confidence`/`reason`), `ticket_dossier`, `find_reusable`, `list_entities`, the read-only freshness tools `check_freshness` / `find_contradictions`, the temporal tools `whats_new` / `timeline`, `ask` (NL→Cypher), and `grep_corpus`. The server connects to the storage backend over Bolt at startup and holds the connection for the session lifetime. It also builds a query-time embedder and a `QueryTranslator` at startup (the same `build_embedding_provider` / `build_inference_provider` factories the indexer and CLI use); if either construction fails — e.g. a missing API key — it logs and continues with that dependency `None`, leaving `search` full-text only and `ask` disabled.
 
 #### Hybrid retrieval
 
