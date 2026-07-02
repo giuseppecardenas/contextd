@@ -38,7 +38,7 @@ from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypeVar
+from typing import Any, TypeVar
 
 from contextd._paths import canonical_path
 from contextd.corpus_config import CorpusConfig
@@ -118,6 +118,7 @@ def phase_enumerate(
         texts = [f.read_text(errors="replace") for f in batch]
         all_embeddings.extend(embedder.embed(texts))
 
+    now = dt.datetime.now(dt.UTC)
     processed = 0
     for f, vec in zip(files, all_embeddings, strict=True):
         store.upsert_node(
@@ -130,6 +131,7 @@ def phase_enumerate(
                 "size": f.stat().st_size,
                 "corpus": corpus,
                 "embedding": vec,
+                "updated": now,
             },
         )
         processed += 1
@@ -328,6 +330,7 @@ def phase_enumerate_sections(
         for (f, sec), vec in zip(all_sections, embeddings, strict=True)
     }
 
+    now = dt.datetime.now(dt.UTC)
     processed = 0
     for f, sections in parsed_by_file:
         file_path = canon_path[f]
@@ -341,6 +344,7 @@ def phase_enumerate_sections(
                 "hash": hasher.hash(f),
                 "size": f.stat().st_size,
                 "corpus": corpus_cfg.corpus.name,
+                "updated": now,
             },
         )
         previous_sibling_id: dict[str | None, str] = {}
@@ -359,6 +363,7 @@ def phase_enumerate_sections(
                     "ordinal": sec.ordinal,
                     "embedding": embedding_map[(file_path, section_id)],
                     "hash": hashlib.md5((sec.title + "\n\n" + sec.body).encode()).hexdigest(),
+                    "updated": now,
                 },
             )
             # src_label/dst_label required by GraphStore.upsert_edge.
@@ -756,7 +761,16 @@ def _apply_inferred_edge(
         if target_value is None:
             return False
     else:
-        store.upsert_node(rel.target_type, {pk: rel.target_name, "corpus": corpus})
+        # Stub-able entity: seed identity + corpus, then layer on the model's
+        # extracted content. The primary key is excluded from the content merge
+        # so ``target_name`` (which IS the PK value) is never overwritten by a
+        # divergent model-supplied value — this also protects ``Risk``, whose
+        # PK is the content field ``description``.
+        props: dict[str, Any] = {pk: rel.target_name, "corpus": corpus}
+        for key, value in rel.target_properties.items():
+            if key != pk:
+                props[key] = value
+        store.upsert_node(rel.target_type, props)
         target_value = rel.target_name
     store.upsert_edge(
         src_id,

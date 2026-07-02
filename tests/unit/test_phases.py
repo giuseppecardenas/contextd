@@ -113,6 +113,26 @@ def testderive_file_level_for_path_handles_no_sections(tmp_path: Path) -> None:
     store.exec_write.assert_not_called()
 
 
+def test_phase_enumerate_stamps_updated_on_file(tmp_path: Path) -> None:
+    """phase_enumerate writes an `updated` timestamp onto the File node so the
+    temporal tools (whats_new/timeline) have a content-change signal."""
+    from contextd.indexer.phases import phase_enumerate
+
+    f = tmp_path / "a.md"
+    f.write_text("body")
+    store = MagicMock()
+    embedder = MagicMock()
+    embedder.embed.return_value = [[0.0] * 1024]
+    hasher = MagicMock()
+    hasher.hash.return_value = "h"
+
+    phase_enumerate([f], "c", hasher, store, embedder)
+
+    file_upserts = [c for c in store.upsert_node.call_args_list if c.args[0] == "File"]
+    assert len(file_upserts) == 1
+    assert "updated" in file_upserts[0].args[1]
+
+
 def test_phase_enumerate_sections_stores_section_hash(tmp_path: Path) -> None:
     import hashlib
 

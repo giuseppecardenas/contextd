@@ -32,6 +32,35 @@ def _rel(target_type: str, target_name: str) -> InferredRelationship:
     )
 
 
+def test_phase_relate_merges_entity_content_and_protects_pk(tmp_path: Path) -> None:
+    """Inferred entity content is written onto the stub upsert, and the primary
+    key is never overwritten by a content-supplied value of the same name."""
+    inferrer = MagicMock()
+    inferrer.infer.return_value = [
+        InferredRelationship(
+            edge_type="REFERENCES",
+            target_type="Ticket",
+            target_name="INTENG-1",
+            confidence=0.9,
+            reason="r",
+            target_properties={"title": "Fix auth", "status": "open", "id": "SHOULD-NOT-WIN"},
+        )
+    ]
+    store = MagicMock()
+    store.exec_read.return_value = []
+
+    phase_relate([_file(tmp_path)], inferrer, store, entity_sampler=lambda _s: [], corpus="c")
+
+    ticket_upserts = [c for c in store.upsert_node.call_args_list if c.args[0] == "Ticket"]
+    assert len(ticket_upserts) == 1
+    props = ticket_upserts[0].args[1]
+    assert props["title"] == "Fix auth"
+    assert props["status"] == "open"
+    assert props["corpus"] == "c"
+    # PK comes from target_name; the divergent content-supplied "id" is dropped.
+    assert props["id"] == "INTENG-1"
+
+
 def _file(tmp_path: Path) -> Path:
     f = tmp_path / "a.md"
     f.write_text("content")

@@ -166,6 +166,105 @@ def test_infer_resolves_edge_aliases() -> None:
     assert result[0].edge_type == "REFERENCES"  # canonical, not "CITES"
 
 
+def test_extracts_declared_target_properties() -> None:
+    """Model-supplied content is kept only for declared, non-system fields;
+    undeclared keys and system/PK fields are dropped."""
+    ontology = Ontology.load_base()
+    mock_provider = MagicMock()
+    mock_provider.generate.return_value = json.dumps(
+        {
+            "relationships": [
+                {
+                    "type": "REFERENCES",
+                    "target_type": "Ticket",
+                    "target_name": "INTENG-1",
+                    "confidence": 0.9,
+                    "reason": "r",
+                    "properties": {
+                        "title": "Fix auth",
+                        "status": "open",
+                        "id": "OVERWRITE-ATTEMPT",  # PK/system field -> dropped
+                        "bogus": "nope",  # undeclared -> dropped
+                    },
+                }
+            ]
+        }
+    )
+    mock_renderer = MagicMock()
+    mock_renderer.render.return_value = "prompt"
+    inferrer = RelationshipInferrer(mock_provider, mock_renderer, ontology)
+    result = inferrer.infer("content", known_entities=[])
+    assert result[0].target_properties == {"title": "Fix auth", "status": "open"}
+
+
+def test_target_properties_default_empty_when_absent() -> None:
+    ontology = Ontology.load_base()
+    mock_provider = MagicMock()
+    mock_provider.generate.return_value = json.dumps(
+        {
+            "relationships": [
+                {
+                    "type": "REFERENCES",
+                    "target_type": "Pattern",
+                    "target_name": "Singleton",
+                    "confidence": 0.9,
+                    "reason": "r",
+                }
+            ]
+        }
+    )
+    mock_renderer = MagicMock()
+    mock_renderer.render.return_value = "prompt"
+    inferrer = RelationshipInferrer(mock_provider, mock_renderer, ontology)
+    result = inferrer.infer("content", known_entities=[])
+    assert result[0].target_properties == {}
+
+
+def test_target_properties_accepts_lists_and_drops_objects() -> None:
+    """String lists are storable; nested objects are rejected."""
+    ontology = Ontology.load_base()
+    mock_provider = MagicMock()
+    mock_provider.generate.return_value = json.dumps(
+        {
+            "relationships": [
+                {
+                    "type": "REFERENCES",
+                    "target_type": "Pattern",
+                    "target_name": "Repo Pattern",
+                    "confidence": 0.9,
+                    "reason": "r",
+                    "properties": {
+                        "description": "desc",
+                        "examples": ["a", "b"],
+                        "when_to_use": {"nested": "obj"},  # object -> dropped
+                    },
+                }
+            ]
+        }
+    )
+    mock_renderer = MagicMock()
+    mock_renderer.render.return_value = "prompt"
+    inferrer = RelationshipInferrer(mock_provider, mock_renderer, ontology)
+    result = inferrer.infer("content", known_entities=[])
+    assert result[0].target_properties == {"description": "desc", "examples": ["a", "b"]}
+
+
+def test_prompt_receives_per_type_property_schema() -> None:
+    """The relate prompt is given the per-type content schema, excluding the
+    enumeration-owned File/Section labels."""
+    ontology = Ontology.load_base()
+    mock_provider = MagicMock()
+    mock_provider.generate.return_value = json.dumps({"relationships": []})
+    mock_renderer = MagicMock()
+    mock_renderer.render.return_value = "prompt"
+    inferrer = RelationshipInferrer(mock_provider, mock_renderer, ontology)
+    inferrer.infer("content", known_entities=[])
+    schema = mock_renderer.render.call_args.kwargs["target_property_schema"]
+    assert "Ticket: status, title" in schema
+    assert "File:" not in schema
+    assert "Section:" not in schema
+
+
 def test_missing_or_empty_target_name_is_silently_discarded() -> None:
     """Rows that pass ontology checks but lack target_name are dropped
     silently — consistent with the tolerant-parsing pattern the rest of
