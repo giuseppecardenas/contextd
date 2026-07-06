@@ -57,7 +57,7 @@ def test_load_default_returns_valid_config() -> None:
     assert cfg.storage.neo4j.port == 7687
     assert cfg.inference.summary_max_words == 100
     assert cfg.indexer.debounce_seconds == 30
-    assert cfg.indexer.inference_concurrency == 1
+    assert cfg.indexer.inference_concurrency == 8
 
 
 def test_providers_config_per_call_site_defaults_to_gemini() -> None:
