@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import sys
 import threading
 from pathlib import Path
+from unittest.mock import MagicMock
+
+import pytest
 
 from contextd._compat import (
     IS_WINDOWS,
@@ -59,6 +63,36 @@ def test_create_and_connect_roundtrip(ipc_path: Path) -> None:
     finally:
         server_sock.close()
         cleanup_ipc(ipc_path)
+
+
+def test_connect_ipc_closes_socket_when_connect_fails(
+    ipc_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A refused/failed connect must not leak the freshly created socket.
+
+    On Windows the port file must exist for ``connect_ipc`` to reach the
+    connect call, so create the endpoint (which writes the port file) and
+    stop the listener; on Unix the missing socket path already yields a
+    connection error.
+    """
+    created: list[MagicMock] = []
+    real_socket_cls = socket.socket
+
+    def _fake_socket(*args: object, **kwargs: object) -> MagicMock:
+        m = MagicMock(spec=real_socket_cls)
+        m.connect.side_effect = ConnectionRefusedError("refused")
+        created.append(m)
+        return m
+
+    if IS_WINDOWS:
+        ipc_path.write_text("1")
+    monkeypatch.setattr(socket, "socket", _fake_socket)
+
+    with pytest.raises(ConnectionRefusedError):
+        connect_ipc(ipc_path)
+
+    assert created, "connect_ipc should have created a socket"
+    created[-1].close.assert_called_once()
 
 
 def test_cleanup_ipc_removes_file(ipc_path: Path) -> None:

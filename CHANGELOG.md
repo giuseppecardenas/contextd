@@ -81,6 +81,13 @@ entity content on the existing graph.
   down/up cycle. Removing the backend and deleting indexed data is now the
   dedicated job of `contextd reset`.
 
+### Fixed
+
+- `connect_ipc` no longer leaks a file descriptor when `connect()` fails
+  (for example when the endpoint file exists but the daemon has bound without
+  yet reaching `listen()`): the freshly created socket is now closed before
+  the exception propagates.
+
 ## [0.1.0] — 2026-04-21
 
 Initial alpha release.

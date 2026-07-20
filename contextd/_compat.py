@@ -70,14 +70,24 @@ def connect_ipc(ipc_path: Path) -> socket.socket:
 
     On Unix, connects via AF_UNIX to *ipc_path*. On Windows, reads the
     port number from *ipc_path* and connects via TCP to 127.0.0.1.
+
+    If ``connect()`` fails (for example when the endpoint file exists but the
+    server has bound without yet reaching ``listen()``, so the connect is
+    refused), the freshly created socket is closed before the exception
+    propagates, so a failed connect never leaks a file descriptor.
     """
     if IS_WINDOWS:
         port = int(ipc_path.read_text().strip())
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.connect(("127.0.0.1", port))
+        address: str | tuple[str, int] = ("127.0.0.1", port)
     else:
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)  # type: ignore[attr-defined,unused-ignore]
-        sock.connect(str(ipc_path))
+        address = str(ipc_path)
+    try:
+        sock.connect(address)
+    except BaseException:
+        sock.close()
+        raise
     return sock
 
 
