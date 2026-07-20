@@ -11,6 +11,36 @@ from click.testing import CliRunner
 import contextd.cli
 
 
+def _wait_until_ipc_connectable(ipc_path: Path, timeout: float = 5.0) -> None:
+    """Block until the IPC endpoint accepts a ping, or raise ``TimeoutError``.
+
+    Waits for actual connectability (which requires the server thread to have
+    reached ``listen()``), not merely for the socket file to exist (which
+    appears earlier, at ``bind()``). On a loaded CI runner the gap between bind
+    and listen is wide enough that a connect attempt is refused, so gating on a
+    real ping round-trip removes the race. Mirrors the readiness gate in
+    ``tests/unit/test_daemon_ipc.py``.
+    """
+    import json
+    import time
+
+    from contextd._compat import connect_ipc
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if ipc_path.exists():
+            try:
+                with connect_ipc(ipc_path) as s:
+                    s.settimeout(1.0)
+                    s.sendall(json.dumps({"cmd": "ping"}).encode() + b"\n")
+                    s.recv(4096)
+                return
+            except OSError:
+                pass
+        time.sleep(0.05)
+    raise TimeoutError(f"IPC endpoint {ipc_path} did not become connectable within {timeout}s")
+
+
 def _setup_contextd_home(tmp_path: Path, backend: str = "neo4j") -> Path:
     home = tmp_path / ".contextd"
     home.mkdir()
@@ -337,6 +367,11 @@ def test_request_daemon_stop_returns_false_when_socket_absent(tmp_path: Path) ->
     assert _request_daemon_stop(tmp_path / "missing.sock") is False
 
 
+# Suppresses the spurious macOS ResourceWarning where GC finalizes a handler
+# thread's socket before its `with conn:` block exits (same rationale as the
+# module-level marker in tests/unit/test_daemon_ipc.py). stop() joins the
+# handlers, so there is no real leak.
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnraisableExceptionWarning")
 def test_request_daemon_stop_round_trips_through_ipc_server(ipc_path: Path) -> None:
     """End-to-end: spin up an IpcServer and confirm _request_daemon_stop sets the event."""
     import threading
@@ -355,10 +390,9 @@ def test_request_daemon_stop_round_trips_through_ipc_server(ipc_path: Path) -> N
     )
     server.start()
     try:
-        # Wait briefly for the server to bind.
-        deadline = _time.monotonic() + 2.0
-        while _time.monotonic() < deadline and not ipc_path.exists():
-            _time.sleep(0.02)
+        # Wait until the server is actually accepting connections, not merely
+        # until the socket file exists (which appears at bind, before listen).
+        _wait_until_ipc_connectable(ipc_path, timeout=5.0)
         assert _request_daemon_stop(ipc_path) is True
         stop_event.wait(timeout=1.0)
         assert stop_event.is_set()
