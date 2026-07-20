@@ -314,7 +314,8 @@ Each indexing session logs per-provider input/output token counts to `~/.context
 |---|---|---|
 | `contextd init` | First-run wizard — creates `~/.contextd/` layout | `--yes` (non-interactive) |
 | `contextd up` | Start graph backend + indexer daemon | — |
-| `contextd down` | Stop daemon + graph backend | — |
+| `contextd down` | Stop daemon + graph backend, preserving indexed data | — |
+| `contextd reset` | Stop daemon + remove graph backend container and data volumes (deletes all indexed data) | — |
 | `contextd status` | Report daemon, backend, and corpora state | — |
 | `contextd add-corpus PATH` | Register a corpus for indexing | `--name`, `--granularity {file,section}`, `--from TEMPLATE` |
 | `contextd list-corpora` | List registered corpora | — |
@@ -425,7 +426,8 @@ See [docs/mcp.md](docs/mcp.md) for the full tool reference.
 ```bash
 contextd up        # start graph backend + indexer daemon
 contextd status    # show daemon state (pid, uptime, corpora)
-contextd down      # stop daemon + graph backend
+contextd down      # stop daemon + graph backend (indexed data preserved)
+contextd reset     # stop daemon + delete the graph backend and all indexed data
 ```
 
 `contextd status` tries the IPC endpoint first for live runtime info, and falls back to the PID file if the daemon is not reachable:

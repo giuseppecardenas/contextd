@@ -52,13 +52,51 @@ def test_status_no_corpora(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     assert "0 registered" in result.output
 
 
-def test_down_calls_docker_compose_down(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_down_stops_container_without_removing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`down` must `docker compose stop` the backend, never `down` it.
+
+    Using `stop` keeps the container and its data volumes, so the indexed
+    knowledge graph survives a down/up cycle. Removing the container is now the
+    job of `reset`.
+    """
     home = _setup_contextd_home(tmp_path)
     monkeypatch.setenv("CONTEXTD_HOME", str(home))
     with patch("subprocess.run") as mock_run:
         result = CliRunner().invoke(contextd.cli.cli, ["down"])
     assert result.exit_code == 0
-    assert any("down" in c.args[0] for c in mock_run.call_args_list)
+    compose_calls = [c.args[0] for c in mock_run.call_args_list if "compose" in c.args[0]]
+    assert compose_calls, "expected a docker compose invocation"
+    cmd = compose_calls[0]
+    assert "stop" in cmd
+    assert "down" not in cmd
+
+
+def test_reset_removes_container_and_volumes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`reset` must `docker compose down --volumes` to delete all indexed data."""
+    home = _setup_contextd_home(tmp_path)
+    monkeypatch.setenv("CONTEXTD_HOME", str(home))
+    with patch("subprocess.run") as mock_run:
+        result = CliRunner().invoke(contextd.cli.cli, ["reset"])
+    assert result.exit_code == 0
+    compose_calls = [c.args[0] for c in mock_run.call_args_list if "compose" in c.args[0]]
+    assert compose_calls, "expected a docker compose invocation"
+    cmd = compose_calls[0]
+    assert "down" in cmd
+    assert "--volumes" in cmd
+
+
+def test_reset_warns_about_data_loss(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`reset` must explicitly state that it permanently deletes indexed data."""
+    home = _setup_contextd_home(tmp_path)
+    monkeypatch.setenv("CONTEXTD_HOME", str(home))
+    with patch("subprocess.run"):
+        result = CliRunner().invoke(contextd.cli.cli, ["reset"])
+    assert result.exit_code == 0
+    assert "permanently delete all indexed" in result.output
 
 
 def test_up_without_docker_raises_clickexception(

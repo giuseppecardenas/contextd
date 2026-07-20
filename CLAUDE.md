@@ -36,8 +36,9 @@ contextd index <name> --bootstrap          # index it (--incremental / --refresh
 contextd ask "<query>"                      # natural-language query -> Cypher -> rows
 ```
 
-Supporting commands: `contextd status`, `contextd down`, `contextd list-corpora`,
-`contextd logs`, `contextd costs`.
+Supporting commands: `contextd status`, `contextd down` (stops the backend,
+keeps data), `contextd reset` (removes the backend and deletes all indexed
+data), `contextd list-corpora`, `contextd logs`, `contextd costs`.
 
 ### MCP server
 

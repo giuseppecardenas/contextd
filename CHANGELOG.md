@@ -38,6 +38,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `rrf_k`, `fetch_k`, `vector_weight`, `fulltext_weight`.
 - The MCP server builds a query-time embedder at startup and exposes a `mode`
   override on the `search` tool.
+- `contextd reset` command: stops the indexer daemon and removes the storage
+  backend container together with its Docker data volumes (`docker compose down
+  --volumes`), permanently deleting the indexed knowledge graph. It prints an
+  explicit data-loss warning and proceeds without a prompt. Corpus
+  registrations and `config.toml` are preserved so a later `contextd up` starts
+  a fresh, empty backend.
 
 **Upgrade note (existing installs):** entity content extraction depends on the
 updated `relate` prompt. `PromptRenderer` reads templates from
@@ -69,6 +75,11 @@ entity content on the existing graph.
   splits genuinely very long inputs. Users who explicitly override to
   `voyage-3` / `voyage-3-large` / `voyage-code-3` (still supported) should
   lower `chunk_tokens` back to `8000` in their corpus TOML.
+- `contextd down` now stops the storage backend container (`docker compose
+  stop`) instead of removing it (`docker compose down`), preserving the
+  container and its data volumes so the indexed knowledge graph survives a
+  down/up cycle. Removing the backend and deleting indexed data is now the
+  dedicated job of `contextd reset`.
 
 ## [0.1.0] — 2026-04-21
 

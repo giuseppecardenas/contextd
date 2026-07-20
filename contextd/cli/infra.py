@@ -157,6 +157,27 @@ def _compose_file_for(cfg: Config) -> Path:
     return Path(cfg.storage.neo4j.docker_compose_file).expanduser()
 
 
+def _run_compose(cfg: Config, *args: str) -> None:
+    """Run ``docker compose`` for the configured backend profile.
+
+    Resolves the compose file from ``cfg`` and invokes ``docker compose -f
+    <file> --profile <backend> <args...>`` with ``check=False`` so an
+    already-stopped or missing container is not treated as a fatal error by the
+    lifecycle commands.
+
+    :param cfg: Loaded global config; supplies the backend name and the
+        compose-file path.
+    :param args: The compose subcommand and its flags, for example
+        ``"stop"`` or ``"down", "--volumes"``.
+    """
+    backend = cfg.storage.backend
+    compose_file = _compose_file_for(cfg)
+    subprocess.run(
+        ["docker", "compose", "-f", str(compose_file), "--profile", backend, *args],
+        check=False,
+    )
+
+
 def _wait_for_backend_ready(store: GraphStore, timeout: float = 60.0) -> None:
     # `docker compose up -d` returns when the container starts, but Neo4j
     # needs an additional ~10-60s on cold start before Bolt accepts a
@@ -246,25 +267,45 @@ def up() -> None:
 
 @cli.command()
 def down() -> None:
-    """Stop the storage backend and indexer."""
+    """Stop the storage backend container and indexer, preserving all data.
+
+    Stops (does not remove) the backend container via ``docker compose stop``,
+    so the Docker data volumes and the indexed knowledge graph survive; a later
+    ``contextd up`` restarts the same container with its data intact. To
+    permanently delete the indexed data, use ``contextd reset``.
+    """
     _stop_daemon()
     console.print("[green]✓[/] indexer daemon stopped")
-    cfg = _load_cfg()
-    backend = cfg.storage.backend
-    compose_file = _compose_file_for(cfg)
-    subprocess.run(
-        [
-            "docker",
-            "compose",
-            "-f",
-            str(compose_file),
-            "--profile",
-            backend,
-            "down",
-        ],
-        check=False,
+    _run_compose(_load_cfg(), "stop")
+    console.print("[green]✓[/] backend stopped (data preserved)")
+
+
+@cli.command()
+def reset() -> None:
+    """Stop everything and permanently delete all indexed data.
+
+    Removes the storage backend container together with its Docker data volumes
+    (``contextd_neo4j_data`` / ``contextd_neo4j_logs``) via ``docker compose
+    down --volumes``. This destroys the entire knowledge graph: every node,
+    edge, summary, and embedding contextd has indexed. The deletion is
+    irreversible; the only way to recover is to re-index each corpus from
+    source with ``contextd index <corpus> --bootstrap``.
+
+    Corpus registrations under ``~/.contextd/corpora/`` and ``config.toml`` are
+    left untouched, so a subsequent ``contextd up`` brings up a fresh, empty
+    backend ready for re-indexing. Use ``contextd down`` instead when you only
+    want to stop the backend and keep the indexed data.
+    """
+    console.print(
+        "[bold red]⚠ contextd reset will permanently delete all indexed "
+        "data[/] (the knowledge graph, summaries, and embeddings in the backend "
+        "volumes). This cannot be undone."
     )
-    console.print("[green]✓[/] stopped")
+    _stop_daemon()
+    console.print("[green]✓[/] indexer daemon stopped")
+    _run_compose(_load_cfg(), "down", "--volumes")
+    console.print("[green]✓[/] backend container and data volumes removed")
+    console.print("[dim]run `contextd up` to start a fresh, empty backend[/]")
 
 
 @cli.command()

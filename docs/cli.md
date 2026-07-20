@@ -41,11 +41,27 @@ The backend is Neo4j, declared by `[storage] backend = "neo4j"` in `config.toml`
 
 **Synopsis:** `contextd down`
 
-Stops the active storage backend container.
+Stops the indexer daemon and the storage backend container (`docker compose stop`) without removing them. The container and its Docker data volumes are preserved, so the indexed knowledge graph survives; a later `contextd up` restarts the same container with its data intact.
 
 ```bash
 contextd down
 ```
+
+To permanently delete the indexed data, use `contextd reset`.
+
+---
+
+## `contextd reset`
+
+**Synopsis:** `contextd reset`
+
+Stops the indexer daemon and removes the storage backend container together with its Docker data volumes (`contextd_neo4j_data` / `contextd_neo4j_logs`) via `docker compose down --volumes`. This permanently deletes the entire knowledge graph: every node, edge, summary, and embedding contextd has indexed.
+
+```bash
+contextd reset
+```
+
+The command prints an explicit data-loss warning and then proceeds without an interactive prompt, so treat it as irreversible. The only way to recover the data is to re-index each corpus from source with `contextd index <corpus> --bootstrap`. Corpus registrations under `~/.contextd/corpora/` and `config.toml` are left untouched, so a subsequent `contextd up` brings up a fresh, empty backend ready for re-indexing. Use `contextd down` instead when you only want to stop the backend and keep the indexed data.
 
 ---
 

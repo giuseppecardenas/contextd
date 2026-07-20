@@ -152,7 +152,7 @@ Hybrid search needs both a vector and a full-text index on the queried label, so
 
 | Process | Lifetime | Managed by |
 |---|---|---|
-| Storage backend (Docker) | Long-lived | `contextd up` / `contextd down` |
+| Storage backend (Docker) | Long-lived | `contextd up` starts it; `contextd down` stops it (data preserved); `contextd reset` removes it and its data volumes |
 | `contextd-mcp` | Long-lived (session) | MCP client (Claude Desktop / Cursor) spawns on stdio |
 | `contextd` CLI | Short-lived | User invocation |
 | Indexer daemon | Not yet wired | Planned; `CorpusWatcher` exists in M5 |
