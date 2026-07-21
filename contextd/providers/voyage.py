@@ -18,7 +18,7 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 import voyageai
-from voyageai.error import RateLimitError
+from voyageai.error import APIConnectionError, RateLimitError, Timeout
 
 from contextd.config import VoyageConfig
 from contextd.providers.base import EmbeddingProvider, UsageRecord
@@ -35,6 +35,16 @@ _MODEL_DIMENSIONS = {
 # for tokenizer/server truncation discrepancies.
 _BATCH_TOKEN_BUDGET = 100_000
 
+# Per-request HTTP timeout in seconds passed to the voyageai client. Without an
+# explicit value the SDK falls back to its 600s default applied through
+# ``requests``, which does not fire reliably on a half-closed socket (the Voyage
+# endpoint accepts the connection then stops sending): the embed call then
+# blocks the single-threaded phase_enumerate forever in ssl.read at 0% CPU and
+# hangs the whole bootstrap. A bounded timeout guarantees a stalled call raises
+# a retryable voyageai.error.Timeout / APIConnectionError instead. Mirrors the
+# Gemini provider's request-timeout rationale.
+_DEFAULT_REQUEST_TIMEOUT_S = 120.0
+
 
 class VoyageProvider(EmbeddingProvider):
     def __init__(
@@ -45,9 +55,12 @@ class VoyageProvider(EmbeddingProvider):
         backoff_initial: float = 1.0,
         backoff_max: float = 60.0,
         max_retries: int = 5,
+        request_timeout_s: float = _DEFAULT_REQUEST_TIMEOUT_S,
     ) -> None:
         self._cfg = config
-        self._client = voyageai.Client(api_key=api_key)  # type: ignore[attr-defined]
+        self._client = voyageai.Client(  # type: ignore[attr-defined]
+            api_key=api_key, timeout=request_timeout_s
+        )
         self._last_usage: UsageRecord | None = None
         self._backoff_initial = backoff_initial
         self._backoff_max = backoff_max
@@ -94,13 +107,31 @@ class VoyageProvider(EmbeddingProvider):
         while True:
             try:
                 return self._client.embed(safe_batch, model=self._cfg.model, input_type="document")
-            except RateLimitError:
+            except (RateLimitError, Timeout, APIConnectionError):
+                # RateLimitError is the server asking us to back off; Timeout and
+                # APIConnectionError are the transient transport failures the
+                # client request timeout (see _DEFAULT_REQUEST_TIMEOUT_S) converts
+                # a silent socket hang into. All three retry on the same bounded,
+                # jittered backoff and re-raise once max_retries is exhausted, so a
+                # persistently unreachable endpoint fails the enumerate phase
+                # instead of hanging the whole bootstrap forever.
                 attempt += 1
                 if attempt >= self._max_retries:
                     raise
-                delay = min(self._backoff_initial * (2 ** (attempt - 1)), self._backoff_max)
-                delay *= 1.0 + random.uniform(-0.2, 0.2)
-                time.sleep(delay)
+                self._sleep_backoff(attempt)
+
+    def _sleep_backoff(self, attempt: int) -> None:
+        """Sleep for an exponentially-increasing, jittered backoff interval.
+
+        The base delay doubles each attempt (``backoff_initial * 2**(attempt-1)``)
+        up to ``backoff_max`` and is then scaled by +/-20% jitter to avoid
+        synchronised retry storms when several embed batches back off at once.
+
+        :param attempt: 1-based count of the retry being scheduled.
+        """
+        delay = min(self._backoff_initial * (2 ** (attempt - 1)), self._backoff_max)
+        delay *= 1.0 + random.uniform(-0.2, 0.2)
+        time.sleep(delay)
 
 
 def _token_aware_batches(
