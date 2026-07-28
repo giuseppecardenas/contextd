@@ -7,6 +7,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from contextd._paths import canonical_path
+
 
 def test_drain_relay_moves_all_queued_paths(tmp_path: Path) -> None:
     from contextd.daemon import DebouncedQueue, _drain_relay_into_debouncer
@@ -300,7 +302,10 @@ def test_reconcile_missing_files_queues_only_ungraphed_files(tmp_path: Path) -> 
     missing.write_text("b")
 
     store = MagicMock()
-    store.exec_read.return_value = [{"path": str(indexed)}]
+    # The graph stores canonical forward-slash paths, so the seeded row must too.
+    # Seeding a native path passes on POSIX but not on Windows, where the
+    # backslashes never match the canonical form the reconciler compares against.
+    store.exec_read.return_value = [{"path": canonical_path(indexed)}]
     entry = _entry_for(tmp_path, store=store)
     # Stale state: both files look unchanged, as after a reset.
     entry.hasher.mark_seen(indexed)  # type: ignore[attr-defined]

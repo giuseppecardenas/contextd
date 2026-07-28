@@ -17,9 +17,12 @@ from contextd.cli.corpora import _rewrite_template_path
 def _setup_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home = tmp_path / ".contextd"
     home.mkdir()
+    # as_posix(), not str(): on Windows a native path embeds backslashes, and
+    # "C:\Users\..." inside a TOML basic string parses \U as a unicode escape and
+    # fails with "Invalid hex value" before the CLI ever runs.
     (home / "config.toml").write_text(
         '[storage]\nbackend = "neo4j"\n\n[storage.neo4j]\n'
-        f'docker_compose_file = "{home}/docker-compose.yml"\n'
+        f'docker_compose_file = "{home.as_posix()}/docker-compose.yml"\n'
     )
     monkeypatch.setenv("CONTEXTD_HOME", str(home))
     return home

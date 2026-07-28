@@ -3,7 +3,14 @@
 from __future__ import annotations
 
 import pytest
-from testcontainers.neo4j import Neo4jContainer
+
+try:
+    # See the note in tests/conftest.py: testcontainers >= 4.14 moved this module
+    # and deprecated the old path, and filterwarnings = ["error", ...] turns the
+    # resulting DeprecationWarning into a collection error for the whole file.
+    from testcontainers.community.neo4j import Neo4jContainer
+except ImportError:  # testcontainers < 4.14
+    from testcontainers.neo4j import Neo4jContainer
 
 from contextd.config import Neo4jConfig
 
