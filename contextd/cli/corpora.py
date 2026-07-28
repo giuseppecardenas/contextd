@@ -163,6 +163,102 @@ def list_corpora() -> None:
         console.print(f"- {c.stem} ({c})")
 
 
+@cli.command("remove-corpus")
+@click.argument("corpus_name")
+def remove_corpus(corpus_name: str) -> None:
+    """Unregister a corpus and permanently delete its indexed data.
+
+    Deletes the corpus's ``File`` / ``Section`` / ``Corpus`` nodes from the
+    graph (cascading to their edges), removes the local index-state and
+    checkpoint files, and finally deletes the corpus registration TOML. The
+    source files on disk are never touched, so the corpus can be re-registered
+    and re-indexed. The graph delete runs before the TOML is removed, so if the
+    backend is unreachable the corpus stays registered and the command can be
+    retried.
+
+    Inference-target entities (``Ticket`` / ``Artifact`` / ``Pattern`` / ...)
+    that this corpus populated are not corpus-scoped and are left in place; run
+    ``contextd prune-entities`` afterwards to reap any that are now orphaned.
+    """
+    from contextd.indexer.pipeline import delete_corpus_nodes
+    from contextd.storage.factory import build_graph_store
+
+    corpus_toml = contextd_home() / "corpora" / f"{corpus_name}.toml"
+    if not corpus_toml.exists():
+        raise click.ClickException(
+            f"corpus {corpus_name!r} not registered. Run `contextd list-corpora` to see names."
+        )
+
+    console.print(
+        f"[bold red]⚠ removing corpus {corpus_name!r} permanently deletes its indexed "
+        f"data[/] (its nodes, edges, summaries, and embeddings). Source files on disk are "
+        f"not touched. This cannot be undone."
+    )
+
+    cfg = _load_cfg()
+    store = build_graph_store(cfg)
+    store.connect()
+    try:
+        delete_corpus_nodes(store, corpus_name)
+    finally:
+        store.close()
+    console.print("[green]✓[/] graph nodes deleted")
+
+    # Local per-corpus state: the hasher index-state file (named by the
+    # registration name) and the bootstrap checkpoint (named by corpus name;
+    # equal to the registration name for corpora created via add-corpus).
+    state_dir = contextd_home() / "state"
+    for state_file in (
+        state_dir / f"{corpus_name}-index-state.json",
+        state_dir / "checkpoints" / f"{corpus_name}.json",
+    ):
+        state_file.unlink(missing_ok=True)
+
+    corpus_toml.unlink()
+    console.print(
+        f"[green]✓[/] corpus {corpus_name!r} removed (run `contextd prune-entities` "
+        f"to reap any now-orphaned entities)"
+    )
+
+
+@cli.command("prune-entities")
+def prune_entities() -> None:
+    """Delete orphaned entity nodes (those with no relationships) from the graph.
+
+    The relate phase creates entity nodes (``Ticket`` / ``Artifact`` /
+    ``Pattern`` / ``Risk`` / ...) as targets of relationships from files. When
+    every file that referenced an entity is re-indexed away or removed (for
+    example via ``contextd remove-corpus``), the entity can be left with no
+    relationships at all. This command reaps those orphaned, zero-degree entity
+    nodes across every corpus.
+
+    Structural nodes (``File`` / ``Section`` / ``Corpus`` / ``Meta``) are never
+    pruned even when edgeless, since an isolated file is still a real file. The
+    prunable entity labels are derived from the base ontology minus
+    :data:`~contextd.ontology.schema.NON_ENTITY_LABELS`.
+    """
+    from contextd.ontology.schema import NON_ENTITY_LABELS, Ontology
+    from contextd.storage.factory import build_graph_store
+
+    entity_labels = sorted(set(Ontology.load_base().node_types) - NON_ENTITY_LABELS)
+    match = "MATCH (n) WHERE any(l IN labels(n) WHERE l IN $labels) AND NOT (n)--()"
+
+    cfg = _load_cfg()
+    store = build_graph_store(cfg)
+    store.connect()
+    try:
+        rows = store.exec_read(f"{match} RETURN count(n) AS count", {"labels": entity_labels})
+        count = int(rows[0]["count"]) if rows else 0
+        if count == 0:
+            console.print("[green]✓[/] no orphaned entities to prune")
+            return
+        store.exec_write(f"{match} DETACH DELETE n", {"labels": entity_labels})
+    finally:
+        store.close()
+    noun = "entity" if count == 1 else "entities"
+    console.print(f"[green]✓[/] pruned {count} orphaned {noun}")
+
+
 def _build_pipeline_deps(
     cfg: Config,
     corpus_cfg: CorpusConfig,

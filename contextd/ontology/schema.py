@@ -21,6 +21,15 @@ from dataclasses import dataclass, field, replace
 from importlib import resources
 from types import MappingProxyType
 
+# Node labels that are never AI-inferred entity targets: File/Section are
+# created from on-disk content by the indexer, and Corpus/Meta are indexer
+# bookkeeping. Every OTHER declared node type is a "stub-able" entity that the
+# relate phase may create on demand as an inference target. Shared by the
+# relate phase (which targets receive inferred content) and the
+# ``prune-entities`` CLI command (which orphaned nodes are prunable) so the two
+# agree on the structural/entity split.
+NON_ENTITY_LABELS: frozenset[str] = frozenset({"File", "Section", "Corpus", "Meta"})
+
 
 class OntologyError(ValueError):
     """Raised when an operation targets a type the ontology does not declare."""

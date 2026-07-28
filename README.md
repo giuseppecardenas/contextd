@@ -320,6 +320,8 @@ Each indexing session logs per-provider input/output token counts to `~/.context
 | `contextd add-corpus PATH` | Register a corpus for indexing | `--name`, `--granularity {file,section}`, `--from TEMPLATE` |
 | `contextd list-corpora` | List registered corpora | — |
 | `contextd index CORPUS` | Run an indexing pass | `--bootstrap`, `--incremental`, `--estimate-only`, `--refresh {inferred,summaries,llm,all}` |
+| `contextd remove-corpus CORPUS` | Unregister a corpus and delete its indexed data (source files untouched) | — |
+| `contextd prune-entities` | Delete orphaned entity nodes (no relationships) across all corpora | — |
 | `contextd ask "QUESTION"` | NL→Cypher query translation and execution | `--corpus NAME` |
 | `contextd logs` | Tail the structured JSON log | `--follow` |
 | `contextd costs` | Aggregated provider token spend | `--since YYYY-MM-DD` |

@@ -144,9 +144,30 @@ def _wipe_for_refresh(corpus: CorpusConfig, store: GraphStore, scope: RefreshSco
             {"c": c},
         )
     if scope == "all":
-        store.exec_write("MATCH (n:Section {corpus: $c}) DETACH DELETE n", {"c": c})
-        store.exec_write("MATCH (n:File {corpus: $c}) DETACH DELETE n", {"c": c})
-        store.exec_write("MATCH (n:Corpus {name: $c}) DETACH DELETE n", {"c": c})
+        delete_corpus_nodes(store, c)
+
+
+def delete_corpus_nodes(store: GraphStore, corpus_name: str) -> None:
+    """DETACH DELETE every ``Section`` / ``File`` / ``Corpus`` node of a corpus.
+
+    Cascades to all attached edges (structural, inferred, and manual alike).
+    This is the graph-side of removing a corpus and is shared by the ``all``
+    refresh scope (:func:`_wipe_for_refresh`) and the ``remove-corpus`` CLI
+    command.
+
+    Inference-target stubs (``Pattern`` / ``Artifact`` / ``Ticket`` / etc.) are
+    NOT corpus-scoped and are deliberately left in place; once no file
+    references them they become orphaned and are reaped separately by
+    ``prune-entities``. Idempotent: deleting a corpus with no nodes is a no-op.
+
+    :param store: The graph store to issue the deletes against.
+    :param corpus_name: The corpus identifier stored as the ``corpus`` property
+        on ``File`` / ``Section`` nodes and as the ``name`` of the ``Corpus``
+        node.
+    """
+    store.exec_write("MATCH (n:Section {corpus: $c}) DETACH DELETE n", {"c": corpus_name})
+    store.exec_write("MATCH (n:File {corpus: $c}) DETACH DELETE n", {"c": corpus_name})
+    store.exec_write("MATCH (n:Corpus {name: $c}) DETACH DELETE n", {"c": corpus_name})
 
 
 @dataclass

@@ -158,6 +158,37 @@ The token estimate is based on UTF-8 character count ÷ 4 (rough heuristic). The
 
 ---
 
+## `contextd remove-corpus`
+
+**Synopsis:** `contextd remove-corpus CORPUS_NAME`
+
+Unregisters a corpus and permanently deletes its indexed data. It performs three steps in order: `DETACH DELETE` of the corpus's `File` / `Section` / `Corpus` nodes from the graph (cascading to their edges), removal of the local per-corpus state files (the hasher index-state and the bootstrap checkpoint under `~/.contextd/state/`), and finally deletion of the corpus registration TOML. The corpus's source files on disk are never touched, so the corpus can be re-registered with `add-corpus` and re-indexed.
+
+The graph delete runs before the registration TOML is removed, so if the backend is unreachable the command fails while the corpus is still registered and can be retried once the backend is up. This command prints a data-loss warning and proceeds without an interactive prompt.
+
+```bash
+contextd remove-corpus my-notes
+```
+
+Inference-target entity nodes (`Ticket`, `Artifact`, `Pattern`, `Risk`, and the other stub-able types) are not corpus-scoped, so they are deliberately left in place; run `contextd prune-entities` afterwards to reap any that are now orphaned.
+
+---
+
+## `contextd prune-entities`
+
+**Synopsis:** `contextd prune-entities`
+
+Deletes orphaned entity nodes across every corpus. The relate phase creates entity nodes as the targets of relationships from files; when every file that referenced an entity has been re-indexed away or removed (for example via `remove-corpus`), the entity can be left with no relationships at all. This command `DETACH DELETE`s exactly those zero-degree entity nodes.
+
+The prunable labels are derived from the base ontology minus the structural labels `File`, `Section`, `Corpus`, and `Meta` (the shared `NON_ENTITY_LABELS` set), so structural nodes are never pruned even when edgeless: an isolated file is still a real file.
+
+```bash
+contextd prune-entities
+# ✓ pruned 12 orphaned entities
+```
+
+---
+
 ## `contextd ask`
 
 **Synopsis:** `contextd ask QUESTION [--corpus CORPUS_NAME]`

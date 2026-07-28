@@ -38,7 +38,9 @@ contextd ask "<query>"                      # natural-language query -> Cypher -
 
 Supporting commands: `contextd status`, `contextd down` (stops the backend,
 keeps data), `contextd reset` (removes the backend and deletes all indexed
-data), `contextd list-corpora`, `contextd logs`, `contextd costs`.
+data), `contextd list-corpora`, `contextd remove-corpus <name>` (unregister +
+delete one corpus's data), `contextd prune-entities` (reap orphaned entity
+nodes), `contextd logs`, `contextd costs`.
 
 ### MCP server
 

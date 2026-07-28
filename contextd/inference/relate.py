@@ -14,7 +14,7 @@ from typing import Any, cast
 
 from contextd.inference._json_body import extract_json_body
 from contextd.inference.prompts import PromptRenderer
-from contextd.ontology.schema import Ontology
+from contextd.ontology.schema import NON_ENTITY_LABELS, Ontology
 from contextd.providers.base import InferenceProvider, PromptRequest
 
 
@@ -70,8 +70,9 @@ _SYSTEM_PROPS: frozenset[str] = frozenset(
 # File/Section are enumeration-owned (inferred references resolve to existing
 # nodes and never receive inferred content); Corpus/Meta are not inference
 # targets. Every other declared node type is a stub-able entity whose content
-# the model may supply.
-_NON_CONTENT_LABELS: frozenset[str] = frozenset({"File", "Section", "Corpus", "Meta"})
+# the model may supply. Sourced from the shared ontology constant so the relate
+# phase and the prune-entities CLI agree on the structural/entity split.
+_NON_CONTENT_LABELS = NON_ENTITY_LABELS
 
 
 def _content_property_names(ontology: Ontology, target_type: str) -> frozenset[str]:

@@ -1,10 +1,11 @@
-"""Tests for add-corpus and list-corpora CLI commands."""
+"""Tests for add-corpus / list-corpora / remove-corpus / prune-entities CLI commands."""
 
 from __future__ import annotations
 
 import tomllib
 from pathlib import Path
 from textwrap import dedent
+from unittest.mock import MagicMock, patch
 
 import pytest
 from click.testing import CliRunner
@@ -539,3 +540,82 @@ def test_rewrite_template_path_relative_resolves_against_anchor(tmp_path: Path) 
     (tmp_path / "sub" / "x.json").write_text("", encoding="utf-8")
     result = _rewrite_template_path("sub/x.json", tmp_path)
     assert result == str((tmp_path / "sub" / "x.json").resolve())
+
+
+# ---------------------------------------------------------------------------
+# remove-corpus / prune-entities
+# ---------------------------------------------------------------------------
+
+
+def test_remove_corpus_deletes_toml_state_and_graph(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """remove-corpus wipes graph nodes, deletes state files, then the TOML."""
+    home = _setup_home(tmp_path, monkeypatch)
+    corpus_toml = home / "corpora" / "notes.toml"
+    corpus_toml.parent.mkdir(parents=True, exist_ok=True)
+    corpus_toml.write_text('[corpus]\nname = "notes"\nroot = "/tmp/notes"\n')
+    state_dir = home / "state"
+    (state_dir / "checkpoints").mkdir(parents=True, exist_ok=True)
+    index_state = state_dir / "notes-index-state.json"
+    checkpoint = state_dir / "checkpoints" / "notes.json"
+    index_state.write_text("{}")
+    checkpoint.write_text("{}")
+
+    mock_store = MagicMock()
+    with patch("contextd.storage.factory.build_graph_store", return_value=mock_store):
+        result = CliRunner().invoke(contextd.cli.cli, ["remove-corpus", "notes"])
+
+    assert result.exit_code == 0, result.output
+    assert "permanently deletes" in result.output
+    # The corpus's File/Section/Corpus nodes are DETACH DELETE'd (3 writes).
+    writes = [c.args[0] for c in mock_store.exec_write.call_args_list]
+    assert len(writes) == 3
+    assert all("DETACH DELETE" in w for w in writes)
+    # Registration TOML and both per-corpus state files are gone.
+    assert not corpus_toml.exists()
+    assert not index_state.exists()
+    assert not checkpoint.exists()
+
+
+def test_remove_corpus_errors_when_not_registered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _setup_home(tmp_path, monkeypatch)
+    result = CliRunner().invoke(contextd.cli.cli, ["remove-corpus", "ghost"])
+    assert result.exit_code != 0
+    assert "not registered" in result.output
+
+
+def test_prune_entities_deletes_orphans_and_reports_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _setup_home(tmp_path, monkeypatch)
+    mock_store = MagicMock()
+    mock_store.exec_read.return_value = [{"count": 3}]
+    with patch("contextd.storage.factory.build_graph_store", return_value=mock_store):
+        result = CliRunner().invoke(contextd.cli.cli, ["prune-entities"])
+
+    assert result.exit_code == 0, result.output
+    assert "pruned 3 orphaned entities" in result.output
+    mock_store.exec_write.assert_called_once()
+    write_cypher, write_params = mock_store.exec_write.call_args.args
+    assert "DETACH DELETE" in write_cypher
+    labels = write_params["labels"]
+    # Entity labels are prunable; structural labels are never pruned.
+    assert "Ticket" in labels and "Artifact" in labels
+    assert not ({"File", "Section", "Corpus", "Meta"} & set(labels))
+
+
+def test_prune_entities_reports_none_when_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _setup_home(tmp_path, monkeypatch)
+    mock_store = MagicMock()
+    mock_store.exec_read.return_value = [{"count": 0}]
+    with patch("contextd.storage.factory.build_graph_store", return_value=mock_store):
+        result = CliRunner().invoke(contextd.cli.cli, ["prune-entities"])
+
+    assert result.exit_code == 0, result.output
+    assert "no orphaned entities" in result.output
+    mock_store.exec_write.assert_not_called()

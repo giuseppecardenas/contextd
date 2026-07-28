@@ -44,6 +44,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   explicit data-loss warning and proceeds without a prompt. Corpus
   registrations and `config.toml` are preserved so a later `contextd up` starts
   a fresh, empty backend.
+- `contextd remove-corpus <name>` command: unregisters a single corpus and
+  deletes its indexed data — `DETACH DELETE`s its `File`/`Section`/`Corpus`
+  nodes (via the extracted `delete_corpus_nodes` helper, shared with the `all`
+  refresh scope), removes the per-corpus state files, then deletes the
+  registration TOML. Source files on disk are untouched.
+- `contextd prune-entities` command: reaps orphaned (zero-degree) entity nodes
+  across all corpora, complementing `remove-corpus`. Prunable labels are the
+  base ontology node types minus the shared `NON_ENTITY_LABELS`
+  (`File`/`Section`/`Corpus`/`Meta`), which are never pruned.
 
 **Upgrade note (existing installs):** entity content extraction depends on the
 updated `relate` prompt. `PromptRenderer` reads templates from
