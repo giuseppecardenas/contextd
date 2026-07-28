@@ -119,6 +119,31 @@ def test_reset_removes_container_and_volumes(
     assert "--volumes" in cmd
 
 
+def test_reset_clears_local_index_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`reset` must delete hasher state and checkpoints along with the volumes.
+
+    Both the daemon's batch filter and its periodic sweep gate on the hasher
+    state. Leaving it behind after the graph is destroyed makes every file hash
+    as unchanged, so the daemon silently indexes nothing until a bootstrap.
+    """
+    home = _setup_contextd_home(tmp_path)
+    monkeypatch.setenv("CONTEXTD_HOME", str(home))
+    state = home / "state"
+    (state / "checkpoints").mkdir(parents=True, exist_ok=True)
+    hasher_state = state / "notes-index-state.json"
+    checkpoint = state / "checkpoints" / "notes.json"
+    hasher_state.write_text("{}")
+    checkpoint.write_text("{}")
+
+    with patch("subprocess.run"):
+        result = CliRunner().invoke(contextd.cli.cli, ["reset"])
+
+    assert result.exit_code == 0
+    assert not hasher_state.exists()
+    assert not checkpoint.exists()
+    assert "local index state cleared" in result.output
+
+
 def test_reset_warns_about_data_loss(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`reset` must explicitly state that it permanently deletes indexed data."""
     home = _setup_contextd_home(tmp_path)

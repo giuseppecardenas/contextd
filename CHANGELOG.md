@@ -96,6 +96,39 @@ entity content on the existing graph.
   (for example when the endpoint file exists but the daemon has bound without
   yet reaching `listen()`): the freshly created socket is now closed before
   the exception propagates.
+- The indexer daemon no longer misses files saved atomically. `CorpusWatcher`
+  forwarded only created and modified events, but watchdog reports a
+  write-temp-then-rename save (what most editors and tools do) as a single
+  `FileMovedEvent` naming the destination, with only a `DirModifiedEvent`
+  alongside it. Such files were dropped silently and permanently, since nothing
+  downstream ever learned the path existed. `on_moved` and `on_deleted` are now
+  handled, which also lets deletions reap their nodes.
+- The daemon reconciles disk against the graph at startup, queueing any corpus
+  file that has no `File` node. A delivery gap now costs one restart instead of
+  waiting on the periodic sweep, which is rate limited to roughly one file per
+  minute.
+- `contextd reset` now deletes the per-corpus hasher index-state files and
+  bootstrap checkpoints along with the data volumes. Both the batch filter and
+  the periodic sweep gate on that state, so retaining it after destroying the
+  graph made every file hash as unchanged and the daemon indexed nothing at all,
+  silently, until the next bootstrap.
+- Section-granular sweeps now union the graph-derived section list with a disk
+  enumeration. Building the list from `Section` nodes alone meant a file with no
+  nodes yet was invisible to every sweep, so a new file the watcher missed was
+  missed permanently rather than merely late.
+- The hasher is updated only after a file indexes successfully, using the digest
+  observed before indexing, and its entry is dropped when a file's node is
+  reaped. Previously the digest was recorded at triage time, so an indexing
+  failure left the file looking up to date forever while no node existed for it.
+  `FileHasher` state mutation is now lock-guarded (it is written from the
+  incremental worker threads) and persisted via atomic replace, so a crash
+  mid-write can no longer leave truncated JSON that blocks daemon startup.
+- Batches dropped as unchanged, and watchdog events rejected as out of corpus
+  scope, are now logged. Both previously returned in silence, making a delivery
+  bug indistinguishable from an event that never arrived.
+- `DebouncedQueue` drains after a bounded maximum age (ten idle windows by
+  default) in addition to the idle window, so a file receiving events more often
+  than the window is long can no longer starve indefinitely.
 
 ## [0.1.0] — 2026-04-21
 

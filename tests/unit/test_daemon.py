@@ -45,10 +45,18 @@ def test_filter_changed_returns_only_changed_paths(tmp_path: Path) -> None:
 
     hasher.mark_seen(a)  # a is already known
     result = _filter_changed([a, b], hasher)
-    assert result == [b]
+    assert result.to_index == [b]
+    assert result.unchanged == [a]
+    assert result.digests[b] == hasher.hash(b)
 
 
-def test_filter_changed_marks_changed_paths_after_check(tmp_path: Path) -> None:
+def test_filter_changed_does_not_mark_paths_seen(tmp_path: Path) -> None:
+    """The hasher must not be updated at triage time.
+
+    Marking before the file is indexed strands it when indexing then fails: the
+    recorded digest makes every later event look unchanged while no node exists.
+    _handle_batch marks only after run_incremental_file reports success.
+    """
     from contextd.daemon import _filter_changed
     from contextd.indexer.hasher import FileHasher
 
@@ -56,10 +64,9 @@ def test_filter_changed_marks_changed_paths_after_check(tmp_path: Path) -> None:
     f = tmp_path / "f.md"
     f.write_text("content")
 
-    first = _filter_changed([f], hasher)
-    assert first == [f]
-    second = _filter_changed([f], hasher)
-    assert second == []
+    assert _filter_changed([f], hasher).to_index == [f]
+    assert _filter_changed([f], hasher).to_index == [f]
+    assert hasher.stored(f) is None
 
 
 def test_handle_batch_skips_when_branch_not_allowed(tmp_path: Path) -> None:
@@ -162,6 +169,178 @@ def test_handle_batch_calls_run_incremental_for_changed_files(
     mock_rif.assert_called_once()
 
 
+def _entry_for(tmp_path: Path, store: object | None = None, **corpus_overrides: object) -> object:
+    """Build a CorpusDaemonEntry over *tmp_path* with mocked providers."""
+    from contextd.corpus_config import CorpusConfig
+    from contextd.daemon import CorpusDaemonEntry
+    from contextd.indexer.hasher import FileHasher
+
+    corpus: dict[str, object] = {"name": "t", "root": str(tmp_path)}
+    corpus.update(corpus_overrides)
+    return CorpusDaemonEntry(
+        corpus_cfg=CorpusConfig.model_validate({"corpus": corpus}),
+        store=MagicMock() if store is None else store,
+        hasher=FileHasher(),
+        embedder=MagicMock(),
+        summariser=MagicMock(),
+        inferrer=MagicMock(),
+        entity_sampler=lambda _s: [],
+    )
+
+
+def test_handle_batch_marks_hash_only_after_success(tmp_path: Path) -> None:
+    """A failed index must leave the file looking changed so it is retried.
+
+    Marking at triage time (the old behaviour) recorded the digest before the
+    work happened, so a failure stranded the file: every later event saw an
+    up-to-date digest while no node existed for it.
+    """
+    from contextd.daemon import _handle_batch
+
+    f = tmp_path / "a.md"
+    f.write_text("x")
+    entry = _entry_for(tmp_path)
+
+    with (
+        patch("contextd.daemon.branch_is_allowed", return_value=True),
+        patch("contextd.daemon.is_git_busy", return_value=False),
+        patch("contextd.daemon.run_incremental_file", side_effect=RuntimeError("boom")),
+    ):
+        _handle_batch(
+            [f], entry, inference_concurrency=1, incremental_workers=1, allowed_branches=[]
+        )
+
+    assert entry.hasher.stored(f) is None  # type: ignore[attr-defined]
+
+    from contextd.indexer.pipeline import IncrementalResult
+
+    with (
+        patch("contextd.daemon.branch_is_allowed", return_value=True),
+        patch("contextd.daemon.is_git_busy", return_value=False),
+        patch(
+            "contextd.daemon.run_incremental_file",
+            return_value=IncrementalResult("indexed", str(f)),
+        ),
+    ):
+        _handle_batch(
+            [f], entry, inference_concurrency=1, incremental_workers=1, allowed_branches=[]
+        )
+
+    assert entry.hasher.stored(f) == entry.hasher.hash(f)  # type: ignore[attr-defined]
+
+
+def test_handle_batch_forgets_hash_when_file_is_reaped(tmp_path: Path) -> None:
+    """After a deletion the digest must be dropped, so restoring identical
+    content is re-indexed instead of looking permanently up to date."""
+    from contextd.daemon import _handle_batch
+    from contextd.indexer.pipeline import IncrementalResult
+
+    f = tmp_path / "gone.md"
+    f.write_text("x")
+    entry = _entry_for(tmp_path)
+    entry.hasher.mark_seen(f)  # type: ignore[attr-defined]
+    f.unlink()
+
+    with (
+        patch("contextd.daemon.branch_is_allowed", return_value=True),
+        patch("contextd.daemon.is_git_busy", return_value=False),
+        patch(
+            "contextd.daemon.run_incremental_file",
+            return_value=IncrementalResult("deleted", str(f)),
+        ) as mock_rif,
+    ):
+        _handle_batch(
+            [f], entry, inference_concurrency=1, incremental_workers=1, allowed_branches=[]
+        )
+
+    mock_rif.assert_called_once()  # the deletion reached the worker
+    assert entry.hasher.stored(f) is None  # type: ignore[attr-defined]
+
+
+def test_handle_batch_logs_when_batch_yields_no_work(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A batch dropped as unchanged must say so; silence here is
+    indistinguishable from an event that never arrived."""
+    import logging
+
+    from contextd.daemon import _handle_batch
+
+    f = tmp_path / "a.md"
+    f.write_text("x")
+    entry = _entry_for(tmp_path)
+    entry.hasher.mark_seen(f)  # type: ignore[attr-defined]
+
+    with (
+        patch("contextd.daemon.branch_is_allowed", return_value=True),
+        patch("contextd.daemon.is_git_busy", return_value=False),
+        patch("contextd.daemon.run_incremental_file") as mock_rif,
+        caplog.at_level(logging.INFO, logger="contextd.daemon"),
+    ):
+        _handle_batch(
+            [f], entry, inference_concurrency=1, incremental_workers=1, allowed_branches=[]
+        )
+
+    mock_rif.assert_not_called()
+    assert "yielded no work" in caplog.text
+    assert str(f) in caplog.text
+
+
+def test_reconcile_missing_files_queues_only_ungraphed_files(tmp_path: Path) -> None:
+    """Files on disk with no File node must be queued, bypassing the hash gate.
+
+    This is what bounds a watcher delivery gap to one restart, and what repairs
+    the state left by destroying the graph while the hasher state file survives.
+    """
+    from contextd.daemon import _reconcile_missing_files
+
+    indexed = tmp_path / "known.md"
+    missing = tmp_path / "unknown.md"
+    indexed.write_text("a")
+    missing.write_text("b")
+
+    store = MagicMock()
+    store.exec_read.return_value = [{"path": str(indexed)}]
+    entry = _entry_for(tmp_path, store=store)
+    # Stale state: both files look unchanged, as after a reset.
+    entry.hasher.mark_seen(indexed)  # type: ignore[attr-defined]
+    entry.hasher.mark_seen(missing)  # type: ignore[attr-defined]
+
+    relay: queue.Queue[Path] = queue.Queue()
+    count = _reconcile_missing_files(entry, relay)  # type: ignore[arg-type]
+
+    assert count == 1
+    assert relay.get_nowait() == missing
+    assert relay.empty()
+    # Forgotten so the batch filter cannot drop it again.
+    assert entry.hasher.stored(missing) is None  # type: ignore[attr-defined]
+
+
+def test_build_sweep_pending_section_mode_includes_ungraphed_files(tmp_path: Path) -> None:
+    """A section-granular sweep built only from Section nodes can never see a
+    file that has no nodes yet, making a missed new file permanent."""
+    from contextd.daemon import _build_sweep_pending
+
+    known = tmp_path / "known.md"
+    fresh = tmp_path / "fresh.md"
+    known.write_text("# A\n\nbody\n")
+    fresh.write_text("# B\n\nbody\n")
+
+    store = MagicMock()
+    store.exec_read.return_value = [
+        {"id": f"{known}#a", "path": str(known), "hash": "h", "anchor": "a"}
+    ]
+    entry = _entry_for(tmp_path, store=store, granularity="section")
+
+    units = _build_sweep_pending(entry)  # type: ignore[arg-type]
+    by_path = {u.path: u for u in units}
+
+    assert str(fresh) in by_path
+    assert by_path[str(fresh)].sections == []  # enters as needing a full index
+    assert by_path[str(known)].sections != []
+    assert len(units) == 2  # no duplicate for the known file
+
+
 def test_handle_batch_processes_multiple_files_concurrently(
     tmp_path: Path,
 ) -> None:
@@ -260,19 +439,25 @@ def test_handle_batch_logs_and_continues_on_error(tmp_path: Path) -> None:
     assert len(results) == 1  # second file still processed
 
 
-def test_filter_changed_tolerates_deleted_file(tmp_path: Path) -> None:
-    """A path that vanishes between the watchdog event and the debounce drain
-    must not raise FileNotFoundError — the daemon should skip it silently."""
+def test_filter_changed_dispatches_vanished_paths_for_reaping(tmp_path: Path) -> None:
+    """A path that no longer exists must reach the worker, not be dropped.
+
+    A vanished path is a deletion, and run_incremental_file's !path.exists()
+    branch is what reaps the node. Dropping it here (the old behaviour) left the
+    graph holding nodes for files that no longer exist, with nothing to remove
+    them. It must also not raise FileNotFoundError.
+    """
     from contextd.daemon import _filter_changed
     from contextd.indexer.hasher import FileHasher
 
     existing = tmp_path / "exists.md"
     existing.write_text("content")
-    deleted = tmp_path / "gone.md"  # never created — simulates a .git temp file
+    deleted = tmp_path / "gone.md"  # never created, or removed before the drain
 
     result = _filter_changed([existing, deleted], FileHasher())
-    assert existing in result
-    assert deleted not in result
+    assert existing in result.to_index
+    assert deleted in result.to_index
+    assert deleted not in result.digests  # nothing to hash
 
 
 def test_path_is_excluded_blocks_git_and_cache_paths() -> None:

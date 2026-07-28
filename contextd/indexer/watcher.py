@@ -8,6 +8,16 @@ Thread-safety: the ``on_change`` callback fires on watchdog's dispatch
 thread, NOT the caller's thread. Downstream consumers (e.g. the M5
 ``DebouncedQueue``) are not thread-safe; wire through a
 ``queue.Queue`` or add a lock before the callback mutates shared state.
+
+Event coverage: all four file event types must be forwarded, not just
+created/modified. Editors and tools routinely save atomically by writing a
+temp file beside the target and renaming it over the top, which watchdog
+reports as a single ``FileMovedEvent`` (see ``_queue_renamed_event`` in
+``watchdog.observers.fsevents``); the accompanying ``DirModifiedEvent`` is a
+directory event and is filtered out. Forwarding only created/modified
+therefore drops every atomically-saved file on the floor, silently and
+permanently, since nothing downstream ever learns the path exists. Deletions
+likewise need forwarding so the indexer can reap the node.
 """
 
 from __future__ import annotations
@@ -47,9 +57,28 @@ class CorpusWatcher:
                 if not event.is_directory:
                     self._on_change(Path(os.fsdecode(event.src_path)))
 
+            def on_moved(inner, event: FileSystemEvent) -> None:  # noqa: N805
+                if not event.is_directory:
+                    self._on_change(Path(os.fsdecode(event.dest_path)))
+
+            def on_deleted(inner, event: FileSystemEvent) -> None:  # noqa: N805
+                if not event.is_directory:
+                    self._on_change(Path(os.fsdecode(event.src_path)))
+
         self._observer = Observer()
         self._observer.schedule(_H(), str(self._root), recursive=True)
         self._observer.start()
+
+    def is_alive(self) -> bool:
+        """Return True if the observer thread is running and dispatching events.
+
+        A watcher that was never started, or whose observer thread has died (an
+        unhandled exception in watchdog's emitter, or an OS-level watch that went
+        away), reports False. The daemon polls this so a dead watcher is logged
+        and recreated instead of leaving the corpus silently unwatched for as
+        long as the process lives.
+        """
+        return self._observer is not None and self._observer.is_alive()
 
     def stop(self) -> None:
         if self._observer is not None:

@@ -55,3 +55,39 @@ def test_add_normalises_path(tmp_path: Path) -> None:
     time.sleep(0.1)
     batch = q.drain_if_ready()
     assert len(batch) == 1
+
+
+def test_max_age_forces_drain_under_continuous_activity(tmp_path: Path) -> None:
+    # Each add() resets the idle window, so a path touched more often than the
+    # window would never drain and the index would silently go stale. The
+    # max-age cap bounds that wait.
+    q = DebouncedQueue(window_seconds=0.2, max_age_seconds=0.3)
+    target = tmp_path / "busy.md"
+    target.touch()
+
+    deadline = time.monotonic() + 0.5
+    batch: list[Path] = []
+    while time.monotonic() < deadline:
+        q.add(target)  # keeps resetting the idle window
+        time.sleep(0.05)
+        batch = q.drain_if_ready()
+        if batch:
+            break
+
+    assert batch == [target.resolve()]
+
+
+def test_max_age_defaults_to_ten_windows() -> None:
+    q = DebouncedQueue(window_seconds=1.5)
+    assert q._max_age == 15.0
+
+
+def test_max_age_shorter_than_window_is_rejected() -> None:
+    # A cap below the window would pre-empt the debounce on every batch.
+    with pytest.raises(ValueError, match="must be >= window_seconds"):
+        DebouncedQueue(window_seconds=30.0, max_age_seconds=5.0)
+
+
+def test_max_age_can_be_disabled() -> None:
+    q = DebouncedQueue(window_seconds=30.0, max_age_seconds=0)
+    assert q._max_age == 0

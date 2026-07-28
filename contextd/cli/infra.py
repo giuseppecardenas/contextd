@@ -280,6 +280,24 @@ def down() -> None:
     console.print("[green]✓[/] backend stopped (data preserved)")
 
 
+def _purge_local_index_state() -> int:
+    """Delete every corpus's hasher index-state file and bootstrap checkpoint.
+
+    Mirrors the per-corpus cleanup ``remove-corpus`` performs, but across all
+    corpora, for use when the graph itself is destroyed. Returns the number of
+    files removed. Corpus registrations and config are left alone.
+    """
+    state_dir = contextd_home() / "state"
+    removed = 0
+    for state_file in (
+        *state_dir.glob("*-index-state.json"),
+        *(state_dir / "checkpoints").glob("*.json"),
+    ):
+        state_file.unlink(missing_ok=True)
+        removed += 1
+    return removed
+
+
 @cli.command()
 def reset() -> None:
     """Stop everything and permanently delete all indexed data.
@@ -295,6 +313,13 @@ def reset() -> None:
     left untouched, so a subsequent ``contextd up`` brings up a fresh, empty
     backend ready for re-indexing. Use ``contextd down`` instead when you only
     want to stop the backend and keep the indexed data.
+
+    The per-corpus hasher index-state files and bootstrap checkpoints are deleted
+    along with the volumes. They describe content already in the graph, so
+    leaving them behind after the graph is destroyed makes every file hash as
+    unchanged: the daemon's batch filter and its periodic sweep both gate on that
+    state, so a reset without this cleanup silently indexes nothing at all, with
+    no error anywhere, until someone runs a bootstrap.
     """
     console.print(
         "[bold red]⚠ contextd reset will permanently delete all indexed "
@@ -305,6 +330,8 @@ def reset() -> None:
     console.print("[green]✓[/] indexer daemon stopped")
     _run_compose(_load_cfg(), "down", "--volumes")
     console.print("[green]✓[/] backend container and data volumes removed")
+    purged = _purge_local_index_state()
+    console.print(f"[green]✓[/] local index state cleared ({purged} file(s))")
     console.print("[dim]run `contextd up` to start a fresh, empty backend[/]")
 
 

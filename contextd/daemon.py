@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from contextd._compat import install_stop_handlers, ipc_file_name
+from contextd._paths import canonical_path
 from contextd.indexer.checkpoint import Checkpoint, CheckpointStore
 from contextd.indexer.debouncer import DebouncedQueue
 from contextd.indexer.git_lock import branch_is_allowed, is_git_busy
@@ -96,6 +97,22 @@ class SweepState:
     budget: float = 0.0
 
 
+@dataclass
+class BatchTriage:
+    """How a debounced batch splits into work and no-ops.
+
+    ``to_index`` holds paths to dispatch, including vanished paths whose nodes
+    need reaping. ``digests`` carries the content digest observed for each
+    existing path in ``to_index``, so the hasher can be updated post-success
+    without re-reading the file. ``unchanged`` holds paths whose digest already
+    matched, retained purely so a no-op batch can say why in the log.
+    """
+
+    to_index: list[Path] = field(default_factory=list)
+    unchanged: list[Path] = field(default_factory=list)
+    digests: dict[Path, str] = field(default_factory=dict)
+
+
 def _path_is_excluded(path: Path) -> bool:
     """Return True if *path* contains a default-excluded directory component.
 
@@ -109,7 +126,14 @@ def _path_is_excluded(path: Path) -> bool:
 def _build_sweep_pending(entry: CorpusDaemonEntry) -> list[SweepWorkUnit]:
     """Build the pending work list for a new sweep pass.
 
-    Section-granular: queries Section nodes from graph grouped by file path.
+    Section-granular: Section nodes from the graph grouped by file path, unioned
+    with a disk enumeration. The union matters: a graph-only list can never
+    contain a file that has no Section nodes yet, so any new file the watcher
+    failed to deliver would be invisible to every subsequent sweep and therefore
+    missed permanently rather than merely late. Files present on disk but absent
+    from the graph enter as section-less units, which ``_process_sweep_unit``
+    treats as needing a full index.
+
     File-granular: enumerates corpus files from disk.
     """
     corpus_name = entry.corpus_cfg.corpus.name
@@ -130,7 +154,14 @@ def _build_sweep_pending(entry: CorpusDaemonEntry) -> list[SweepWorkUnit]:
                     stored_hash=row.get("hash"),
                 )
             )
-        return [SweepWorkUnit(path=fp, sections=secs) for fp, secs in by_file.items()]
+        units = [SweepWorkUnit(path=fp, sections=secs) for fp, secs in by_file.items()]
+        known = {canonical_path(fp) for fp in by_file}
+        units.extend(
+            SweepWorkUnit(path=str(p), sections=[])
+            for p in enumerate_corpus_files(entry.corpus_cfg)
+            if canonical_path(p) not in known
+        )
+        return units
 
     return [
         SweepWorkUnit(path=str(p), sections=[]) for p in enumerate_corpus_files(entry.corpus_cfg)
@@ -197,19 +228,121 @@ def _drain_relay_into_debouncer(
         pass
 
 
-def _filter_changed(paths: list[Path], hasher: FileHasher) -> list[Path]:
-    changed: list[Path] = []
+def _fmt_paths(paths: list[Path], limit: int = 5) -> str:
+    """Render a path list for a log line, truncating past *limit* entries."""
+    shown = ", ".join(str(p) for p in paths[:limit])
+    if len(paths) > limit:
+        return f"{shown} (+{len(paths) - limit} more)"
+    return shown
+
+
+def _filter_changed(paths: list[Path], hasher: FileHasher) -> BatchTriage:
+    """Split a debounced batch into work to dispatch and paths to ignore.
+
+    A path is work when its content digest differs from the hasher's record, or
+    when it has vanished: a vanished path is a deletion, which
+    ``run_incremental_file`` turns into a node reap, so it must reach the worker
+    rather than being dropped here. Paths whose digest matches are returned
+    separately so the caller can log why a batch produced nothing, which is
+    otherwise indistinguishable from an event that never arrived.
+
+    The hasher is deliberately NOT updated here. Recording a digest before the
+    file is successfully indexed strands the file if indexing then fails: it
+    looks up to date to every later event while no node exists for it. Callers
+    mark the digests carried in ``digests`` only after ``run_incremental_file``
+    reports success.
+    """
+    triage = BatchTriage()
     for p in paths:
         try:
-            if hasher.is_changed(p):
-                hasher.mark_seen(p)
-                changed.append(p)
+            if not p.exists():
+                triage.to_index.append(p)
+                continue
+            digest = hasher.hash(p)
         except OSError:
-            # File was deleted between the watchdog event and the debounce drain
-            # (common for .git temp files). Skip rather than crash; the deletion
-            # case for corpus files is handled separately via on_deleted (TODO).
-            pass
-    return changed
+            # Unreadable or vanished mid-check. Dispatch it so the failure is
+            # logged and buffered by the worker instead of silently swallowed.
+            triage.to_index.append(p)
+            continue
+        if digest != hasher.stored(p):
+            triage.to_index.append(p)
+            triage.digests[p] = digest
+        else:
+            triage.unchanged.append(p)
+    return triage
+
+
+def _make_relay_callback(
+    entry: CorpusDaemonEntry, relay: queue.Queue[Path]
+) -> Callable[[Path], None]:
+    """Build the watchdog callback that filters events into *relay*.
+
+    Applies the same under-root, exclude and include contract that
+    ``enumerate_corpus_files`` enforces, so build artefacts and out-of-scope
+    paths are rejected before reaching the pipeline. Rejections are logged at
+    debug level: an event silently vanishing here is indistinguishable from one
+    the OS never delivered, which makes delivery bugs very hard to isolate.
+    """
+
+    def _cb(path: Path) -> None:
+        if (
+            _path_under(path, Path(entry.corpus_cfg.corpus.root))
+            and not _path_is_excluded(path)
+            and _path_matches_corpus_includes(path, entry.corpus_cfg)
+        ):
+            relay.put(path)
+        else:
+            _log.debug(
+                "corpus %s: event for %s dropped (outside corpus scope)",
+                entry.corpus_cfg.corpus.name,
+                path,
+            )
+
+    return _cb
+
+
+def _start_watcher(entry: CorpusDaemonEntry, relay: queue.Queue[Path]) -> None:
+    """Attach and start a fresh watcher for *entry*, replacing any prior one."""
+    entry.watcher = CorpusWatcher(
+        Path(entry.corpus_cfg.corpus.root), _make_relay_callback(entry, relay)
+    )
+    entry.watcher.start()
+
+
+def _reconcile_missing_files(entry: CorpusDaemonEntry, relay: queue.Queue[Path]) -> int:
+    """Enqueue corpus files that exist on disk but have no node in the graph.
+
+    The watcher is the only low-latency path into the index, and anything it
+    fails to deliver (a bug, a dead observer thread, a change made while the
+    daemon was down) is otherwise left to the periodic sweep, which is rate
+    limited to roughly one file per minute and has taken days to complete a pass
+    on a large corpus. This pass makes the graph authoritative at startup: any
+    file with no node is queued immediately, so a delivery gap costs one restart
+    rather than being permanent.
+
+    It also repairs the state divergence left by destroying the graph (for
+    example ``contextd reset``) while the hasher's state file survives. Every
+    file would then hash as unchanged and be filtered out of both the watcher and
+    sweep paths, indexing nothing at all with no error anywhere. Queued paths are
+    forgotten by the hasher first so the batch filter cannot drop them again.
+
+    Returns the number of files enqueued. Section-granular corpora are covered
+    too, since a file with no ``File`` node has no ``Section`` nodes either.
+    """
+    corpus_name = entry.corpus_cfg.corpus.name
+    rows = entry.store.exec_read(
+        "MATCH (n:File {corpus: $c}) WHERE n.path IS NOT NULL RETURN n.path AS path",
+        {"c": corpus_name},
+    )
+    indexed = {row["path"] for row in rows}
+
+    missing = [
+        p for p in enumerate_corpus_files(entry.corpus_cfg) if canonical_path(p) not in indexed
+    ]
+    entry.hasher.forget_many(missing)
+    for path in missing:
+        relay.put(path)
+    return len(missing)
 
 
 def _handle_batch(
@@ -232,9 +365,24 @@ def _handle_batch(
         _log.warning("corpus %s: git lock detected; skipping batch", corpus_name)
         return
 
-    changed = _filter_changed(batch, corpus_entry.hasher)
+    triage = _filter_changed(batch, corpus_entry.hasher)
+    changed = triage.to_index
     if not changed:
+        _log.info(
+            "corpus %s: batch of %d path(s) yielded no work; all unchanged: %s",
+            corpus_name,
+            len(batch),
+            _fmt_paths(triage.unchanged),
+        )
         return
+    if triage.unchanged:
+        _log.debug(
+            "corpus %s: %d of %d batched path(s) unchanged: %s",
+            corpus_name,
+            len(triage.unchanged),
+            len(batch),
+            _fmt_paths(triage.unchanged),
+        )
 
     # Save initial checkpoint before dispatching — lets a crashed daemon know
     # which files were in-flight on next startup.
@@ -264,6 +412,10 @@ def _handle_batch(
                 corpus_entry.entity_sampler,
                 inference_concurrency=inference_concurrency,
             )
+            if result.action == "deleted":
+                corpus_entry.hasher.forget(path)
+            else:
+                corpus_entry.hasher.mark_seen(path, triage.digests.get(path))
             if checkpoint_store is not None:
                 with ckpt_lock:
                     checkpoint_store.save(
@@ -364,28 +516,29 @@ def run_daemon(
                     except OSError:
                         relays[name].put(f)
 
+    # Phase 2b: reconcile disk against the graph — catches anything the watcher
+    # never delivered, plus drift accumulated while the daemon was down.
+    for entry in config.corpora:
+        name = entry.corpus_cfg.corpus.name
+        try:
+            reconciled = _reconcile_missing_files(entry, relays[name])
+        except Exception:
+            _log.exception("corpus %s: startup reconciliation failed; continuing", name)
+            continue
+        if reconciled:
+            _log.info(
+                "corpus %s: startup reconciliation queued %d file(s) missing from the graph",
+                name,
+                reconciled,
+            )
+        else:
+            _log.info("corpus %s: startup reconciliation found no missing files", name)
+
     # Phase 3: start watchers
     for entry in config.corpora:
         name = entry.corpus_cfg.corpus.name
-        root = Path(entry.corpus_cfg.corpus.root)
-
-        def _make_callback(
-            e: CorpusDaemonEntry = entry,
-            relay: queue.Queue[Path] = relays[name],
-        ) -> Callable[[Path], None]:
-            def _cb(path: Path) -> None:
-                if (
-                    _path_under(path, Path(e.corpus_cfg.corpus.root))
-                    and not _path_is_excluded(path)
-                    and _path_matches_corpus_includes(path, e.corpus_cfg)
-                ):
-                    relay.put(path)
-
-            return _cb
-
-        entry.watcher = CorpusWatcher(root, _make_callback())
-        entry.watcher.start()
-        _log.info("watching corpus %s at %s", name, root)
+        _start_watcher(entry, relays[name])
+        _log.info("watching corpus %s at %s", name, entry.corpus_cfg.corpus.root)
 
     # Phase 4: start IPC server (if a socket path was provided)
     ipc_server = None
@@ -407,6 +560,23 @@ def run_daemon(
             for entry in config.corpora:
                 name = entry.corpus_cfg.corpus.name
                 try:
+                    if entry.watcher is not None and not entry.watcher.is_alive():
+                        _log.warning(
+                            "corpus %s: watcher thread is dead; restarting it and "
+                            "reconciling against the graph to recover missed events",
+                            name,
+                        )
+                        with contextlib.suppress(Exception):
+                            entry.watcher.stop()
+                        _start_watcher(entry, relays[name])
+                        with contextlib.suppress(Exception):
+                            recovered = _reconcile_missing_files(entry, relays[name])
+                            _log.info(
+                                "corpus %s: watcher restarted; queued %d missing file(s)",
+                                name,
+                                recovered,
+                            )
+
                     _drain_relay_into_debouncer(relays[name], debouncers[name])
                     batch = debouncers[name].drain_if_ready()
                     if batch:
