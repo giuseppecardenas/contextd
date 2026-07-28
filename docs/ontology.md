@@ -121,7 +121,7 @@ Applied via `apply_overrides(ontology, overrides_path)` in `contextd/ontology/ov
 ## Validation
 
 ```python
-ontology.validate_node("Pattern")   # passes
+ontology.validate_node("Pattern")  # passes
 ontology.validate_node("Registry")  # passes if alias declared; raises OntologyError otherwise
 ontology.validate_edge("REFERENCES", origin="inferred")  # passes
 ontology.validate_edge("HALLUCINATED", origin="inferred")  # raises OntologyError

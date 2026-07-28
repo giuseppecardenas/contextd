@@ -129,6 +129,18 @@ entity content on the existing graph.
 - `DebouncedQueue` drains after a bounded maximum age (ten idle windows by
   default) in addition to the idle window, so a file receiving events more often
   than the window is long can no longer starve indefinitely.
+- CI no longer breaks on unrelated upstream releases. `tests/conftest.py`
+  imported `testcontainers.neo4j`, which testcontainers 4.14 deprecated in favour
+  of `testcontainers.community.neo4j`; with `filterwarnings = ["error", ...]` the
+  resulting DeprecationWarning was fatal at import, so every pytest job (unit,
+  integration, e2e) aborted during collection without running a single test. The
+  import now prefers the new path and falls back to the old one, working on both.
+  `ruff` and `mypy` are capped to a minor range, since both change rules between
+  minors while CI resolves the newest release on the day it runs, and `mcp` is
+  capped below its 2.0 major, which renames `Tool.inputSchema` to `input_schema`
+  and keeps the old name only as a serialisation alias. A stray triple space in a
+  `docs/ontology.md` code block is fixed, which newer ruff flags now that it
+  formats Python blocks inside Markdown.
 - A provider failure in the summarise or relate phase is now logged with the
   path, exception type, and message. All four LLM phase workers caught every
   exception and folded it into `PhaseResult.skipped`, an integer no caller

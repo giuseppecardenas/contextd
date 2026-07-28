@@ -10,7 +10,16 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 import pytest
-from testcontainers.neo4j import Neo4jContainer
+
+try:
+    # testcontainers >= 4.14 moved the Neo4j module under `community` and
+    # deprecated the old path. Since `filterwarnings = ["error", ...]` makes any
+    # DeprecationWarning fatal, importing the legacy path on a new version aborts
+    # collection for the entire test suite before a single test runs. Try the new
+    # location first so the suite works on both, rather than pinning the library.
+    from testcontainers.community.neo4j import Neo4jContainer
+except ImportError:  # testcontainers < 4.14
+    from testcontainers.neo4j import Neo4jContainer
 
 from contextd.config import Neo4jConfig
 from contextd.migrations.neo4j import ALL_MIGRATIONS as NEO4J_MIGRATIONS

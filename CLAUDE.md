@@ -57,8 +57,8 @@ server code (see Logging below).
 pytest tests/unit -v                 # fast, no Docker required
 pytest tests/integration tests/e2e   # require Docker (spins up Neo4j via testcontainers)
 
-ruff check contextd tests            # lint
-ruff format --check contextd tests   # format check (drop --check to apply)
+ruff check .                         # lint
+ruff format --check .                # format check (drop --check to apply)
 mypy --strict contextd               # type check
 ```
 
@@ -66,6 +66,10 @@ Every commit must leave all four gates green: `ruff check`,
 `ruff format --check`, `mypy --strict contextd`, `pytest tests/unit`. Also run
 the abstraction-invariant grep defined in `.github/workflows/ci.yml` before
 pushing.
+
+Run the ruff commands over `.`, not over `contextd tests`. CI checks the whole
+repository, so a narrower local scope silently misses files outside those two
+directories (docs, examples, scripts) and the break only surfaces after a push.
 
 ## Code Style & Architecture
 
