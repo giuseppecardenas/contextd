@@ -171,7 +171,18 @@ def phase_summarise(
     def _worker(f: Path) -> tuple[int, int]:
         try:
             result = summariser.summarise(f.read_text(errors="replace"))
-        except Exception:
+        except Exception as exc:
+            # Must be logged, not just counted. The caller reports this file as
+            # indexed regardless (its node and embedding do exist), so without a
+            # line here a rate limit, safety block, or malformed provider
+            # response leaves a permanently unsummarised file that is invisible
+            # to summary search, with nothing anywhere recording why.
+            _log.warning(
+                "summarise failed for %s: %s: %s; File node left without a summary",
+                f,
+                type(exc).__name__,
+                exc,
+            )
             return (0, 1)
         store.exec_write(
             "MATCH (n:File {path: $path}) "
@@ -212,7 +223,18 @@ def phase_relate(
     def _worker(f: Path) -> tuple[int, int]:
         try:
             relations = inferrer.infer(f.read_text(errors="replace"), known_entities=known)
-        except Exception:
+        except Exception as exc:
+            # Logged for the same reason as the summarise failure above, plus one
+            # of its own: the inferred_at marker below is what makes resume
+            # idempotent, so a failure here means this file is re-inferred on
+            # every subsequent pass, spending tokens indefinitely and silently.
+            _log.warning(
+                "relate failed for %s: %s: %s; no inferred edges written, "
+                "file will be retried on the next pass",
+                f,
+                type(exc).__name__,
+                exc,
+            )
             return (0, 1)
         file_path = canonical_path(f)
         # Wipe-and-replace inferred edges (spec §5.5).
@@ -536,10 +558,17 @@ def phase_summarise_sections(
         anchor = r["id"].split("#", 1)[1]
         sec = next((s for s in sections if s.anchor == anchor), None)
         if not sec:
+            _log.debug("summarise: section %s no longer present on disk; skipping", r["id"])
             return (0, 1)
         try:
             result = summariser.summarise(sec.body)
-        except Exception:
+        except Exception as exc:
+            _log.warning(
+                "summarise failed for section %s: %s: %s; Section left without a summary",
+                r["id"],
+                type(exc).__name__,
+                exc,
+            )
             return (0, 1)
         store.exec_write(
             "MATCH (s:Section {id: $id}) "
@@ -599,10 +628,18 @@ def phase_relate_sections(
         anchor = r["id"].split("#", 1)[1]
         sec = next((s for s in sections if s.anchor == anchor), None)
         if not sec:
+            _log.debug("relate: section %s no longer present on disk; skipping", r["id"])
             return (0, 1)
         try:
             relations = inferrer.infer(sec.body, known_entities=known)
-        except Exception:
+        except Exception as exc:
+            _log.warning(
+                "relate failed for section %s: %s: %s; no inferred edges written, "
+                "section will be retried on the next pass",
+                r["id"],
+                type(exc).__name__,
+                exc,
+            )
             return (0, 1)
         # Wipe-and-replace inferred edges for this section (spec §5.5).
         store.delete_edges(r["id"], origin="inferred", src_label="Section")

@@ -129,6 +129,16 @@ entity content on the existing graph.
 - `DebouncedQueue` drains after a bounded maximum age (ten idle windows by
   default) in addition to the idle window, so a file receiving events more often
   than the window is long can no longer starve indefinitely.
+- A provider failure in the summarise or relate phase is now logged with the
+  path, exception type, and message. All four LLM phase workers caught every
+  exception and folded it into `PhaseResult.skipped`, an integer no caller
+  surfaces per file, while the incremental path still reported the file as
+  `indexed` because its node and embedding really had been written. A rate
+  limit, safety block, or malformed provider response therefore produced a
+  permanently unsummarised file, invisible to summary search, with a log line
+  claiming success. For relate there was a second cost: `inferred_at` is the
+  idempotent-resume marker, so a silent failure meant the file was re-inferred
+  on every subsequent pass indefinitely.
 
 ## [0.1.0] — 2026-04-21
 
