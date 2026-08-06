@@ -1,9 +1,14 @@
 """Infers typed relationships from file (or section) content.
 
-Enforces the strict-ontology invariant — any relationship whose edge
-type or target type is not declared in the ontology is discarded
-silently (spec §3.5). This is the primary defence against hallucinated
-edges.
+Enforces the strict-ontology invariant: any relationship whose edge type or
+target type is not declared in the ontology is discarded silently (spec §3.5).
+This is the primary defence against hallucinated edges.
+
+The permitted edge types are narrower than the ontology's declared set. The
+structural types in :data:`~contextd.ontology.schema.STRUCTURAL_EDGE_TYPES`
+belong to the section-granular enumeration phase, which writes them with
+``origin="structural"`` from parsed heading structure, so this module neither
+advertises them to the model nor accepts them back.
 """
 
 from __future__ import annotations
@@ -14,7 +19,7 @@ from typing import Any, cast
 
 from contextd.inference._json_body import extract_json_body
 from contextd.inference.prompts import PromptRenderer
-from contextd.ontology.schema import NON_ENTITY_LABELS, Ontology
+from contextd.ontology.schema import NON_ENTITY_LABELS, STRUCTURAL_EDGE_TYPES, Ontology
 from contextd.providers.base import InferenceProvider, PromptRequest
 
 
@@ -73,6 +78,19 @@ _SYSTEM_PROPS: frozenset[str] = frozenset(
 # the model may supply. Sourced from the shared ontology constant so the relate
 # phase and the prune-entities CLI agree on the structural/entity split.
 _NON_CONTENT_LABELS = NON_ENTITY_LABELS
+
+
+def _emittable_edge_types(ontology: Ontology) -> frozenset[str]:
+    """Return the edge types the model is permitted to infer.
+
+    This is the ontology's declared edge types minus
+    :data:`~contextd.ontology.schema.STRUCTURAL_EDGE_TYPES`, which are owned by
+    the section-granular enumeration phase and carry ``origin="structural"``.
+    Used both to build the allow-list injected into the relate prompt and to
+    reject structural types at parse time, so the exclusion holds even if the
+    prompt template drifts out of sync with this module.
+    """
+    return ontology.edge_types - STRUCTURAL_EDGE_TYPES
 
 
 def _content_property_names(ontology: Ontology, target_type: str) -> frozenset[str]:
@@ -135,11 +153,29 @@ class RelationshipInferrer:
         return "\n".join(lines)
 
     def infer(self, content: str, known_entities: list[str]) -> list[InferredRelationship]:
+        """Infer typed relationships the given content establishes.
+
+        The edge-type allow-list advertised to the model and the allow-list
+        enforced at parse time are both :func:`_emittable_edge_types`, which
+        excludes the indexer-owned structural types. Rejection is applied to the
+        alias-resolved type so a per-corpus edge alias cannot reintroduce a
+        structural type under a domain name.
+
+        Side effects: issues one inference-provider call per invocation, billed
+        against the ``inference`` call site.
+
+        :param content: File or section body the model reasons over.
+        :param known_entities: Existing graph entity names offered to the model
+            as preferred targets; only the first hundred are sent.
+        :return: The relationships that passed every validation gate, which may
+            be empty. Rows failing any gate are dropped silently.
+        """
+        emittable_edge_types = _emittable_edge_types(self._onto)
         prompt = self._renderer.render(
             "relate",
             content=content,
             known_entities="\n".join(known_entities[:100]),
-            allowed_edge_types=", ".join(sorted(self._onto.edge_types)),
+            allowed_edge_types=", ".join(sorted(emittable_edge_types)),
             allowed_node_types=", ".join(sorted(self._onto.node_types)),
             target_property_schema=self._target_property_schema(),
         )
@@ -161,7 +197,7 @@ class RelationshipInferrer:
             if not isinstance(edge_type, str):
                 continue
             resolved_edge_type = self._onto.resolve_edge_alias(edge_type)
-            if resolved_edge_type not in self._onto.edge_types:
+            if resolved_edge_type not in emittable_edge_types:
                 continue
             if target_type not in self._onto.node_types:
                 continue

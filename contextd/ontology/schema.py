@@ -30,6 +30,17 @@ from types import MappingProxyType
 # agree on the structural/entity split.
 NON_ENTITY_LABELS: frozenset[str] = frozenset({"File", "Section", "Corpus", "Meta"})
 
+# Edge types that describe on-disk document structure and are therefore written
+# only by the indexer's section-granular enumeration phase with
+# ``origin="structural"``: CONTAINS is File->Section, PARENT_OF is Section->
+# Section heading nesting, and NEXT_SIBLING is Section->Section document order.
+# The relate phase excludes these from the allow-list it advertises to the model
+# and rejects them if the model emits one anyway, because their meaning is
+# defined entirely by the heading parser and cannot be recovered from prose. An
+# unrestricted allow-list invited name-similarity mistakes such as a File
+# -NEXT_SIBLING-> Ticket edge inferred from the phrase "sibling ticket".
+STRUCTURAL_EDGE_TYPES: frozenset[str] = frozenset({"CONTAINS", "PARENT_OF", "NEXT_SIBLING"})
+
 
 class OntologyError(ValueError):
     """Raised when an operation targets a type the ontology does not declare."""

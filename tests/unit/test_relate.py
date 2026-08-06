@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from contextd.inference.relate import InferredRelationship, RelationshipInferrer
-from contextd.ontology.schema import Ontology
+from contextd.ontology.schema import STRUCTURAL_EDGE_TYPES, Ontology
 
 
 def test_returns_parsed_and_validated_relationships() -> None:
@@ -299,3 +299,94 @@ def test_missing_or_empty_target_name_is_silently_discarded() -> None:
     result = inferrer.infer("content", known_entities=[])
     assert len(result) == 1
     assert result[0].target_name == "ok.md"
+
+
+def test_rejects_structural_edge_types() -> None:
+    """Structural types are owned by the section enumeration phase.
+
+    Reproduces the real-world failure this guard was added for: the model read
+    the phrase "sibling ticket" in prose and emitted a File -NEXT_SIBLING->
+    Ticket edge, which passed the old declared-type check because NEXT_SIBLING
+    is a legitimate ontology type. It must now be dropped, while a
+    non-structural type in the same response is still kept.
+    """
+    ontology = Ontology.load_base()
+    mock_provider = MagicMock()
+    mock_provider.generate.return_value = json.dumps(
+        {
+            "relationships": [
+                {
+                    "type": "NEXT_SIBLING",
+                    "target_type": "Ticket",
+                    "target_name": "INTENG-5299",
+                    "confidence": 0.9,
+                    "reason": "Explicitly listed as a sibling ticket.",
+                },
+                {
+                    "type": "PARENT_OF",
+                    "target_type": "Service",
+                    "target_name": "svc",
+                    "confidence": 0.9,
+                    "reason": "r",
+                },
+                {
+                    "type": "CONTAINS",
+                    "target_type": "Pattern",
+                    "target_name": "pat",
+                    "confidence": 0.9,
+                    "reason": "r",
+                },
+                {
+                    "type": "REFERENCES",
+                    "target_type": "File",
+                    "target_name": "other.md",
+                    "confidence": 0.9,
+                    "reason": "r",
+                },
+            ]
+        }
+    )
+    mock_renderer = MagicMock()
+    mock_renderer.render.return_value = "prompt"
+    inferrer = RelationshipInferrer(mock_provider, mock_renderer, ontology)
+    result = inferrer.infer("content", known_entities=[])
+    assert [r.edge_type for r in result] == ["REFERENCES"]
+
+
+def test_prompt_allow_list_withholds_structural_edge_types() -> None:
+    """The advertised allow-list excludes structural types but keeps the rest."""
+    ontology = Ontology.load_base()
+    mock_provider = MagicMock()
+    mock_provider.generate.return_value = json.dumps({"relationships": []})
+    mock_renderer = MagicMock()
+    mock_renderer.render.return_value = "prompt"
+    inferrer = RelationshipInferrer(mock_provider, mock_renderer, ontology)
+    inferrer.infer("content", known_entities=[])
+    advertised = {
+        t.strip() for t in mock_renderer.render.call_args.kwargs["allowed_edge_types"].split(",")
+    }
+    assert advertised.isdisjoint(STRUCTURAL_EDGE_TYPES)
+    assert advertised == set(ontology.edge_types) - STRUCTURAL_EDGE_TYPES
+
+
+def test_edge_alias_cannot_reintroduce_structural_type() -> None:
+    """Rejection applies post-alias-resolution, so an alias cannot smuggle one in."""
+    ontology = Ontology.load_base().with_edge_aliases({"HAS_SECTION": "CONTAINS"})
+    mock_provider = MagicMock()
+    mock_provider.generate.return_value = json.dumps(
+        {
+            "relationships": [
+                {
+                    "type": "HAS_SECTION",
+                    "target_type": "Pattern",
+                    "target_name": "pat",
+                    "confidence": 0.9,
+                    "reason": "r",
+                }
+            ]
+        }
+    )
+    mock_renderer = MagicMock()
+    mock_renderer.render.return_value = "prompt"
+    inferrer = RelationshipInferrer(mock_provider, mock_renderer, ontology)
+    assert inferrer.infer("content", known_entities=[]) == []
