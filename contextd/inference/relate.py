@@ -13,11 +13,10 @@ advertises them to the model nor accepts them back.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from typing import Any, cast
 
-from contextd.inference._json_body import extract_json_body
+from contextd.inference._json_body import loads_json_body
 from contextd.inference.prompts import PromptRenderer
 from contextd.ontology.schema import NON_ENTITY_LABELS, STRUCTURAL_EDGE_TYPES, Ontology
 from contextd.providers.base import InferenceProvider, PromptRequest
@@ -182,8 +181,7 @@ class RelationshipInferrer:
         response = self._provider.generate(
             PromptRequest(system="", prompt=prompt, call_site="inference")
         )
-        cleaned = extract_json_body(response)
-        data = cast(dict[str, Any], json.loads(cleaned))
+        data = loads_json_body(response)
         valid: list[InferredRelationship] = []
         relationships = data.get("relationships")
         if not isinstance(relationships, list):

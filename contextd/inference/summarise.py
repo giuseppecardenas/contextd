@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
 
-from contextd.inference._json_body import extract_json_body
+from contextd.inference._json_body import loads_json_body
 from contextd.inference.prompts import PromptRenderer
 from contextd.providers.base import InferenceProvider, PromptRequest
 
@@ -69,7 +67,7 @@ class Summariser:
         response = self._provider.generate(
             PromptRequest(system="", prompt=prompt, call_site="summary")
         )
-        data = cast(dict[str, Any], json.loads(extract_json_body(response)))
+        data = loads_json_body(response)
         if "summary" not in data:
             raise KeyError(f"Provider response missing 'summary'; got keys {list(data.keys())}")
         summary = data["summary"]
