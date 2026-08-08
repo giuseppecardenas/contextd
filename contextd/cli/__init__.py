@@ -45,14 +45,18 @@ def init(yes: bool) -> None:
 
     config_path = home / "config.toml"
     if not config_path.exists():
-        default = resources.files("contextd").joinpath("default_config.toml").read_text()
-        config_path.write_text(default)
+        default = (
+            resources.files("contextd").joinpath("default_config.toml").read_text(encoding="utf-8")
+        )
+        config_path.write_text(default, encoding="utf-8")
         console.print(f"[green]✓[/] wrote default config to {config_path}")
 
     compose_path = home / "docker-compose.yml"
     if not compose_path.exists():
-        compose = resources.files("contextd").joinpath("docker_compose.yml").read_text()
-        compose_path.write_text(compose)
+        compose = (
+            resources.files("contextd").joinpath("docker_compose.yml").read_text(encoding="utf-8")
+        )
+        compose_path.write_text(compose, encoding="utf-8")
         console.print(f"[green]✓[/] wrote docker-compose template to {compose_path}")
 
     copied = 0

@@ -178,7 +178,7 @@ def _process_sweep_unit(
 
     if unit.sections:
         try:
-            text = path.read_text(errors="replace")
+            text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             # File deleted but still has Section nodes in graph.
             # Queue so run_incremental_file's !path.exists() branch fires.
@@ -446,12 +446,12 @@ def _handle_batch(
 
 
 def _write_pid(pid_path: Path, pid: int) -> None:
-    pid_path.write_text(str(pid))
+    pid_path.write_text(str(pid), encoding="utf-8")
 
 
 def _read_pid(pid_path: Path) -> int | None:
     try:
-        return int(pid_path.read_text().strip())
+        return int(pid_path.read_text(encoding="utf-8").strip())
     except (OSError, ValueError):
         return None
 

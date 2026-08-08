@@ -133,7 +133,7 @@ def build_tool_descriptors(
                 )
                 continue
 
-            cypher_text = cypher_path.read_text()
+            cypher_text = cypher_path.read_text(encoding="utf-8")
 
             try:
                 assert_read_only(cypher_text)

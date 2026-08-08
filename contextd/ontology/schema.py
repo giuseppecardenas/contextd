@@ -56,7 +56,9 @@ class Ontology:
 
     @classmethod
     def load_base(cls) -> Ontology:
-        raw = json.loads(resources.files("contextd.ontology").joinpath("base.json").read_text())
+        raw = json.loads(
+            resources.files("contextd.ontology").joinpath("base.json").read_text(encoding="utf-8")
+        )
         node_types: dict[str, tuple[str, ...]] = {k: tuple(v) for k, v in raw["node_types"].items()}
         return cls(
             node_types=MappingProxyType(node_types),

@@ -29,7 +29,7 @@ def _resolve_gitdir(git_entry: Path) -> Path | None:
     if not git_entry.is_file():
         return None
     try:
-        content = git_entry.read_text()
+        content = git_entry.read_text(encoding="utf-8")
     except OSError:
         return None
     prefix = "gitdir:"

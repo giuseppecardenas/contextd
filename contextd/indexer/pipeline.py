@@ -290,7 +290,9 @@ def run_incremental_file(
         corpus_name = corpus.corpus.name
 
         # Parse current sections and compute per-section hashes
-        parsed = phases._build_parser(corpus).parse(path.read_text(errors="replace"))
+        parsed = phases._build_parser(corpus).parse(
+            path.read_text(encoding="utf-8", errors="replace")
+        )
         current_hashes = {
             f"{file_path_str}#{sec.anchor}": hashlib.md5(
                 (sec.title + "\n\n" + sec.body).encode()

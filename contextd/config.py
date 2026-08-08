@@ -201,15 +201,17 @@ class Config(BaseModel):
 
     @classmethod
     def load_default(cls) -> Config:
-        raw = tomllib.loads(resources.files("contextd").joinpath("default_config.toml").read_text())
+        raw = tomllib.loads(
+            resources.files("contextd").joinpath("default_config.toml").read_text(encoding="utf-8")
+        )
         return cls.model_validate(raw)
 
     @classmethod
     def load(cls, path: Path) -> Config:
         default_raw = tomllib.loads(
-            resources.files("contextd").joinpath("default_config.toml").read_text()
+            resources.files("contextd").joinpath("default_config.toml").read_text(encoding="utf-8")
         )
-        user_raw = tomllib.loads(path.read_text())
+        user_raw = tomllib.loads(path.read_text(encoding="utf-8"))
         merged = _deep_merge(default_raw, user_raw)
         try:
             return cls.model_validate(merged)

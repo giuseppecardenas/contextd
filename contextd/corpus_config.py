@@ -76,7 +76,7 @@ class CorpusConfig(BaseModel):
     @classmethod
     def load(cls, path: Path) -> CorpusConfig:
         try:
-            raw = tomllib.loads(path.read_text())
+            raw = tomllib.loads(path.read_text(encoding="utf-8"))
         except tomllib.TOMLDecodeError as exc:
             raise CorpusConfigError(f"invalid TOML syntax in {path}: {exc}") from exc
         granularity = raw.get("corpus", {}).get("granularity")

@@ -83,7 +83,7 @@ class FileHasher:
     def _load_state(self) -> dict[str, str]:
         if not (self._state_path and self._state_path.exists()):
             return {}
-        raw = json.loads(self._state_path.read_text())
+        raw = json.loads(self._state_path.read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
             raise ValueError(
                 f"Hasher state file {self._state_path} must be a JSON object; got {type(raw).__name__}"
@@ -103,5 +103,5 @@ class FileHasher:
         if self._state_path:
             self._state_path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self._state_path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(self._state, indent=2))
+            tmp.write_text(json.dumps(self._state, indent=2), encoding="utf-8")
             os.replace(tmp, self._state_path)

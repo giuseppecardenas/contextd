@@ -53,7 +53,7 @@ class CheckpointStore:
         # SIGKILL / power-loss, which defeats the recovery purpose.
         target = self._root / f"{corpus}.json"
         tmp = target.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(asdict(checkpoint)))
+        tmp.write_text(json.dumps(asdict(checkpoint)), encoding="utf-8")
         os.replace(tmp, target)
 
     def load(self, corpus: str) -> Checkpoint | None:
@@ -61,7 +61,7 @@ class CheckpointStore:
         path = self._root / f"{corpus}.json"
         if not path.exists():
             return None
-        raw = json.loads(path.read_text())
+        raw = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
             raise ValueError(
                 f"Checkpoint file {path} must be a JSON object; got {type(raw).__name__}"

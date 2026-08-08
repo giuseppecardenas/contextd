@@ -23,7 +23,7 @@ class CostLog:
     def append(self, record: UsageRecord) -> None:
         day = record.timestamp[:10]  # YYYY-MM-DD
         path = self._root / f"{day}.jsonl"
-        with path.open("a") as f:
+        with path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(asdict(record)) + "\n")
 
     def aggregate(self, *, since: str | None = None) -> dict[str, dict[str, int]]:
@@ -36,7 +36,7 @@ class CostLog:
             day = datetime.fromisoformat(file.stem)
             if cutoff and day.date() < cutoff.date():
                 continue
-            for line in file.read_text().splitlines():
+            for line in file.read_text(encoding="utf-8").splitlines():
                 row = json.loads(line)
                 totals[row["provider"]]["input_tokens"] += row["input_tokens"]
                 totals[row["provider"]]["output_tokens"] += row["output_tokens"]

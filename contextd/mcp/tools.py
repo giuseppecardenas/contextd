@@ -669,7 +669,7 @@ def grep_corpus(
         cfg = CorpusConfig.load(toml_path)
         for file_path in enumerate_corpus_files(cfg):
             try:
-                text = file_path.read_text(errors="replace")
+                text = file_path.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue
             for line_no, line in enumerate(text.splitlines(), start=1):

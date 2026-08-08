@@ -58,12 +58,12 @@ def _query_ipc_status() -> dict[str, object] | None:
 
 
 def _write_pid(pid_path: Path, pid: int) -> None:
-    pid_path.write_text(str(pid))
+    pid_path.write_text(str(pid), encoding="utf-8")
 
 
 def _daemon_pid() -> int | None:
     try:
-        return int(_pid_path().read_text().strip())
+        return int(_pid_path().read_text(encoding="utf-8").strip())
     except (OSError, ValueError):
         return None
 
@@ -260,7 +260,7 @@ def up() -> None:
         stderr=subprocess.DEVNULL,
         **daemon_popen_kwargs(),  # type: ignore[call-overload]
     )
-    _pid_path().write_text(str(proc.pid))
+    _pid_path().write_text(str(proc.pid), encoding="utf-8")
     console.print(f"[green]✓[/] indexer daemon launched (pid={proc.pid})")
     console.print("[bold]ready[/]")
 

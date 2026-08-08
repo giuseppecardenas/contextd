@@ -115,7 +115,7 @@ def phase_enumerate(
     all_embeddings: list[list[float]] = []
     for start in range(0, len(files), batch_size):
         batch = files[start : start + batch_size]
-        texts = [f.read_text(errors="replace") for f in batch]
+        texts = [f.read_text(encoding="utf-8", errors="replace") for f in batch]
         all_embeddings.extend(embedder.embed(texts))
 
     now = dt.datetime.now(dt.UTC)
@@ -170,7 +170,7 @@ def phase_summarise(
 
     def _worker(f: Path) -> tuple[int, int]:
         try:
-            result = summariser.summarise(f.read_text(errors="replace"))
+            result = summariser.summarise(f.read_text(encoding="utf-8", errors="replace"))
         except Exception as exc:
             # Must be logged, not just counted. The caller reports this file as
             # indexed regardless (its node and embedding do exist), so without a
@@ -222,7 +222,9 @@ def phase_relate(
 
     def _worker(f: Path) -> tuple[int, int]:
         try:
-            relations = inferrer.infer(f.read_text(errors="replace"), known_entities=known)
+            relations = inferrer.infer(
+                f.read_text(encoding="utf-8", errors="replace"), known_entities=known
+            )
         except Exception as exc:
             # Logged for the same reason as the summarise failure above, plus one
             # of its own: the inferred_at marker below is what makes resume
@@ -329,7 +331,7 @@ def phase_enumerate_sections(
 
     # Collect all sections for all files first so we can batch-embed in one pass.
     parsed_by_file: list[tuple[Path, list[ParsedSection]]] = [
-        (f, parser.parse(f.read_text(errors="replace"))) for f in files
+        (f, parser.parse(f.read_text(encoding="utf-8", errors="replace"))) for f in files
     ]
     all_sections: list[tuple[Path, ParsedSection]] = [
         (f, sec) for f, secs in parsed_by_file for sec in secs
@@ -489,7 +491,8 @@ def gc_sections_for_file(
     parser = _build_parser(corpus_cfg)
     file_path = canonical_path(path)
     current_ids: set[str] = {
-        f"{file_path}#{sec.anchor}" for sec in parser.parse(path.read_text(errors="replace"))
+        f"{file_path}#{sec.anchor}"
+        for sec in parser.parse(path.read_text(encoding="utf-8", errors="replace"))
     }
     existing = store.exec_read(
         "MATCH (s:Section {corpus: $corpus, path: $path}) RETURN s.id AS id",
@@ -843,7 +846,7 @@ def _parse_cached(
     cached = cache.get(key)
     if cached is not None:
         return cached
-    sections = parser.parse(path.read_text(errors="replace"))
+    sections = parser.parse(path.read_text(encoding="utf-8", errors="replace"))
     cache[key] = sections
     return sections
 

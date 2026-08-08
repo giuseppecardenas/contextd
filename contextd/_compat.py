@@ -56,7 +56,7 @@ def create_ipc_server_socket(ipc_path: Path) -> socket.socket:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
-        ipc_path.write_text(str(port))
+        ipc_path.write_text(str(port), encoding="utf-8")
     else:
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)  # type: ignore[attr-defined,unused-ignore]
         with contextlib.suppress(FileNotFoundError):
@@ -77,7 +77,7 @@ def connect_ipc(ipc_path: Path) -> socket.socket:
     propagates, so a failed connect never leaks a file descriptor.
     """
     if IS_WINDOWS:
-        port = int(ipc_path.read_text().strip())
+        port = int(ipc_path.read_text(encoding="utf-8").strip())
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         address: str | tuple[str, int] = ("127.0.0.1", port)
     else:

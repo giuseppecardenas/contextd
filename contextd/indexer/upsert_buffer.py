@@ -40,7 +40,7 @@ class PendingUpsertBuffer:
             records.append({"path": str(path), "corpus": corpus_name})
             tmp = self._buffer_path.with_suffix(".tmp")
             self._buffer_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp.write_text("\n".join(json.dumps(r) for r in records) + "\n")
+            tmp.write_text("\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8")
             os.replace(tmp, self._buffer_path)
 
     def load(self) -> list[dict[str, str]]:
@@ -48,7 +48,7 @@ class PendingUpsertBuffer:
         if not self._buffer_path.exists():
             return []
         records: list[dict[str, str]] = []
-        for line in self._buffer_path.read_text().splitlines():
+        for line in self._buffer_path.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if not line:
                 continue
@@ -107,7 +107,9 @@ class PendingUpsertBuffer:
         if failed_records:
             tmp = self._buffer_path.with_suffix(".tmp")
             self._buffer_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp.write_text("\n".join(json.dumps(r) for r in failed_records) + "\n")
+            tmp.write_text(
+                "\n".join(json.dumps(r) for r in failed_records) + "\n", encoding="utf-8"
+            )
             os.replace(tmp, self._buffer_path)
         else:
             self.clear()
