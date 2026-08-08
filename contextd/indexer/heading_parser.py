@@ -28,6 +28,10 @@ class ParsedSection:
 _NON_ALNUM = re.compile(r"[^\w\s-]")
 _WHITESPACE = re.compile(r"\s+")
 
+# Title for a preamble that contains no heading of its own to borrow a name
+# from — a document opening with front matter or bare prose.
+_PREAMBLE_TITLE = "Preamble"
+
 # Token types whose .content contributes display text.
 # "image" tokens carry the alt text in their .content field.
 _TEXT_TOKEN_TYPES = {"text", "code_inline", "image"}
@@ -76,21 +80,24 @@ class HeadingParser:
         tokens = self._md.parse(markdown)
         lines = markdown.splitlines(keepends=True)
 
-        # Collect (level, title, line_index) for qualifying headings.
-        heads: list[tuple[int, str, int]] = []
+        # Collect (level, title, line_index) for every heading, then narrow to
+        # the qualifying levels. The unfiltered list is kept so the preamble can
+        # borrow the document's own title, which is typically an H1 and so sits
+        # below min_level.
+        all_heads: list[tuple[int, str, int]] = []
         i = 0
         while i < len(tokens):
             tok = tokens[i]
             if tok.type == "heading_open":
                 level = int(tok.tag[1])
-                if self._min <= level <= self._max:
-                    inline = tokens[i + 1]
-                    title = _extract_title(inline)
-                    assert tok.map is not None
-                    heads.append((level, title, tok.map[0]))
+                inline = tokens[i + 1]
+                assert tok.map is not None
+                all_heads.append((level, _extract_title(inline), tok.map[0]))
                 i += 3  # heading_open, inline, heading_close
                 continue
             i += 1
+
+        heads = [h for h in all_heads if self._min <= h[0] <= self._max]
 
         sections: list[ParsedSection] = []
         stack: list[ParsedSection] = []  # ancestors
@@ -98,6 +105,42 @@ class HeadingParser:
 
         # Track seen anchors for GitHub-style dedup (foo, foo-1, foo-2 …).
         seen_anchors: dict[str, int] = {}
+
+        # Everything above the first qualifying heading — the document title and
+        # its opening prose — belongs to no heading. The File node carries no
+        # content of its own in section mode, so without this that text is
+        # indexed nowhere: not embedded, not summarised, not searchable. When a
+        # document has no qualifying heading at all the whole file is preamble,
+        # which also rescues files that would otherwise yield zero sections.
+        #
+        # The body is bounded explicitly at the first qualifying heading rather
+        # than by the equal-or-shallower rule below, because a document whose
+        # shallowest heading is deeper than min_level (all ### under min=2) has
+        # no such bound and the preamble would swallow the entire file.
+        boundary = heads[0][2] if heads else len(lines)
+        preamble_body = "".join(lines[:boundary])
+        if preamble_body.strip():
+            preamble_title = next(
+                (t for lvl, t, ln in all_heads if ln < boundary and lvl < self._min),
+                _PREAMBLE_TITLE,
+            )
+            preamble_anchor = _github_anchor(preamble_title)
+            seen_anchors[preamble_anchor] = 1
+            sections.append(
+                ParsedSection(
+                    title=preamble_title,
+                    level=self._min,
+                    anchor=preamble_anchor,
+                    body=preamble_body,
+                    ordinal=0,
+                    parent_anchor=None,
+                )
+            )
+            # Deliberately not pushed onto `stack`: the preamble is a sibling of
+            # the top-level sections, not their parent, so no existing
+            # PARENT_OF edge changes. It does take ordinal 0, shifting the
+            # top-level sibling chain down by one.
+            sibling_ordinals[None] = 1
 
         for idx, (level, title, line) in enumerate(heads):
             # Trim stack to ancestors of strictly shallower level.

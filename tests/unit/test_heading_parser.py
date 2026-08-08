@@ -20,15 +20,26 @@ Body 2
 """
     parser = HeadingParser(min_level=2, max_level=4)
     sections = parser.parse(md)
-    assert [s.title for s in sections] == ["First section", "Subsection 1.1", "Second section"]
-    assert [s.level for s in sections] == [2, 3, 2]
+    # "File title" leads: the H1 is below min_level, so it heads the preamble
+    # rather than being dropped. It reports min_level so it sorts as a sibling
+    # of the top-level sections.
+    assert [s.title for s in sections] == [
+        "File title",
+        "First section",
+        "Subsection 1.1",
+        "Second section",
+    ]
+    assert [s.level for s in sections] == [2, 2, 3, 2]
 
 
 def test_respects_min_and_max_levels() -> None:
     md = "# H1\n\n## H2\n\n### H3\n\n#### H4\n\n##### H5"
     parser = HeadingParser(min_level=3, max_level=4)
     sections = parser.parse(md)
-    assert [s.title for s in sections] == ["H3", "H4"]
+    # H3/H4 qualify. H1 and H2 sit above the first qualifying heading, so their
+    # text is preserved in the preamble (named for the H1) instead of being
+    # discarded; H5 is deeper than max_level and folds into H4's body.
+    assert [s.title for s in sections] == ["H1", "H3", "H4"]
 
 
 def test_anchor_matches_github_convention() -> None:
@@ -142,6 +153,98 @@ def test_image_heading_with_empty_alt_falls_back_to_section() -> None:
     sections = parser.parse(md)
     # No alt text → empty title → anchor falls back to "section".
     assert sections[0].anchor == "section"
+
+
+# ---------------------------------------------------------------------------
+# Preamble tests — text above the first qualifying heading
+# ---------------------------------------------------------------------------
+
+
+def test_preamble_captures_title_and_intro_prose() -> None:
+    # In section mode the File node holds no content, so without a preamble
+    # section this text is indexed nowhere.
+    md = "# Economy\n\nThis document covers production chains.\n\n## Catalog\n\nbody"
+    parser = HeadingParser(min_level=2, max_level=4)
+    preamble = parser.parse(md)[0]
+    assert preamble.title == "Economy"
+    assert "# Economy" in preamble.body
+    assert "This document covers production chains." in preamble.body
+    # Bounded at the first qualifying heading.
+    assert "body" not in preamble.body
+
+
+def test_preamble_is_a_sibling_not_a_parent() -> None:
+    # The preamble must not reparent top-level sections: they keep the
+    # parent_anchor they had before the preamble existed.
+    md = "# Title\n\nintro\n\n## A\n\nbody a\n\n## B\n\nbody b"
+    parser = HeadingParser(min_level=2, max_level=4)
+    sections = parser.parse(md)
+    assert [(s.title, s.parent_anchor) for s in sections] == [
+        ("Title", None),
+        ("A", None),
+        ("B", None),
+    ]
+
+
+def test_preamble_takes_ordinal_zero_and_shifts_siblings() -> None:
+    md = "# Title\n\nintro\n\n## A\n\n## B"
+    parser = HeadingParser(min_level=2, max_level=4)
+    sections = parser.parse(md)
+    assert [(s.title, s.ordinal) for s in sections] == [("Title", 0), ("A", 1), ("B", 2)]
+
+
+def test_no_preamble_when_document_opens_on_a_qualifying_heading() -> None:
+    md = "## A\n\nbody a\n\n## B\n\nbody b"
+    parser = HeadingParser(min_level=2, max_level=4)
+    sections = parser.parse(md)
+    assert [s.title for s in sections] == ["A", "B"]
+
+
+def test_blank_lines_before_first_heading_do_not_emit_a_preamble() -> None:
+    md = "\n\n   \n\n## A\n\nbody"
+    parser = HeadingParser(min_level=2, max_level=4)
+    sections = parser.parse(md)
+    assert [s.title for s in sections] == ["A"]
+
+
+def test_document_with_no_qualifying_heading_yields_one_preamble() -> None:
+    # Previously this returned zero sections, leaving the file with no content,
+    # no embedding and no summary anywhere in the graph.
+    md = "# Release notes\n\nEverything here is prose with no subheadings."
+    parser = HeadingParser(min_level=2, max_level=4)
+    sections = parser.parse(md)
+    assert len(sections) == 1
+    assert sections[0].title == "Release notes"
+    assert "Everything here is prose" in sections[0].body
+
+
+def test_preamble_does_not_swallow_file_when_headings_are_deeper_than_min() -> None:
+    # The trap the explicit boundary guards: with min_level=2 and only H3s, no
+    # later heading is equal-or-shallower, so the equal-or-shallower body rule
+    # would run the preamble to end of file and duplicate the whole document.
+    md = "intro prose\n\n### Deep A\n\nbody a\n\n### Deep B\n\nbody b"
+    parser = HeadingParser(min_level=2, max_level=4)
+    sections = parser.parse(md)
+    preamble = sections[0]
+    assert "intro prose" in preamble.body
+    assert "body a" not in preamble.body
+    assert "body b" not in preamble.body
+    assert [s.title for s in sections] == ["Preamble", "Deep A", "Deep B"]
+
+
+def test_preamble_without_a_heading_falls_back_to_generic_title() -> None:
+    md = "Loose front matter.\n\n## A\n\nbody"
+    parser = HeadingParser(min_level=2, max_level=4)
+    preamble = parser.parse(md)[0]
+    assert preamble.title == "Preamble"
+    assert preamble.anchor == "preamble"
+
+
+def test_preamble_anchor_participates_in_dedup() -> None:
+    md = "# Notes\n\nintro\n\n## Notes\n\nbody"
+    parser = HeadingParser(min_level=2, max_level=4)
+    sections = parser.parse(md)
+    assert [s.anchor for s in sections] == ["notes", "notes-1"]
 
 
 # ---------------------------------------------------------------------------
