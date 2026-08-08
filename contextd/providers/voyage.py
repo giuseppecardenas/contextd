@@ -12,6 +12,7 @@ override via ``[providers.voyage] model``.
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import random
 import time
 from collections.abc import Callable, Iterator
@@ -22,6 +23,8 @@ from voyageai.error import APIConnectionError, RateLimitError, Timeout
 
 from contextd.config import VoyageConfig
 from contextd.providers.base import EmbeddingProvider, UsageRecord
+
+_log = logging.getLogger(__name__)
 
 _MODEL_DIMENSIONS = {
     "voyage-4-large": 1024,
@@ -45,6 +48,13 @@ _BATCH_TOKEN_BUDGET = 100_000
 # Gemini provider's request-timeout rationale.
 _DEFAULT_REQUEST_TIMEOUT_S = 120.0
 
+# Characters per token assumed when the real tokenizer cannot be used. Voyage's
+# tokenizer averages ~4 chars/token on English prose and denser on code, so 3 is
+# deliberately pessimistic: it over-estimates the token count, which yields
+# smaller batches and keeps the request under the ceiling. The estimate only
+# sizes batches — Voyage still reports authoritative usage on the response.
+_FALLBACK_CHARS_PER_TOKEN = 3
+
 
 class VoyageProvider(EmbeddingProvider):
     def __init__(
@@ -65,6 +75,11 @@ class VoyageProvider(EmbeddingProvider):
         self._backoff_initial = backoff_initial
         self._backoff_max = backoff_max
         self._max_retries = max_retries
+        # Latches false on the first tokenizer failure so the degraded path is
+        # taken directly thereafter. _token_aware_batches counts every text
+        # individually, so without the latch a missing tokenizer would retry a
+        # failing import (or a Hub round-trip) once per file in the corpus.
+        self._tokenizer_available = True
 
     @property
     def dimensions(self) -> int:
@@ -74,7 +89,35 @@ class VoyageProvider(EmbeddingProvider):
         return self._last_usage
 
     def _count_batch_tokens(self, texts: list[str]) -> int:
-        return int(self._client.count_tokens(texts, model=self._cfg.model))
+        """Count tokens for ``texts``, degrading to a character estimate.
+
+        ``voyageai`` resolves its tokenizer lazily on the first ``count_tokens``
+        call: it imports the optional ``tokenizers`` package and fetches the
+        model's tokenizer from the HuggingFace Hub. Either step can fail on an
+        otherwise healthy install — the extra is not declared by every resolve,
+        the Hub may be unreachable or rate-limited, the cache directory may be
+        unwritable. Unguarded, any of those aborts the enumerate phase at the
+        first embed batch and takes the whole bootstrap with it.
+
+        Batch sizing does not need exact counts, only a bound that keeps a
+        request under Voyage's per-request token ceiling, so a tokenizer failure
+        degrades to :func:`_estimate_tokens` instead of propagating.
+        """
+        if self._tokenizer_available:
+            try:
+                return int(self._client.count_tokens(texts, model=self._cfg.model))
+            except Exception:
+                # Deliberately broad: the failure modes span ImportError, OSError,
+                # and whatever the Hub client raises, and none of them are worth
+                # failing an embed over when a usable estimate exists.
+                self._tokenizer_available = False
+                _log.warning(
+                    "voyage: tokenizer unavailable, falling back to a "
+                    "%d-chars-per-token estimate for batch sizing",
+                    _FALLBACK_CHARS_PER_TOKEN,
+                    exc_info=True,
+                )
+        return _estimate_tokens(texts)
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         all_vectors: list[list[float]] = []
@@ -132,6 +175,16 @@ class VoyageProvider(EmbeddingProvider):
         delay = min(self._backoff_initial * (2 ** (attempt - 1)), self._backoff_max)
         delay *= 1.0 + random.uniform(-0.2, 0.2)
         time.sleep(delay)
+
+
+def _estimate_tokens(texts: list[str]) -> int:
+    """Estimate the token count of ``texts`` from their character length.
+
+    Rounds each text up so a short-but-non-empty input never estimates zero
+    tokens, which would let an unbounded number of them accumulate into a single
+    batch.
+    """
+    return sum(-(-len(text) // _FALLBACK_CHARS_PER_TOKEN) for text in texts)
 
 
 def _token_aware_batches(
