@@ -3,7 +3,8 @@
 **contextd** is a locally-hosted GraphRAG knowledge layer and MCP server. It
 indexes markdown, code, and structured-data corpora into a Neo4j graph + vector
 store, generates per-file summaries and AI-inferred typed relationships
-(Gemini + Voyage), and serves the result to AI assistants over the Model Context
+(Gemini, or any OpenAI-compatible provider such as DeepSeek; embeddings via
+Voyage), and serves the result to AI assistants over the Model Context
 Protocol.
 
 ## Prerequisites
@@ -13,7 +14,12 @@ Protocol.
 - Docker running Neo4j Community 5.x (`neo4j:5`), Bolt on port 7687. Started for
   you by `contextd up`.
 - Environment variables: `GEMINI_API_KEY` (inference/summaries) and
-  `VOYAGE_API_KEY` (embeddings).
+  `VOYAGE_API_KEY` (embeddings). Provider choice is per call-site (`summary`,
+  `inference`, `translation`, `embedding`), so these can be mixed or replaced.
+  A call-site set to `openai_compat` reads its key from the variable named by
+  `[providers.openai_compat] api_key_env` instead — e.g. `DEEPSEEK_API_KEY`
+  with `base_url = "https://api.deepseek.com/v1"`. Keys are read from the
+  environment at startup and never written to disk.
 - All persistent state lives under `~/.contextd/` (config, corpora registry,
   logs, checkpoints).
 
@@ -79,8 +85,30 @@ directories (docs, examples, scripts) and the break only surfaces after a push.
 - **Async at I/O boundaries.** Prefer async handlers for network and database
   I/O; keep pure logic synchronous.
 - **Error boundaries around externals.** Wrap Neo4j and AI-API calls
-  (Gemini, Voyage) in explicit error handling with retry/backoff; never let a
-  provider failure crash the indexer or the MCP loop.
+  (Gemini, Voyage, any `openai_compat` endpoint) in explicit error handling
+  with retry/backoff; never let a provider failure crash the indexer or the
+  MCP loop.
+- **Treat model output as hostile input.** Parse it through
+  `contextd.inference._json_body.loads_json_body`, never a bare `json.loads`.
+  Enabling a provider's JSON mode does not guarantee well-formed JSON —
+  DeepSeek emits trailing commas despite `response_format`, so the parser
+  tries a strict parse first and repairs trailing commas only on failure,
+  using a string-literal-aware scanner (summary prose legitimately contains
+  `, ]`). A 200 carrying an empty completion is a retryable provider miss, not
+  an answer; see `OpenAICompatProvider.generate`.
+- **Every text-mode file I/O pins `encoding="utf-8"`.** `Path.read_text`,
+  `Path.write_text` and `open` otherwise default to
+  `locale.getpreferredencoding(False)` — UTF-8 on a Linux CI runner, cp1252 on
+  a stock Windows install — so a bare call silently mangles non-ASCII corpus
+  content into mojibake that is then embedded, summarised and hashed. Nothing
+  raises: cp1252 maps most bytes to wrong-but-valid characters, and
+  `errors="replace"` does not help. It also makes section hashes
+  platform-dependent, so a daemon run on both Windows and Linux re-indexes
+  unchanged files forever. Pin reads and their paired writes together, so
+  contextd never writes in one encoding and reads back in another.
+  (Enforced by `tests/unit/test_encoding_invariant.py`, which walks the
+  package AST — the defect cannot reproduce on a UTF-8 CI runner, so a
+  behavioural test would pass on CI while the bug was live on Windows.)
 - **Logging, never `print`.** Use `structlog`; logs are written to
   `~/.contextd/logs/`. A stray `print()` to stdout corrupts the MCP stdio
   protocol frames and breaks the server.
