@@ -22,7 +22,7 @@ def test_full_bootstrap_then_mcp_query(backend, tmp_path: Path) -> None:
     root.mkdir()
     (root / "a.md").write_text("alpha\n\nSee [b](b.md).")
     (root / "b.md").write_text("beta\n\nSee [a](a.md) and [c](c.md).")
-    (root / "c.md").write_text("gamma")
+    (root / "c.md").write_text("gamma", encoding="utf-8")
 
     cfg = CorpusConfig.model_validate(
         {

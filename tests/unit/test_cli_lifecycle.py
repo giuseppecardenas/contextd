@@ -54,18 +54,21 @@ backend = "{backend}"
 [storage.{backend}]
 docker_compose_file = "{home.as_posix()}/docker-compose.yml"
 """
-    (home / "config.toml").write_text(config)
+    (home / "config.toml").write_text(config, encoding="utf-8")
     (home / "corpora").mkdir()
     return home
 
 
 def test_status_lists_corpora(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     home = _setup_contextd_home(tmp_path)
-    (home / "corpora" / "demo.toml").write_text("""
+    (home / "corpora" / "demo.toml").write_text(
+        """
 [corpus]
 name = "demo"
 root = "/tmp/demo"
-""")
+""",
+        encoding="utf-8",
+    )
     monkeypatch.setenv("CONTEXTD_HOME", str(home))
     result = CliRunner().invoke(contextd.cli.cli, ["status"])
     assert result.exit_code == 0
@@ -132,8 +135,8 @@ def test_reset_clears_local_index_state(tmp_path: Path, monkeypatch: pytest.Monk
     (state / "checkpoints").mkdir(parents=True, exist_ok=True)
     hasher_state = state / "notes-index-state.json"
     checkpoint = state / "checkpoints" / "notes.json"
-    hasher_state.write_text("{}")
-    checkpoint.write_text("{}")
+    hasher_state.write_text("{}", encoding="utf-8")
+    checkpoint.write_text("{}", encoding="utf-8")
 
     with patch("subprocess.run"):
         result = CliRunner().invoke(contextd.cli.cli, ["reset"])
@@ -178,7 +181,7 @@ def test_up_neo4j_calls_compose_with_profile(
         '[storage]\nbackend = "neo4j"\n\n[storage.neo4j]\nhost = "127.0.0.1"\nport = 7687\n'
     )
     # The docker-compose template must exist for `up` to run.
-    (home / "docker-compose.yml").write_text("services: {}\n")
+    (home / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
     monkeypatch.setenv("CONTEXTD_HOME", str(home))
 
     calls: list[list[str]] = []
@@ -224,7 +227,7 @@ def test_up_writes_pid_file(tmp_path: Path) -> None:
     pid_file = tmp_path / "indexer.pid"
     with patch("contextd.cli.infra._pid_path", return_value=pid_file):
         _write_pid(pid_file, 77777)
-    assert pid_file.read_text().strip() == "77777"
+    assert pid_file.read_text(encoding="utf-8").strip() == "77777"
 
 
 def test_up_skips_daemon_launch_when_already_running(
@@ -234,7 +237,7 @@ def test_up_skips_daemon_launch_when_already_running(
     monkeypatch.setenv("CONTEXTD_HOME", str(home))
     # Pre-existing PID file that points at a live process.
     (home / "state").mkdir(exist_ok=True)
-    (home / "state" / "indexer.pid").write_text("42424")
+    (home / "state" / "indexer.pid").write_text("42424", encoding="utf-8")
     monkeypatch.setattr("shutil.which", lambda _x: "/usr/bin/docker")
     with (
         patch("subprocess.run") as mock_run,
@@ -259,7 +262,7 @@ def test_up_clears_stale_pid_and_launches(tmp_path: Path, monkeypatch: pytest.Mo
     # Pre-existing PID file that points at a dead process.
     (home / "state").mkdir(exist_ok=True)
     pid_file = home / "state" / "indexer.pid"
-    pid_file.write_text("99999")
+    pid_file.write_text("99999", encoding="utf-8")
     monkeypatch.setattr("shutil.which", lambda _x: "/usr/bin/docker")
     fake_proc = MagicMock()
     fake_proc.pid = 55555
@@ -277,7 +280,7 @@ def test_up_clears_stale_pid_and_launches(tmp_path: Path, monkeypatch: pytest.Mo
         result = CliRunner().invoke(contextd.cli.cli, ["up"])
     assert result.exit_code == 0, result.output
     assert mock_popen.call_count == 1
-    assert pid_file.read_text().strip() == "55555"
+    assert pid_file.read_text(encoding="utf-8").strip() == "55555"
 
 
 def test_down_prefers_graceful_ipc_stop(tmp_path: Path) -> None:
@@ -285,7 +288,7 @@ def test_down_prefers_graceful_ipc_stop(tmp_path: Path) -> None:
     from contextd.cli.infra import _stop_daemon
 
     pid_file = tmp_path / "indexer.pid"
-    pid_file.write_text("99999")
+    pid_file.write_text("99999", encoding="utf-8")
 
     with (
         patch("contextd.cli.infra._pid_path", return_value=pid_file),
@@ -305,7 +308,7 @@ def test_down_falls_back_to_tree_kill_on_ipc_failure(tmp_path: Path) -> None:
     from contextd.cli.infra import _stop_daemon
 
     pid_file = tmp_path / "indexer.pid"
-    pid_file.write_text("99999")
+    pid_file.write_text("99999", encoding="utf-8")
 
     with (
         patch("contextd.cli.infra._pid_path", return_value=pid_file),
@@ -324,7 +327,7 @@ def test_down_falls_back_when_graceful_stop_times_out(tmp_path: Path) -> None:
     from contextd.cli.infra import _stop_daemon
 
     pid_file = tmp_path / "indexer.pid"
-    pid_file.write_text("99999")
+    pid_file.write_text("99999", encoding="utf-8")
 
     with (
         patch("contextd.cli.infra._pid_path", return_value=pid_file),
@@ -343,9 +346,9 @@ def test_down_removes_pid_and_socket_files(tmp_path: Path) -> None:
     from contextd.cli.infra import _stop_daemon
 
     pid_file = tmp_path / "indexer.pid"
-    pid_file.write_text("99999")
+    pid_file.write_text("99999", encoding="utf-8")
     ipc_file = tmp_path / ipc_file_name()
-    ipc_file.write_text("62329\n")
+    ipc_file.write_text("62329\n", encoding="utf-8")
 
     with (
         patch("contextd.cli.infra._pid_path", return_value=pid_file),

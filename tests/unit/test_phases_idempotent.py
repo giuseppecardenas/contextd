@@ -31,7 +31,7 @@ def _make_files(tmp_path: Path, n: int, suffix: str = ".txt") -> list[Path]:
     out = []
     for i in range(n):
         f = tmp_path / f"f{i}{suffix}"
-        f.write_text(f"content-{i}")
+        f.write_text(f"content-{i}", encoding="utf-8")
         out.append(f)
     return out
 
@@ -43,7 +43,7 @@ def _make_section_corpus(
     for i in range(n_files):
         f = tmp_path / f"doc{i}.md"
         body = "\n".join(f"## Heading {j}\n\nbody-{i}-{j}\n" for j in range(sections_per_file))
-        f.write_text(body)
+        f.write_text(body, encoding="utf-8")
         for j in range(sections_per_file):
             rows.append({"id": f"{f}#heading-{j}", "path": str(f)})
     corpus = CorpusConfig.model_validate(

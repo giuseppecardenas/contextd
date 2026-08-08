@@ -223,7 +223,7 @@ def test_build_all_tool_descriptors_adds_corpus_tools(tmp_path: Path) -> None:
     tools_dir = tmp_path / "tools"
     tools_dir.mkdir()
     cypher_file = tools_dir / "find_file.cypher"
-    cypher_file.write_text(cypher)
+    cypher_file.write_text(cypher, encoding="utf-8")
 
     # ``as_posix()`` keeps the TOML strings backslash-free on Windows; pathlib
     # accepts forward-slash paths there, but ``\U`` in ``C:\\Users\\...`` would
@@ -235,7 +235,7 @@ root = "{tmp_path.as_posix()}"
 [mcp.tools]
 find_file = "{cypher_file.as_posix()}"
 """
-    (corpora_dir / "my-corpus.toml").write_text(toml_content)
+    (corpora_dir / "my-corpus.toml").write_text(toml_content, encoding="utf-8")
 
     all_descs, registry = _build_all_tool_descriptors(tmp_path)
     names = [t.name for t in all_descs]

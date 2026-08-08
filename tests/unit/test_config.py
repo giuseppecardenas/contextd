@@ -71,12 +71,15 @@ def test_providers_config_per_call_site_defaults_to_gemini() -> None:
 
 def test_providers_config_summary_can_be_openai_compat(tmp_path: Path) -> None:
     user_cfg = tmp_path / "config.toml"
-    user_cfg.write_text("""
+    user_cfg.write_text(
+        """
 [providers]
 summary = "openai_compat"
 inference = "gemini"
 translation = "gemini"
-""")
+""",
+        encoding="utf-8",
+    )
     cfg = Config.load(user_cfg)
     assert cfg.providers.summary == "openai_compat"
     assert cfg.providers.inference == "gemini"
@@ -85,10 +88,13 @@ translation = "gemini"
 
 def test_providers_config_rejects_unknown_provider_name(tmp_path: Path) -> None:
     user_cfg = tmp_path / "config.toml"
-    user_cfg.write_text("""
+    user_cfg.write_text(
+        """
 [providers]
 summary = "anthropic"
-""")
+""",
+        encoding="utf-8",
+    )
     with pytest.raises(ConfigError, match=r"gemini.*openai_compat|openai_compat.*gemini"):
         Config.load(user_cfg)
 
@@ -112,10 +118,13 @@ def test_openai_compat_config_rejects_zero_timeout() -> None:
 
 def test_inference_concurrency_override(tmp_path: Path) -> None:
     user_cfg = tmp_path / "config.toml"
-    user_cfg.write_text("""
+    user_cfg.write_text(
+        """
 [indexer]
 inference_concurrency = 7
-""")
+""",
+        encoding="utf-8",
+    )
     cfg = Config.load(user_cfg)
     assert cfg.indexer.inference_concurrency == 7
 
@@ -127,10 +136,13 @@ def test_inference_concurrency_rejects_zero() -> None:
 
 def test_inference_summary_max_words_override(tmp_path: Path) -> None:
     user_cfg = tmp_path / "config.toml"
-    user_cfg.write_text("""
+    user_cfg.write_text(
+        """
 [inference]
 summary_max_words = 200
-""")
+""",
+        encoding="utf-8",
+    )
     cfg = Config.load(user_cfg)
     assert cfg.inference.summary_max_words == 200
 
@@ -226,22 +238,28 @@ def test_search_config_rejects_rrf_k_zero() -> None:
 
 def test_search_config_rejects_unknown_mode(tmp_path: Path) -> None:
     user_cfg = tmp_path / "config.toml"
-    user_cfg.write_text("""
+    user_cfg.write_text(
+        """
 [search]
 mode = "fuzzy"
-""")
+""",
+        encoding="utf-8",
+    )
     with pytest.raises(ConfigError, match=r"hybrid.*fulltext.*vector|search"):
         Config.load(user_cfg)
 
 
 def test_search_config_override(tmp_path: Path) -> None:
     user_cfg = tmp_path / "config.toml"
-    user_cfg.write_text("""
+    user_cfg.write_text(
+        """
 [search]
 mode = "fulltext"
 rrf_k = 30
 fetch_k = 100
-""")
+""",
+        encoding="utf-8",
+    )
     cfg = Config.load(user_cfg)
     assert cfg.search.mode == "fulltext"
     assert cfg.search.rrf_k == 30

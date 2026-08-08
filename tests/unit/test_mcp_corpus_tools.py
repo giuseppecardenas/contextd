@@ -86,7 +86,7 @@ def _write_corpus_toml(
     if extra:
         lines.append(extra)
     toml_path = corpora_dir / f"{corpus_name}.toml"
-    toml_path.write_text("\n".join(lines) + "\n")
+    toml_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return toml_path
 
 
@@ -96,7 +96,7 @@ def test_build_tool_descriptors_loads_cypher_from_absolute_path(
     corpora_dir = tmp_path / "corpora"
     corpora_dir.mkdir()
     cypher_file = tmp_path / "find_file.cypher"
-    cypher_file.write_text("MATCH (n:File {path: $path}) RETURN n.path AS path")
+    cypher_file.write_text("MATCH (n:File {path: $path}) RETURN n.path AS path", encoding="utf-8")
     _write_corpus_toml(corpora_dir, "corp", {"find_file": cypher_file})
 
     descriptors, registry = build_tool_descriptors(tmp_path)
@@ -115,13 +115,13 @@ def test_build_tool_descriptors_loads_cypher_from_relative_path_resolves_against
     corpora_dir.mkdir()
     # Place the cypher file next to the TOML (relative path "find.cypher").
     cypher_file = corpora_dir / "find.cypher"
-    cypher_file.write_text("MATCH (n:File) RETURN n.path AS path")
+    cypher_file.write_text("MATCH (n:File) RETURN n.path AS path", encoding="utf-8")
 
     # Write TOML with relative path.
     toml_content = (
         '[corpus]\nname = "corp"\nroot = "/tmp"\n[mcp.tools]\nfind_file = "find.cypher"\n'
     )
-    (corpora_dir / "corp.toml").write_text(toml_content)
+    (corpora_dir / "corp.toml").write_text(toml_content, encoding="utf-8")
 
     descriptors, registry = build_tool_descriptors(tmp_path)
 
@@ -151,7 +151,7 @@ def test_build_tool_descriptors_rejects_write_cypher(
     corpora_dir = tmp_path / "corpora"
     corpora_dir.mkdir()
     bad_cypher = tmp_path / "bad.cypher"
-    bad_cypher.write_text("CREATE (n:File {path: $path}) RETURN n")
+    bad_cypher.write_text("CREATE (n:File {path: $path}) RETURN n", encoding="utf-8")
     _write_corpus_toml(corpora_dir, "corp", {"dangerous": bad_cypher})
 
     with caplog.at_level(logging.WARNING):
@@ -169,7 +169,7 @@ def test_build_tool_descriptors_namespaces_tool_names(tmp_path: Path) -> None:
     corpora_dir = tmp_path / "corpora"
     corpora_dir.mkdir()
     cypher_file = tmp_path / "t.cypher"
-    cypher_file.write_text("MATCH (n:File) RETURN n.path")
+    cypher_file.write_text("MATCH (n:File) RETURN n.path", encoding="utf-8")
     _write_corpus_toml(corpora_dir, "my-corpus", {"my_tool": cypher_file})
 
     descriptors, _ = build_tool_descriptors(tmp_path)
@@ -184,7 +184,9 @@ def test_build_tool_descriptors_schema_has_required_placeholders(
     corpora_dir = tmp_path / "corpora"
     corpora_dir.mkdir()
     cypher_file = tmp_path / "q.cypher"
-    cypher_file.write_text("MATCH (n:File {path: $path, corpus: $corpus}) RETURN n.path")
+    cypher_file.write_text(
+        "MATCH (n:File {path: $path, corpus: $corpus}) RETURN n.path", encoding="utf-8"
+    )
     _write_corpus_toml(corpora_dir, "corp", {"q": cypher_file})
 
     descriptors, _ = build_tool_descriptors(tmp_path)
@@ -205,11 +207,11 @@ def test_build_tool_descriptors_skips_malformed_corpus_toml(
     corpora_dir.mkdir()
 
     # Write a broken TOML (missing required [corpus] section).
-    (corpora_dir / "bad.toml").write_text("[notcorpus]\nfoo = 1\n")
+    (corpora_dir / "bad.toml").write_text("[notcorpus]\nfoo = 1\n", encoding="utf-8")
 
     # Also write a valid corpus with one tool.
     cypher_file = tmp_path / "ok.cypher"
-    cypher_file.write_text("MATCH (n:File) RETURN n.path")
+    cypher_file.write_text("MATCH (n:File) RETURN n.path", encoding="utf-8")
     _write_corpus_toml(corpora_dir, "good-corpus", {"ok": cypher_file})
 
     with caplog.at_level(logging.WARNING):
@@ -238,7 +240,7 @@ def test_build_tool_descriptors_skips_syntactically_invalid_toml(
 
     # Also write a valid corpus with one tool.
     cypher_file = tmp_path / "ok.cypher"
-    cypher_file.write_text("MATCH (n:File) RETURN n.path")
+    cypher_file.write_text("MATCH (n:File) RETURN n.path", encoding="utf-8")
     _write_corpus_toml(corpora_dir, "good-corpus", {"ok": cypher_file})
 
     with caplog.at_level(logging.WARNING):

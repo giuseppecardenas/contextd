@@ -29,7 +29,7 @@ def test_init_writes_neo4j_default_backend(tmp_path: Path, monkeypatch: pytest.M
     runner = CliRunner()
     result = runner.invoke(contextd.cli.cli, ["init", "--yes"])
     assert result.exit_code == 0
-    config = (tmp_path / ".contextd" / "config.toml").read_text()
+    config = (tmp_path / ".contextd" / "config.toml").read_text(encoding="utf-8")
     assert 'backend = "neo4j"' in config
 
 

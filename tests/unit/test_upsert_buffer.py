@@ -13,7 +13,7 @@ def test_append_creates_jsonl_file(tmp_path: Path) -> None:
     buf.append(input_path, "my-corpus")
 
     assert buf._buffer_path.exists()
-    lines = buf._buffer_path.read_text().strip().splitlines()
+    lines = buf._buffer_path.read_text(encoding="utf-8").strip().splitlines()
     assert len(lines) == 1
     record = json.loads(lines[0])
     # The buffer stores ``str(path)`` which uses OS-native separators
@@ -30,7 +30,7 @@ def test_append_accumulates_duplicate_paths(tmp_path: Path) -> None:
     buf.append(Path("/some/file.md"), "my-corpus")
     buf.append(Path("/some/file.md"), "my-corpus")
 
-    lines = buf._buffer_path.read_text().strip().splitlines()
+    lines = buf._buffer_path.read_text(encoding="utf-8").strip().splitlines()
     assert len(lines) == 2
 
 
@@ -46,7 +46,8 @@ def test_load_skips_corrupt_lines(tmp_path: Path) -> None:
 
     buf_path = tmp_path / "pending-upserts.jsonl"
     buf_path.write_text(
-        json.dumps({"path": "/good/file.md", "corpus": "corp"}) + "\n" + "NOT_VALID_JSON\n"
+        json.dumps({"path": "/good/file.md", "corpus": "corp"}) + "\n" + "NOT_VALID_JSON\n",
+        encoding="utf-8",
     )
     buf = PendingUpsertBuffer(buf_path)
     records = buf.load()

@@ -509,12 +509,13 @@ def test_grep_corpus_matches_file_contents(tmp_path: Path) -> None:
     line matches scoped to a corpus's include globs."""
     root = tmp_path / "notes"
     root.mkdir()
-    (root / "a.md").write_text("first line\nFLAG_XYZ appears here\nlast line\n")
-    (root / "b.md").write_text("nothing relevant\n")
+    (root / "a.md").write_text("first line\nFLAG_XYZ appears here\nlast line\n", encoding="utf-8")
+    (root / "b.md").write_text("nothing relevant\n", encoding="utf-8")
     corpora = tmp_path / "corpora"
     corpora.mkdir()
     (corpora / "c.toml").write_text(
-        f'[corpus]\nname = "c"\nroot = "{root.as_posix()}"\ninclude = ["**/*.md"]\n'
+        f'[corpus]\nname = "c"\nroot = "{root.as_posix()}"\ninclude = ["**/*.md"]\n',
+        encoding="utf-8",
     )
 
     matches = tools.grep_corpus(tmp_path, r"FLAG_[A-Z]+", corpus="c")
@@ -528,11 +529,12 @@ def test_grep_corpus_matches_file_contents(tmp_path: Path) -> None:
 def test_grep_corpus_respects_limit(tmp_path: Path) -> None:
     root = tmp_path / "notes"
     root.mkdir()
-    (root / "a.md").write_text("hit\nhit\nhit\nhit\n")
+    (root / "a.md").write_text("hit\nhit\nhit\nhit\n", encoding="utf-8")
     corpora = tmp_path / "corpora"
     corpora.mkdir()
     (corpora / "c.toml").write_text(
-        f'[corpus]\nname = "c"\nroot = "{root.as_posix()}"\ninclude = ["**/*.md"]\n'
+        f'[corpus]\nname = "c"\nroot = "{root.as_posix()}"\ninclude = ["**/*.md"]\n',
+        encoding="utf-8",
     )
 
     matches = tools.grep_corpus(tmp_path, "hit", corpus="c", limit=2)

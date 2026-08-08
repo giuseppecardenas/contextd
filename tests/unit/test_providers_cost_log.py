@@ -22,7 +22,7 @@ def test_append_and_read(tmp_path: Path) -> None:
     assert len(files) == 1
     assert files[0].name == "2026-04-20.jsonl"
 
-    rows = [json.loads(line) for line in files[0].read_text().splitlines()]
+    rows = [json.loads(line) for line in files[0].read_text(encoding="utf-8").splitlines()]
     assert len(rows) == 1
     assert rows[0]["input_tokens"] == 100
 

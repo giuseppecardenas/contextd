@@ -10,49 +10,49 @@ from contextd.indexer.hasher import FileHasher
 
 def test_hash_stable_for_unchanged_file(tmp_path: Path) -> None:
     f = tmp_path / "a.md"
-    f.write_text("hello")
+    f.write_text("hello", encoding="utf-8")
     hasher = FileHasher()
     assert hasher.hash(f) == hasher.hash(f)
 
 
 def test_hash_differs_on_content_change(tmp_path: Path) -> None:
     f = tmp_path / "a.md"
-    f.write_text("hello")
+    f.write_text("hello", encoding="utf-8")
     hasher = FileHasher()
     h1 = hasher.hash(f)
-    f.write_text("world")
+    f.write_text("world", encoding="utf-8")
     h2 = hasher.hash(f)
     assert h1 != h2
 
 
 def test_is_changed_uses_persistent_state(tmp_path: Path) -> None:
     f = tmp_path / "a.md"
-    f.write_text("hello")
+    f.write_text("hello", encoding="utf-8")
     hasher = FileHasher(state_path=tmp_path / "index-state.json")
     assert hasher.is_changed(f) is True  # new file
     hasher.mark_seen(f)
     assert hasher.is_changed(f) is False  # unchanged
-    f.write_text("world")
+    f.write_text("world", encoding="utf-8")
     assert hasher.is_changed(f) is True  # content change
 
 
 def test_load_state_rejects_non_dict_json(tmp_path: Path) -> None:
     state = tmp_path / "index-state.json"
-    state.write_text(json.dumps(["not", "a", "dict"]))
+    state.write_text(json.dumps(["not", "a", "dict"]), encoding="utf-8")
     with pytest.raises(ValueError, match="must be a JSON object"):
         FileHasher(state_path=state)
 
 
 def test_load_state_rejects_non_string_values(tmp_path: Path) -> None:
     state = tmp_path / "index-state.json"
-    state.write_text(json.dumps({"path/to/file": 42}))
+    state.write_text(json.dumps({"path/to/file": 42}), encoding="utf-8")
     with pytest.raises(ValueError, match="must be str→str"):
         FileHasher(state_path=state)
 
 
 def test_stored_distinguishes_unknown_from_identical(tmp_path: Path) -> None:
     f = tmp_path / "a.md"
-    f.write_text("x")
+    f.write_text("x", encoding="utf-8")
     h = FileHasher()
     assert h.stored(f) is None
     h.mark_seen(f)
@@ -64,10 +64,10 @@ def test_mark_seen_accepts_precomputed_digest(tmp_path: Path) -> None:
     # time would record content newer than what was indexed, and the newer edit
     # would then be filtered out as unchanged and lost.
     f = tmp_path / "a.md"
-    f.write_text("old")
+    f.write_text("old", encoding="utf-8")
     h = FileHasher()
     digest_before = h.hash(f)
-    f.write_text("new during indexing")
+    f.write_text("new during indexing", encoding="utf-8")
     h.mark_seen(f, digest_before)
     assert h.stored(f) == digest_before
     assert h.is_changed(f)  # the newer content is still pending
@@ -75,7 +75,7 @@ def test_mark_seen_accepts_precomputed_digest(tmp_path: Path) -> None:
 
 def test_forget_drops_entry_so_restored_file_reindexes(tmp_path: Path) -> None:
     f = tmp_path / "a.md"
-    f.write_text("x")
+    f.write_text("x", encoding="utf-8")
     h = FileHasher()
     h.mark_seen(f)
     h.forget(f)
@@ -92,7 +92,7 @@ def test_persist_replaces_state_file_atomically(tmp_path: Path) -> None:
     # daemon from starting at all.
     state = tmp_path / "state" / "s-index-state.json"
     f = tmp_path / "a.md"
-    f.write_text("x")
+    f.write_text("x", encoding="utf-8")
     h = FileHasher(state_path=state)
     h.mark_seen(f)
     assert not state.with_suffix(".tmp").exists()
@@ -107,7 +107,7 @@ def test_forget_many_persists_once(tmp_path: Path) -> None:
     h = FileHasher(state_path=state)
     for i in range(3):
         f = tmp_path / f"{i}.md"
-        f.write_text(str(i))
+        f.write_text(str(i), encoding="utf-8")
         h.mark_seen(f)
         files.append(f)
 

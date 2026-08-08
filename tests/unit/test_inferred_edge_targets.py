@@ -63,7 +63,7 @@ def test_phase_relate_merges_entity_content_and_protects_pk(tmp_path: Path) -> N
 
 def _file(tmp_path: Path) -> Path:
     f = tmp_path / "a.md"
-    f.write_text("content")
+    f.write_text("content", encoding="utf-8")
     return f
 
 

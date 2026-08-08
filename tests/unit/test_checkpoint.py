@@ -60,7 +60,7 @@ def test_invalid_corpus_names_rejected(tmp_path: Path, bad: str) -> None:
 
 def test_load_rejects_non_dict_json(tmp_path: Path) -> None:
     store = CheckpointStore(tmp_path)
-    (tmp_path / "c.json").write_text(json.dumps(["not", "a", "dict"]))
+    (tmp_path / "c.json").write_text(json.dumps(["not", "a", "dict"]), encoding="utf-8")
     with pytest.raises(ValueError, match="must be a JSON object"):
         store.load("c")
 
@@ -69,7 +69,10 @@ def test_load_rejects_wrong_field_types(tmp_path: Path) -> None:
     store = CheckpointStore(tmp_path)
     # Wrong type on last_committed_batch.
     (tmp_path / "c.json").write_text(
-        json.dumps({"phase": "embed", "last_committed_batch": "three", "last_committed_file": None})
+        json.dumps(
+            {"phase": "embed", "last_committed_batch": "three", "last_committed_file": None}
+        ),
+        encoding="utf-8",
     )
     with pytest.raises(ValueError, match="last_committed_batch"):
         store.load("c")
@@ -80,7 +83,8 @@ def test_load_rejects_bool_as_int(tmp_path: Path) -> None:
     # the last_committed_batch integer contract.
     store = CheckpointStore(tmp_path)
     (tmp_path / "c.json").write_text(
-        json.dumps({"phase": "embed", "last_committed_batch": True, "last_committed_file": None})
+        json.dumps({"phase": "embed", "last_committed_batch": True, "last_committed_file": None}),
+        encoding="utf-8",
     )
     with pytest.raises(ValueError, match="last_committed_batch"):
         store.load("c")

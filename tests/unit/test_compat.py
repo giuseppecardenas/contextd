@@ -85,7 +85,7 @@ def test_connect_ipc_closes_socket_when_connect_fails(
         return m
 
     if IS_WINDOWS:
-        ipc_path.write_text("1")
+        ipc_path.write_text("1", encoding="utf-8")
     monkeypatch.setattr(socket, "socket", _fake_socket)
 
     with pytest.raises(ConnectionRefusedError):
@@ -130,7 +130,7 @@ def test_ipc_server_socket_creates_endpoint_file(ipc_path: Path) -> None:
     try:
         assert ipc_path.exists()
         if IS_WINDOWS:
-            port = int(ipc_path.read_text().strip())
+            port = int(ipc_path.read_text(encoding="utf-8").strip())
             assert port > 0
     finally:
         sock.close()

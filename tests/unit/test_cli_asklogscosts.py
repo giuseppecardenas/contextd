@@ -27,7 +27,7 @@ backend = "neo4j"
 [storage.neo4j]
 docker_compose_file = "{home.as_posix()}/docker-compose.yml"
 """
-    (home / "config.toml").write_text(config)
+    (home / "config.toml").write_text(config, encoding="utf-8")
     (home / "corpora").mkdir()
     (home / "logs").mkdir()
     (home / "state" / "session-log").mkdir(parents=True)
@@ -50,7 +50,7 @@ def test_logs_no_file_prints_absent(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 def test_logs_prints_content(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     home = _setup_home(tmp_path)
     log_path = home / "logs" / "contextd.log"
-    log_path.write_text('{"level":"info","msg":"hello"}\n')
+    log_path.write_text('{"level":"info","msg":"hello"}\n', encoding="utf-8")
     monkeypatch.setenv("CONTEXTD_HOME", str(home))
     result = CliRunner().invoke(contextd.cli.cli, ["logs"])
     assert result.exit_code == 0
@@ -60,7 +60,7 @@ def test_logs_prints_content(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 def test_logs_follow_shells_out(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     home = _setup_home(tmp_path)
     log_path = home / "logs" / "contextd.log"
-    log_path.write_text("line\n")
+    log_path.write_text("line\n", encoding="utf-8")
     monkeypatch.setenv("CONTEXTD_HOME", str(home))
     with patch("subprocess.run") as mock_run:
         result = CliRunner().invoke(contextd.cli.cli, ["logs", "--follow"])

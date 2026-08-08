@@ -47,12 +47,15 @@ def test_factory_picks_openai_compat_for_summary_when_configured(
 ) -> None:
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     user_cfg = tmp_path / "config.toml"  # type: ignore[operator]
-    user_cfg.write_text("""
+    user_cfg.write_text(
+        """
 [providers]
 summary = "openai_compat"
 inference = "gemini"
 translation = "gemini"
-""")
+""",
+        encoding="utf-8",
+    )
     cfg = Config.load(user_cfg)
     provider = build_inference_provider(cfg)
     assert isinstance(provider, RoutingInferenceProvider)
@@ -77,7 +80,8 @@ def test_factory_raises_when_openai_compat_api_key_env_missing(
 ) -> None:
     monkeypatch.delenv("FAKE_OPENAI_KEY", raising=False)
     user_cfg = tmp_path / "config.toml"  # type: ignore[operator]
-    user_cfg.write_text("""
+    user_cfg.write_text(
+        """
 [providers]
 summary = "openai_compat"
 inference = "openai_compat"
@@ -85,7 +89,9 @@ translation = "openai_compat"
 
 [providers.openai_compat]
 api_key_env = "FAKE_OPENAI_KEY"
-""")
+""",
+        encoding="utf-8",
+    )
     cfg = Config.load(user_cfg)
     with pytest.raises(ProviderFactoryError, match="FAKE_OPENAI_KEY"):
         build_inference_provider(cfg)
@@ -97,12 +103,15 @@ def test_factory_skips_gemini_construction_when_no_call_site_uses_it(
     """If all three call-sites use openai_compat, GEMINI_API_KEY is irrelevant."""
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     user_cfg = tmp_path / "config.toml"  # type: ignore[operator]
-    user_cfg.write_text("""
+    user_cfg.write_text(
+        """
 [providers]
 summary = "openai_compat"
 inference = "openai_compat"
 translation = "openai_compat"
-""")
+""",
+        encoding="utf-8",
+    )
     cfg = Config.load(user_cfg)
     provider = build_inference_provider(cfg)
     assert isinstance(provider, RoutingInferenceProvider)

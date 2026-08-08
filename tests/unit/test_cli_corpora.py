@@ -22,7 +22,8 @@ def _setup_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # fails with "Invalid hex value" before the CLI ever runs.
     (home / "config.toml").write_text(
         '[storage]\nbackend = "neo4j"\n\n[storage.neo4j]\n'
-        f'docker_compose_file = "{home.as_posix()}/docker-compose.yml"\n'
+        f'docker_compose_file = "{home.as_posix()}/docker-compose.yml"\n',
+        encoding="utf-8",
     )
     monkeypatch.setenv("CONTEXTD_HOME", str(home))
     return home
@@ -39,7 +40,7 @@ def test_add_corpus_writes_toml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     assert result.exit_code == 0, result.output
     toml_path = home / "corpora" / "notes.toml"
     assert toml_path.exists()
-    data = tomllib.loads(toml_path.read_text())
+    data = tomllib.loads(toml_path.read_text(encoding="utf-8"))
     assert data["corpus"]["name"] == "notes"
     assert data["corpus"]["root"] == str(corpus_dir.resolve())
     assert data["corpus"]["include"] == ["**/*.md"]
@@ -61,7 +62,7 @@ def test_add_corpus_section_granularity_adds_heading_levels(
     )
     assert result.exit_code == 0
     toml_path = home / "corpora" / "big.toml"
-    data = tomllib.loads(toml_path.read_text())
+    data = tomllib.loads(toml_path.read_text(encoding="utf-8"))
     assert data["corpus"]["granularity"] == "section"
     assert data["corpus"]["heading_min_level"] == 2
     assert data["corpus"]["heading_max_level"] == 4
@@ -108,7 +109,8 @@ def test_list_corpora_when_corpora_dir_missing(
     # Deliberately do NOT mkdir corpora/.
     (home / "config.toml").write_text(
         f'[storage]\nbackend = "neo4j"\n\n[storage.neo4j]\n'
-        f'docker_compose_file = "{home}/docker-compose.yml"\n'
+        f'docker_compose_file = "{home}/docker-compose.yml"\n',
+        encoding="utf-8",
     )
     monkeypatch.setenv("CONTEXTD_HOME", str(home))
     result = CliRunner().invoke(contextd.cli.cli, ["list-corpora"])
@@ -206,7 +208,7 @@ def test_add_corpus_from_template_copies_aliases_and_overrides(
 
     toml_path = home / "corpora" / "foo.toml"
     assert toml_path.exists()
-    data = tomllib.loads(toml_path.read_text())
+    data = tomllib.loads(toml_path.read_text(encoding="utf-8"))
     assert data["corpus"]["name"] == "foo"
     assert data["corpus"]["root"] == str(corpus_dir.resolve())
     # Aliases preserved.
@@ -243,7 +245,7 @@ def test_add_corpus_from_template_rewrites_relative_paths(
         ["add-corpus", str(corpus_dir), "--name", "bar", "--from", str(template)],
     )
     assert result.exit_code == 0, result.output
-    data = tomllib.loads((home / "corpora" / "bar.toml").read_text())
+    data = tomllib.loads((home / "corpora" / "bar.toml").read_text(encoding="utf-8"))
 
     assert Path(data["ontology"]["overrides"]).is_absolute()
     assert Path(data["ontology"]["overrides"]) == (template_dir / "ontology.json").resolve()
@@ -282,7 +284,7 @@ def test_add_corpus_from_template_preserves_absolute_paths(
         ["add-corpus", str(corpus_dir), "--name", "baz", "--from", str(template)],
     )
     assert result.exit_code == 0, result.output
-    data = tomllib.loads((home / "corpora" / "baz.toml").read_text())
+    data = tomllib.loads((home / "corpora" / "baz.toml").read_text(encoding="utf-8"))
     assert Path(data["ontology"]["overrides"]) == abs_ontology_path
 
 
@@ -314,7 +316,7 @@ def test_add_corpus_from_template_granularity_inherited_from_template(
         ],
     )
     assert result.exit_code == 0, result.output
-    data = tomllib.loads((home / "corpora" / "qux.toml").read_text())
+    data = tomllib.loads((home / "corpora" / "qux.toml").read_text(encoding="utf-8"))
     # Template granularity is preserved; the --granularity flag is ignored.
     assert data["corpus"]["granularity"] == "section"
 
@@ -383,7 +385,7 @@ def test_add_corpus_without_from_preserves_existing_behaviour(
     assert result.exit_code == 0, result.output
     toml_path = home / "corpora" / "smoke.toml"
     assert toml_path.exists()
-    data = tomllib.loads(toml_path.read_text())
+    data = tomllib.loads(toml_path.read_text(encoding="utf-8"))
     assert data["corpus"]["name"] == "smoke"
     assert data["corpus"]["include"] == ["**/*.md"]
     assert data["corpus"]["granularity"] == "file"
@@ -474,7 +476,7 @@ def test_add_corpus_from_acme_template(tmp_path: Path, monkeypatch: pytest.Monke
     assert result.exit_code == 0, result.output
 
     corpus_toml_path = home / "corpora" / "acme-prd.toml"
-    data = tomllib.loads(corpus_toml_path.read_text())
+    data = tomllib.loads(corpus_toml_path.read_text(encoding="utf-8"))
 
     # Name and root overridden.
     assert data["corpus"]["name"] == "acme-prd"
@@ -557,13 +559,13 @@ def test_remove_corpus_deletes_toml_state_and_graph(
     home = _setup_home(tmp_path, monkeypatch)
     corpus_toml = home / "corpora" / "notes.toml"
     corpus_toml.parent.mkdir(parents=True, exist_ok=True)
-    corpus_toml.write_text('[corpus]\nname = "notes"\nroot = "/tmp/notes"\n')
+    corpus_toml.write_text('[corpus]\nname = "notes"\nroot = "/tmp/notes"\n', encoding="utf-8")
     state_dir = home / "state"
     (state_dir / "checkpoints").mkdir(parents=True, exist_ok=True)
     index_state = state_dir / "notes-index-state.json"
     checkpoint = state_dir / "checkpoints" / "notes.json"
-    index_state.write_text("{}")
-    checkpoint.write_text("{}")
+    index_state.write_text("{}", encoding="utf-8")
+    checkpoint.write_text("{}", encoding="utf-8")
 
     mock_store = MagicMock()
     with patch("contextd.storage.factory.build_graph_store", return_value=mock_store):

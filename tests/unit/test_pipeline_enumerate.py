@@ -39,11 +39,11 @@ def test_excludes_dotgit_contents_by_default(tmp_path: Path) -> None:
 def test_excludes_venv_pycache_node_modules(tmp_path: Path) -> None:
     """Other conventional exclude dirs — any part of the path matching
     the default exclude set drops the file from enumeration."""
-    (tmp_path / "kept.md").write_text("x")
+    (tmp_path / "kept.md").write_text("x", encoding="utf-8")
     for bad_dir in (".venv", "__pycache__", "node_modules"):
         sub = tmp_path / bad_dir
         sub.mkdir()
-        (sub / "dropped.md").write_text("x")
+        (sub / "dropped.md").write_text("x", encoding="utf-8")
 
     files = enumerate_corpus_files(_cfg(tmp_path))
     # Use ``Path.parts`` for separator-agnostic membership tests; ``str(p)``
@@ -58,9 +58,9 @@ def test_skips_symlinks(tmp_path: Path) -> None:
     targets (e.g. a symlink back into the corpus root)."""
     import pytest
 
-    (tmp_path / "real.md").write_text("x")
+    (tmp_path / "real.md").write_text("x", encoding="utf-8")
     link_target = tmp_path / "target.md"
-    link_target.write_text("y")
+    link_target.write_text("y", encoding="utf-8")
     link = tmp_path / "link.md"
     # On Windows, os.symlink requires SeCreateSymbolicLinkPrivilege (only
     # held by admins or accounts with Developer Mode enabled); skip the
@@ -90,7 +90,7 @@ def test_partition_markdown_splits_on_suffix(tmp_path: Path) -> None:
     c = tmp_path / "c.md"
     d = tmp_path / "d.toml"
     for p in (a, b, c, d):
-        p.write_text("x")
+        p.write_text("x", encoding="utf-8")
 
     md, other = _partition_markdown([a, b, c, d])
     assert md == [a, c]
@@ -108,7 +108,7 @@ def test_partition_markdown_all_markdown(tmp_path: Path) -> None:
     """All .md → first bucket; second bucket is empty."""
     files = [tmp_path / f"f{i}.md" for i in range(3)]
     for f in files:
-        f.write_text("x")
+        f.write_text("x", encoding="utf-8")
 
     md, other = _partition_markdown(files)
     assert md == files
@@ -119,7 +119,7 @@ def test_partition_markdown_no_markdown(tmp_path: Path) -> None:
     """No .md files → first bucket is empty; second has all files."""
     files = [tmp_path / "a.lua", tmp_path / "b.toml", tmp_path / "c.rs"]
     for f in files:
-        f.write_text("x")
+        f.write_text("x", encoding="utf-8")
 
     md, other = _partition_markdown(files)
     assert md == []
@@ -131,7 +131,7 @@ def test_partition_markdown_preserves_order(tmp_path: Path) -> None:
     names = ["z.md", "a.lua", "m.md", "b.lua", "k.md"]
     paths = [tmp_path / n for n in names]
     for p in paths:
-        p.write_text("x")
+        p.write_text("x", encoding="utf-8")
 
     md, other = _partition_markdown(paths)
     assert [p.name for p in md] == ["z.md", "m.md", "k.md"]

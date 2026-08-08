@@ -216,14 +216,14 @@ def test_run_incremental_file_returns_skipped_when_no_sections_changed(
     from contextd.indexer.pipeline import run_incremental_file
 
     md = tmp_path / "doc.md"
-    md.write_text("## Alpha\n\nBody alpha.\n")
+    md.write_text("## Alpha\n\nBody alpha.\n", encoding="utf-8")
     corpus = _make_corpus(tmp_path, granularity="section")
 
     file_path_str = canonical_path(md)
     from contextd.indexer.heading_parser import HeadingParser
 
     parser = HeadingParser(min_level=2, max_level=4)
-    sections = parser.parse(md.read_text())
+    sections = parser.parse(md.read_text(encoding="utf-8"))
     stored_rows = [
         {
             "id": f"{file_path_str}#{sec.anchor}",
@@ -265,7 +265,7 @@ def test_run_incremental_file_clears_only_changed_sections(tmp_path: Path) -> No
     from contextd.indexer.heading_parser import HeadingParser
 
     parser = HeadingParser(min_level=2, max_level=4)
-    sections = parser.parse(md.read_text())
+    sections = parser.parse(md.read_text(encoding="utf-8"))
     alpha = sections[0]
 
     # Alpha has correct hash; Beta has stale hash
@@ -319,7 +319,7 @@ def test_run_incremental_file_treats_missing_hash_as_changed(tmp_path: Path) -> 
     from contextd.indexer.pipeline import run_incremental_file
 
     md = tmp_path / "doc.md"
-    md.write_text("## Alpha\n\nBody alpha.\n")
+    md.write_text("## Alpha\n\nBody alpha.\n", encoding="utf-8")
     corpus = _make_corpus(tmp_path, granularity="section")
 
     file_path_str = canonical_path(md)
@@ -365,7 +365,7 @@ def test_run_incremental_file_skips_empty_file(tmp_path: Path) -> None:
     from contextd.indexer.pipeline import run_incremental_file
 
     empty = tmp_path / "empty.md"
-    empty.write_text("")
+    empty.write_text("", encoding="utf-8")
     corpus = _make_corpus(tmp_path)
 
     store = MagicMock()
@@ -385,7 +385,7 @@ def test_run_incremental_file_section_corpus_non_md(tmp_path: Path) -> None:
     from contextd.indexer.pipeline import run_incremental_file
 
     lua = tmp_path / "mod.lua"
-    lua.write_text("-- code\n")
+    lua.write_text("-- code\n", encoding="utf-8")
     corpus = _make_corpus(tmp_path, granularity="section")
 
     store = MagicMock()

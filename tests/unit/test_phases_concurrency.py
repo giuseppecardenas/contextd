@@ -58,7 +58,7 @@ def _make_files(tmp_path: Path, n: int, suffix: str = ".txt") -> list[Path]:
     files = []
     for i in range(n):
         f = tmp_path / f"f{i}{suffix}"
-        f.write_text(f"content-{i}")
+        f.write_text(f"content-{i}", encoding="utf-8")
         files.append(f)
     return files
 
@@ -153,7 +153,7 @@ def _make_section_corpus(
         body_lines: list[str] = []
         for j in range(sections_per_file):
             body_lines.append(f"## Heading {j}\n\nbody-{i}-{j}\n")
-        f.write_text("\n".join(body_lines))
+        f.write_text("\n".join(body_lines), encoding="utf-8")
         files.append(f)
         for j in range(sections_per_file):
             rows.append({"id": f"{f}#heading-{j}", "path": str(f)})

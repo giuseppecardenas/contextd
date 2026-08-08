@@ -42,8 +42,8 @@ def test_filter_changed_returns_only_changed_paths(tmp_path: Path) -> None:
     hasher = FileHasher()
     a = tmp_path / "a.md"
     b = tmp_path / "b.md"
-    a.write_text("content")
-    b.write_text("content")
+    a.write_text("content", encoding="utf-8")
+    b.write_text("content", encoding="utf-8")
 
     hasher.mark_seen(a)  # a is already known
     result = _filter_changed([a, b], hasher)
@@ -64,7 +64,7 @@ def test_filter_changed_does_not_mark_paths_seen(tmp_path: Path) -> None:
 
     hasher = FileHasher()
     f = tmp_path / "f.md"
-    f.write_text("content")
+    f.write_text("content", encoding="utf-8")
 
     assert _filter_changed([f], hasher).to_index == [f]
     assert _filter_changed([f], hasher).to_index == [f]
@@ -139,7 +139,7 @@ def test_handle_batch_calls_run_incremental_for_changed_files(
     from contextd.indexer.pipeline import IncrementalResult
 
     f = tmp_path / "a.md"
-    f.write_text("x")
+    f.write_text("x", encoding="utf-8")
 
     corpus_cfg = CorpusConfig.model_validate({"corpus": {"name": "t", "root": str(tmp_path)}})
     hasher = FileHasher()
@@ -200,7 +200,7 @@ def test_handle_batch_marks_hash_only_after_success(tmp_path: Path) -> None:
     from contextd.daemon import _handle_batch
 
     f = tmp_path / "a.md"
-    f.write_text("x")
+    f.write_text("x", encoding="utf-8")
     entry = _entry_for(tmp_path)
 
     with (
@@ -238,7 +238,7 @@ def test_handle_batch_forgets_hash_when_file_is_reaped(tmp_path: Path) -> None:
     from contextd.indexer.pipeline import IncrementalResult
 
     f = tmp_path / "gone.md"
-    f.write_text("x")
+    f.write_text("x", encoding="utf-8")
     entry = _entry_for(tmp_path)
     entry.hasher.mark_seen(f)  # type: ignore[attr-defined]
     f.unlink()
@@ -269,7 +269,7 @@ def test_handle_batch_logs_when_batch_yields_no_work(
     from contextd.daemon import _handle_batch
 
     f = tmp_path / "a.md"
-    f.write_text("x")
+    f.write_text("x", encoding="utf-8")
     entry = _entry_for(tmp_path)
     entry.hasher.mark_seen(f)  # type: ignore[attr-defined]
 
@@ -298,7 +298,7 @@ def test_reconcile_missing_files_queues_only_ungraphed_files(tmp_path: Path) -> 
 
     indexed = tmp_path / "known.md"
     missing = tmp_path / "unknown.md"
-    indexed.write_text("a")
+    indexed.write_text("a", encoding="utf-8")
     missing.write_text("b")
 
     store = MagicMock()
@@ -357,7 +357,7 @@ def test_handle_batch_processes_multiple_files_concurrently(
     files = []
     for i in range(4):
         f = tmp_path / f"{i}.md"
-        f.write_text("x")
+        f.write_text("x", encoding="utf-8")
         files.append(f)
 
     corpus_cfg = CorpusConfig.model_validate({"corpus": {"name": "t", "root": str(tmp_path)}})
@@ -406,7 +406,7 @@ def test_handle_batch_logs_and_continues_on_error(tmp_path: Path) -> None:
 
     files = [tmp_path / f"{i}.md" for i in range(2)]
     for f in files:
-        f.write_text("x")
+        f.write_text("x", encoding="utf-8")
 
     corpus_cfg = CorpusConfig.model_validate({"corpus": {"name": "t", "root": str(tmp_path)}})
     hasher = FileHasher()
@@ -456,7 +456,7 @@ def test_filter_changed_dispatches_vanished_paths_for_reaping(tmp_path: Path) ->
     from contextd.indexer.hasher import FileHasher
 
     existing = tmp_path / "exists.md"
-    existing.write_text("content")
+    existing.write_text("content", encoding="utf-8")
     deleted = tmp_path / "gone.md"  # never created, or removed before the drain
 
     result = _filter_changed([existing, deleted], FileHasher())
@@ -659,7 +659,7 @@ def test_handle_batch_saves_checkpoint_before_processing(tmp_path: Path) -> None
     from contextd.indexer.pipeline import IncrementalResult
 
     f = tmp_path / "a.md"
-    f.write_text("x")
+    f.write_text("x", encoding="utf-8")
     corpus_cfg = CorpusConfig.model_validate({"corpus": {"name": "t", "root": str(tmp_path)}})
     entry = CorpusDaemonEntry(
         corpus_cfg=corpus_cfg,
@@ -705,7 +705,7 @@ def test_handle_batch_clears_checkpoint_after_batch_completes(tmp_path: Path) ->
     from contextd.indexer.pipeline import IncrementalResult
 
     f = tmp_path / "a.md"
-    f.write_text("x")
+    f.write_text("x", encoding="utf-8")
     corpus_cfg = CorpusConfig.model_validate({"corpus": {"name": "t", "root": str(tmp_path)}})
     entry = CorpusDaemonEntry(
         corpus_cfg=corpus_cfg,
@@ -768,12 +768,12 @@ def test_sweep_enqueues_file_when_section_hash_changed(tmp_path: Path) -> None:
     from contextd.daemon import SectionRecord, SweepWorkUnit, _process_sweep_unit
 
     md = tmp_path / "doc.md"
-    md.write_text("## Alpha\n\nBody alpha.\n")
+    md.write_text("## Alpha\n\nBody alpha.\n", encoding="utf-8")
     entry = _make_section_entry(tmp_path)
 
     from contextd.indexer.heading_parser import HeadingParser
 
-    sec = HeadingParser(min_level=2, max_level=4).parse(md.read_text())[0]
+    sec = HeadingParser(min_level=2, max_level=4).parse(md.read_text(encoding="utf-8"))[0]
 
     unit = SweepWorkUnit(
         path=str(md),
@@ -793,12 +793,12 @@ def test_sweep_skips_file_when_all_section_hashes_match(tmp_path: Path) -> None:
     from contextd.daemon import SectionRecord, SweepWorkUnit, _process_sweep_unit
 
     md = tmp_path / "doc.md"
-    md.write_text("## Alpha\n\nBody alpha.\n")
+    md.write_text("## Alpha\n\nBody alpha.\n", encoding="utf-8")
     entry = _make_section_entry(tmp_path)
 
     from contextd.indexer.heading_parser import HeadingParser
 
-    sec = HeadingParser(min_level=2, max_level=4).parse(md.read_text())[0]
+    sec = HeadingParser(min_level=2, max_level=4).parse(md.read_text(encoding="utf-8"))[0]
     matched_hash = hashlib.md5((sec.title + "\n\n" + sec.body).encode()).hexdigest()
 
     unit = SweepWorkUnit(
@@ -842,12 +842,12 @@ def test_sweep_enqueues_file_when_section_removed(tmp_path: Path) -> None:
     from contextd.daemon import SectionRecord, SweepWorkUnit, _process_sweep_unit
 
     md = tmp_path / "doc.md"
-    md.write_text("## Alpha\n\nBody alpha.\n")  # no "beta"
+    md.write_text("## Alpha\n\nBody alpha.\n", encoding="utf-8")  # no "beta"
     entry = _make_section_entry(tmp_path)
 
     from contextd.indexer.heading_parser import HeadingParser
 
-    sec = HeadingParser(min_level=2, max_level=4).parse(md.read_text())[0]
+    sec = HeadingParser(min_level=2, max_level=4).parse(md.read_text(encoding="utf-8"))[0]
     alpha_hash = hashlib.md5((sec.title + "\n\n" + sec.body).encode()).hexdigest()
 
     # Graph still has both alpha and a now-removed beta
@@ -891,12 +891,12 @@ def test_sweep_treats_none_stored_hash_as_changed(tmp_path: Path) -> None:
     from contextd.daemon import SectionRecord, SweepWorkUnit, _process_sweep_unit
 
     md = tmp_path / "doc.md"
-    md.write_text("## Alpha\n\nBody alpha.\n")
+    md.write_text("## Alpha\n\nBody alpha.\n", encoding="utf-8")
     entry = _make_section_entry(tmp_path)
 
     from contextd.indexer.heading_parser import HeadingParser
 
-    sec = HeadingParser(min_level=2, max_level=4).parse(md.read_text())[0]
+    sec = HeadingParser(min_level=2, max_level=4).parse(md.read_text(encoding="utf-8"))[0]
 
     unit = SweepWorkUnit(
         path=str(md),
@@ -977,7 +977,7 @@ def test_sweep_file_granular_enqueues_changed_file(tmp_path: Path) -> None:
     from contextd.daemon import CorpusDaemonEntry, SweepWorkUnit, _process_sweep_unit
 
     f = tmp_path / "a.md"
-    f.write_text("content")
+    f.write_text("content", encoding="utf-8")
     corpus_cfg = CorpusConfig.model_validate({"corpus": {"name": "fg", "root": str(tmp_path)}})
     hasher = MagicMock()
     hasher.is_changed.return_value = True
@@ -1005,7 +1005,7 @@ def test_handle_batch_does_not_clear_checkpoint_on_error(tmp_path: Path) -> None
     from contextd.indexer.hasher import FileHasher
 
     f = tmp_path / "a.md"
-    f.write_text("x")
+    f.write_text("x", encoding="utf-8")
     corpus_cfg = CorpusConfig.model_validate({"corpus": {"name": "t", "root": str(tmp_path)}})
     entry = CorpusDaemonEntry(
         corpus_cfg=corpus_cfg,

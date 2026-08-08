@@ -12,7 +12,7 @@ def test_watcher_fires_on_file_write(tmp_path: Path) -> None:
     w.start()
     try:
         time.sleep(0.1)  # let observer attach
-        (tmp_path / "a.md").write_text("hello")
+        (tmp_path / "a.md").write_text("hello", encoding="utf-8")
         # Poll briefly for the event.
         for _ in range(20):
             if changes:
@@ -45,7 +45,7 @@ def test_watcher_fires_on_intra_directory_rename(tmp_path: Path) -> None:
     try:
         time.sleep(0.1)  # let observer attach
         tmp = tmp_path / ".target.md.tmp"
-        tmp.write_text("hello")
+        tmp.write_text("hello", encoding="utf-8")
         tmp.rename(tmp_path / "target.md")
         assert _wait_for(changes, "target.md")
     finally:
@@ -56,7 +56,7 @@ def test_watcher_fires_on_delete(tmp_path: Path) -> None:
     """Deletions must be forwarded so the indexer can reap the node."""
     changes: list[Path] = []
     victim = tmp_path / "victim.md"
-    victim.write_text("hello")
+    victim.write_text("hello", encoding="utf-8")
     w = CorpusWatcher(tmp_path, lambda p: changes.append(p))
     w.start()
     try:

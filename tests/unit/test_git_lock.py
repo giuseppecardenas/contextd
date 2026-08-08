@@ -61,7 +61,7 @@ def test_false_when_git_dir_exists_without_locks(tmp_path: Path) -> None:
     """Happy-path negative: a fully-present .git dir with neither lock is
     not busy. Bug-bait for a refactor that returns True as a default."""
     (tmp_path / ".git").mkdir()
-    (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+    (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
     assert is_git_busy(tmp_path) is False
 
 
@@ -77,7 +77,7 @@ def test_resolves_gitfile_to_real_gitdir(tmp_path: Path) -> None:
     worktree = tmp_path / "worktree"
     worktree.mkdir()
     # .git is a *file*, not a directory.
-    (worktree / ".git").write_text(f"gitdir: {real_gitdir}\n")
+    (worktree / ".git").write_text(f"gitdir: {real_gitdir}\n", encoding="utf-8")
 
     assert is_git_busy(worktree) is True
 
@@ -91,12 +91,12 @@ def test_resolves_relative_gitfile_path(tmp_path: Path) -> None:
     worktree = tmp_path / "sub"
     worktree.mkdir()
     # Relative path — must be resolved relative to the gitfile's directory.
-    (worktree / ".git").write_text("gitdir: ../shared-gitdir\n")
+    (worktree / ".git").write_text("gitdir: ../shared-gitdir\n", encoding="utf-8")
 
     assert is_git_busy(worktree) is True
 
 
 def test_malformed_gitfile_returns_false(tmp_path: Path) -> None:
     """A .git file without a parseable 'gitdir:' line is not a busy repo."""
-    (tmp_path / ".git").write_text("not a gitfile\n")
+    (tmp_path / ".git").write_text("not a gitfile\n", encoding="utf-8")
     assert is_git_busy(tmp_path) is False

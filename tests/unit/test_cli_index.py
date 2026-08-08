@@ -20,7 +20,8 @@ def _setup_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # string is parsed as a Unicode escape and fails the test fixture.
     (home / "config.toml").write_text(
         f'[storage]\nbackend = "neo4j"\n\n[storage.neo4j]\n'
-        f'docker_compose_file = "{home.as_posix()}/docker-compose.yml"\n'
+        f'docker_compose_file = "{home.as_posix()}/docker-compose.yml"\n',
+        encoding="utf-8",
     )
     (home / "corpora").mkdir()
     (home / "state").mkdir()
@@ -46,8 +47,8 @@ def test_index_estimates_token_count(tmp_path: Path, monkeypatch: pytest.MonkeyP
     home = _setup_home(tmp_path, monkeypatch)
     corpus_root = tmp_path / "docs"
     corpus_root.mkdir()
-    (corpus_root / "a.md").write_text("hello world " * 100)
-    (corpus_root / "b.md").write_text("foo bar " * 50)
+    (corpus_root / "a.md").write_text("hello world " * 100, encoding="utf-8")
+    (corpus_root / "b.md").write_text("foo bar " * 50, encoding="utf-8")
     _register_corpus(home, "docs", corpus_root)
     result = CliRunner().invoke(contextd.cli.cli, ["index", "docs", "--estimate-only"])
     assert result.exit_code == 0, result.output
@@ -68,7 +69,7 @@ def test_index_errors_when_no_mode_flag(tmp_path: Path, monkeypatch: pytest.Monk
     home = _setup_home(tmp_path, monkeypatch)
     corpus_root = tmp_path / "docs"
     corpus_root.mkdir()
-    (corpus_root / "a.md").write_text("hi")
+    (corpus_root / "a.md").write_text("hi", encoding="utf-8")
     _register_corpus(home, "docs", corpus_root)
     result = CliRunner().invoke(contextd.cli.cli, ["index", "docs"])
     assert result.exit_code == 1
@@ -93,8 +94,8 @@ def test_index_incremental_runs_changed_files(
     home = _setup_home(tmp_path, monkeypatch)
     corpus_root = tmp_path / "docs"
     corpus_root.mkdir()
-    (corpus_root / "a.md").write_text("hi")
-    (corpus_root / "b.md").write_text("there")
+    (corpus_root / "a.md").write_text("hi", encoding="utf-8")
+    (corpus_root / "b.md").write_text("there", encoding="utf-8")
     _register_corpus(home, "docs", corpus_root)
 
     with (
@@ -145,7 +146,7 @@ def test_index_bootstrap_prints_per_phase_results(
     home = _setup_home(tmp_path, monkeypatch)
     corpus_root = tmp_path / "docs"
     corpus_root.mkdir()
-    (corpus_root / "a.md").write_text("hello")
+    (corpus_root / "a.md").write_text("hello", encoding="utf-8")
     _register_corpus(home, "docs", corpus_root)
 
     # Canned BootstrapResult — 5 phases matching the file-mode pipeline.
@@ -216,7 +217,7 @@ def test_build_pipeline_deps_no_overrides_is_noop(
     home = _setup_home(tmp_path, monkeypatch)
     corpus_root = tmp_path / "docs"
     corpus_root.mkdir()
-    (corpus_root / "a.md").write_text("hi")
+    (corpus_root / "a.md").write_text("hi", encoding="utf-8")
     _register_corpus(home, "docs", corpus_root)
 
     from contextd.cli.corpora import _build_pipeline_deps
@@ -252,7 +253,7 @@ def test_build_pipeline_deps_resolves_relative_overrides_path(
     home = _setup_home(tmp_path, monkeypatch)
     corpus_root = tmp_path / "docs"
     corpus_root.mkdir()
-    (corpus_root / "a.md").write_text("hi")
+    (corpus_root / "a.md").write_text("hi", encoding="utf-8")
 
     # Write the overrides JSON next to the TOML (inside corpora/).
     overrides_file = home / "corpora" / "edge_aliases.json"
@@ -293,7 +294,7 @@ def test_build_pipeline_deps_absolute_overrides_path_respected(
     home = _setup_home(tmp_path, monkeypatch)
     corpus_root = tmp_path / "docs"
     corpus_root.mkdir()
-    (corpus_root / "a.md").write_text("hi")
+    (corpus_root / "a.md").write_text("hi", encoding="utf-8")
 
     # Place the overrides JSON somewhere else entirely (not next to the TOML).
     overrides_dir = tmp_path / "shared"
@@ -338,7 +339,7 @@ def test_build_pipeline_deps_stacks_node_and_edge_aliases(
     home = _setup_home(tmp_path, monkeypatch)
     corpus_root = tmp_path / "docs"
     corpus_root.mkdir()
-    (corpus_root / "a.md").write_text("hi")
+    (corpus_root / "a.md").write_text("hi", encoding="utf-8")
 
     # Write an overrides JSON with an edge alias.
     overrides_file = home / "corpora" / "edge_aliases.json"
@@ -391,7 +392,7 @@ def test_index_surfaces_overrides_error_as_click_exception(
     home = _setup_home(tmp_path, monkeypatch)
     corpus_root = tmp_path / "docs"
     corpus_root.mkdir()
-    (corpus_root / "a.md").write_text("hi")
+    (corpus_root / "a.md").write_text("hi", encoding="utf-8")
     # Register with an overrides path pointing at a non-existent file.
     _register_corpus_with_overrides(home, "docs", corpus_root, "does_not_exist.json")
 
@@ -416,7 +417,7 @@ def test_index_surfaces_bad_edge_target_as_click_exception(
     home = _setup_home(tmp_path, monkeypatch)
     corpus_root = tmp_path / "docs"
     corpus_root.mkdir()
-    (corpus_root / "a.md").write_text("hi")
+    (corpus_root / "a.md").write_text("hi", encoding="utf-8")
 
     # Create an overrides file referencing a nonexistent edge type.
     overrides_file = home / "corpora" / "bad_aliases.json"
@@ -475,7 +476,7 @@ def test_build_pipeline_deps_no_prompt_override_is_noop(
     home = _setup_home(tmp_path, monkeypatch)
     corpus_root = tmp_path / "docs"
     corpus_root.mkdir()
-    (corpus_root / "a.md").write_text("hi")
+    (corpus_root / "a.md").write_text("hi", encoding="utf-8")
     _register_corpus(home, "docs", corpus_root)
 
     from contextd.cli.corpora import _build_pipeline_deps
@@ -506,7 +507,7 @@ def test_build_pipeline_deps_resolves_relative_prompt_override_path(
     home = _setup_home(tmp_path, monkeypatch)
     corpus_root = tmp_path / "docs"
     corpus_root.mkdir()
-    (corpus_root / "a.md").write_text("hi")
+    (corpus_root / "a.md").write_text("hi", encoding="utf-8")
 
     # Place the override template next to the TOML (inside corpora/).
     override_file = home / "corpora" / "summary.md"
@@ -545,7 +546,7 @@ def test_build_pipeline_deps_absolute_prompt_override_path_respected(
     home = _setup_home(tmp_path, monkeypatch)
     corpus_root = tmp_path / "docs"
     corpus_root.mkdir()
-    (corpus_root / "a.md").write_text("hi")
+    (corpus_root / "a.md").write_text("hi", encoding="utf-8")
 
     # Place the override template somewhere else entirely.
     override_dir = tmp_path / "shared"
@@ -586,7 +587,7 @@ def test_build_pipeline_deps_missing_prompt_override_raises_clickexception(
     home = _setup_home(tmp_path, monkeypatch)
     corpus_root = tmp_path / "docs"
     corpus_root.mkdir()
-    (corpus_root / "a.md").write_text("hi")
+    (corpus_root / "a.md").write_text("hi", encoding="utf-8")
     _register_corpus_with_prompt_override(home, "docs", corpus_root, "no_such_template.md")
 
     with (

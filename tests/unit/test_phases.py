@@ -67,7 +67,7 @@ def testgc_sections_for_file_preserves_current_sections(
 
 def testgc_sections_for_file_noop_on_non_md(tmp_path: Path) -> None:
     lua_file = tmp_path / "mod.lua"
-    lua_file.write_text("-- code\n")
+    lua_file.write_text("-- code\n", encoding="utf-8")
     store = MagicMock()
     corpus_cfg = CorpusConfig.model_validate({"corpus": {"name": "test", "root": str(tmp_path)}})
     count = gc_sections_for_file(lua_file, corpus_cfg, store)
@@ -167,7 +167,7 @@ def test_phase_enumerate_sections_stores_section_hash(tmp_path: Path) -> None:
     from contextd.indexer.heading_parser import HeadingParser
 
     parser = HeadingParser(min_level=2, max_level=4)
-    sections = parser.parse(md_file.read_text())
+    sections = parser.parse(md_file.read_text(encoding="utf-8"))
     for sec, upsert in zip(sections, section_upserts, strict=True):
         expected = hashlib.md5((sec.title + "\n\n" + sec.body).encode()).hexdigest()
         assert upsert["hash"] == expected
