@@ -15,7 +15,7 @@ import pytest
 
 from contextd.config import OpenAICompatConfig
 from contextd.providers.base import PromptRequest
-from contextd.providers.openai_compat import OpenAICompatProvider
+from contextd.providers.openai_compat import EmptyResponseError, OpenAICompatProvider
 
 
 @pytest.fixture
@@ -186,3 +186,120 @@ def test_generate_strips_trailing_slash_from_base_url(cfg: OpenAICompatConfig) -
     provider = OpenAICompatProvider(cfg, client=client)
     provider.generate(PromptRequest(system="s", prompt="p", call_site="summary"))
     assert client.post.call_args.args[0] == "http://localhost:11434/v1/chat/completions"
+
+
+# ---------------------------------------------------------------------------
+# Empty-completion retry
+# ---------------------------------------------------------------------------
+
+
+def _body(
+    content: str | None, prompt_tokens: int = 10, completion_tokens: int = 2
+) -> dict[str, Any]:
+    return {
+        "choices": [{"message": {"content": content}}],
+        "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens},
+    }
+
+
+def test_empty_completion_is_retried_then_succeeds(cfg: OpenAICompatConfig) -> None:
+    # Observed against deepseek-v4-flash: a 200 with content "". Returning it
+    # costs a section its summary, so it must be retried like a 503.
+    client = _mock_client(
+        side_effect=[
+            _http_response(200, _body("")),
+            _http_response(200, _body("real answer")),
+        ]
+    )
+    provider = OpenAICompatProvider(cfg, client=client, backoff_initial=0.01)
+    result = provider.generate(PromptRequest(system="s", prompt="p", call_site="summary"))
+    assert result == "real answer"
+    assert client.post.call_count == 2
+
+
+def test_whitespace_only_completion_is_treated_as_empty(cfg: OpenAICompatConfig) -> None:
+    client = _mock_client(
+        side_effect=[
+            _http_response(200, _body("   \n\t ")),
+            _http_response(200, _body("real answer")),
+        ]
+    )
+    provider = OpenAICompatProvider(cfg, client=client, backoff_initial=0.01)
+    assert provider.generate(PromptRequest(system="s", prompt="p", call_site="summary")) == (
+        "real answer"
+    )
+    assert client.post.call_count == 2
+
+
+def test_null_content_is_treated_as_empty(cfg: OpenAICompatConfig) -> None:
+    # Some servers send `"content": null` rather than an empty string.
+    client = _mock_client(
+        side_effect=[
+            _http_response(200, _body(None)),
+            _http_response(200, _body("real answer")),
+        ]
+    )
+    provider = OpenAICompatProvider(cfg, client=client, backoff_initial=0.01)
+    assert provider.generate(PromptRequest(system="s", prompt="p", call_site="summary")) == (
+        "real answer"
+    )
+
+
+def test_persistently_empty_completion_raises(cfg: OpenAICompatConfig) -> None:
+    # Must fail loudly rather than return "" — the caller would otherwise
+    # report a JSON parse error and hide the real cause.
+    client = _mock_client(side_effect=[_http_response(200, _body("")) for _ in range(3)])
+    provider = OpenAICompatProvider(cfg, client=client, backoff_initial=0.01)
+    with pytest.raises(EmptyResponseError, match="empty completion"):
+        provider.generate(PromptRequest(system="s", prompt="p", call_site="summary"))
+    assert client.post.call_count == cfg.max_retries
+
+
+def test_empty_retry_accumulates_usage_across_attempts(cfg: OpenAICompatConfig) -> None:
+    # A discarded attempt still burned prompt tokens; `contextd costs` must see
+    # the real spend, not just the successful call's share.
+    client = _mock_client(
+        side_effect=[
+            _http_response(200, _body("", prompt_tokens=10, completion_tokens=0)),
+            _http_response(200, _body("answer", prompt_tokens=10, completion_tokens=5)),
+        ]
+    )
+    provider = OpenAICompatProvider(cfg, client=client, backoff_initial=0.01)
+    provider.generate(PromptRequest(system="s", prompt="p", call_site="summary"))
+    usage = provider.last_usage()
+    assert usage is not None
+    assert usage.input_tokens == 20
+    assert usage.output_tokens == 5
+
+
+def test_usage_recorded_even_when_empty_retries_exhaust(cfg: OpenAICompatConfig) -> None:
+    client = _mock_client(
+        side_effect=[_http_response(200, _body("", prompt_tokens=10)) for _ in range(3)]
+    )
+    provider = OpenAICompatProvider(cfg, client=client, backoff_initial=0.01)
+    with pytest.raises(EmptyResponseError):
+        provider.generate(PromptRequest(system="s", prompt="p", call_site="summary"))
+    usage = provider.last_usage()
+    assert usage is not None
+    assert usage.input_tokens == 30
+
+
+def test_non_empty_completion_is_not_retried(cfg: OpenAICompatConfig) -> None:
+    client = _mock_client()
+    provider = OpenAICompatProvider(cfg, client=client)
+    provider.generate(PromptRequest(system="s", prompt="p", call_site="summary"))
+    assert client.post.call_count == 1
+
+
+def test_empty_retry_applies_to_translation_call_site(cfg: OpenAICompatConfig) -> None:
+    # Translation has JSON mode suppressed, but an empty Cypher string is just
+    # as useless as an empty JSON body.
+    client = _mock_client(
+        side_effect=[
+            _http_response(200, _body("")),
+            _http_response(200, _body("MATCH (n) RETURN n")),
+        ]
+    )
+    provider = OpenAICompatProvider(cfg, client=client, backoff_initial=0.01)
+    result = provider.generate(PromptRequest(system="s", prompt="p", call_site="translation"))
+    assert result == "MATCH (n) RETURN n"

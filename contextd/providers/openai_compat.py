@@ -10,6 +10,9 @@ Model selection per call-site is driven by config (mirrors GeminiProvider).
 ``response_format={"type": "json_object"}`` is sent for the ``summary``
 and ``inference`` call-sites (their prompts emit JSON); translation
 prompts emit Cypher prose so JSON mode is suppressed there.
+
+A 200 response carrying an empty completion is treated as a retryable
+provider-side miss rather than a valid answer — see ``generate``.
 """
 
 from __future__ import annotations
@@ -24,6 +27,14 @@ from contextd.config import OpenAICompatConfig
 from contextd.providers.base import CallSite, InferenceProvider, PromptRequest, UsageRecord
 
 _RETRYABLE_CODES = {408, 429, 500, 502, 503, 504}
+
+
+class EmptyResponseError(RuntimeError):
+    """Raised when a provider returns 200 with no completion text.
+
+    Distinguished from a parse failure so the cause is legible in the indexer
+    log: the model produced nothing, rather than producing something malformed.
+    """
 
 
 class OpenAICompatProvider(InferenceProvider):
@@ -68,6 +79,12 @@ class OpenAICompatProvider(InferenceProvider):
             headers["Authorization"] = f"Bearer {self._api_key}"
 
         attempt = 0
+        # Accumulated across attempts, not overwritten: a discarded empty
+        # completion still burned prompt tokens, and `contextd costs` must not
+        # under-report spend just because the answer was unusable.
+        input_tokens = 0
+        output_tokens = 0
+
         while True:
             try:
                 response = self._client.post(url, json=body, headers=headers)
@@ -78,25 +95,56 @@ class OpenAICompatProvider(InferenceProvider):
                     self._sleep_backoff(attempt)
                     continue
                 response.raise_for_status()
-                break
             except (httpx.TransportError, httpx.TimeoutException):
                 attempt += 1
                 if attempt >= self._cfg.max_retries:
                     raise
                 self._sleep_backoff(attempt)
+                continue
 
-        payload = response.json()
-        text = payload["choices"][0]["message"]["content"] or ""
-        usage = payload.get("usage") or {}
+            payload = response.json()
+            text = str(payload["choices"][0]["message"]["content"] or "")
+            usage = payload.get("usage") or {}
+            input_tokens += int(usage.get("prompt_tokens", 0) or 0)
+            output_tokens += int(usage.get("completion_tokens", 0) or 0)
+
+            if text.strip():
+                break
+
+            # An empty completion under a 200 is a provider-side miss, not an
+            # answer: every call-site prompt requires content, so an empty
+            # string can only fail downstream (JSON parse for summary and
+            # inference, Cypher execution for translation). Retrying on the
+            # same bounded backoff as a 503 costs one more call and usually
+            # succeeds; returning "" costs a whole section its summary.
+            attempt += 1
+            if attempt >= self._cfg.max_retries:
+                self._record_usage(model, request, input_tokens, output_tokens)
+                raise EmptyResponseError(
+                    f"{model} returned an empty completion for call-site "
+                    f"{request.call_site!r} after {attempt} attempts"
+                )
+            self._sleep_backoff(attempt)
+
+        self._record_usage(model, request, input_tokens, output_tokens)
+        return text
+
+    def _record_usage(
+        self, model: str, request: PromptRequest, input_tokens: int, output_tokens: int
+    ) -> None:
+        """Store usage for the completed call.
+
+        Called before raising on exhaustion too, so spend on discarded attempts
+        is still visible to whatever reads ``last_usage``.
+        """
         self._last_usage = UsageRecord(
             provider="openai_compat",
             model=model,
             call_site=request.call_site,
-            input_tokens=int(usage.get("prompt_tokens", 0) or 0),
-            output_tokens=int(usage.get("completion_tokens", 0) or 0),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
             timestamp=dt.datetime.now(dt.UTC).isoformat(),
         )
-        return str(text)
 
     def last_usage(self) -> UsageRecord | None:
         return self._last_usage
