@@ -18,8 +18,8 @@ def test_bootstrap_creates_inferred_edges(backend, tmp_path: Path) -> None:
 
     corpus_root = tmp_path / "corpus"
     corpus_root.mkdir()
-    (corpus_root / "a.md").write_text("alpha references beta")
-    (corpus_root / "b.md").write_text("beta references alpha")
+    (corpus_root / "a.md").write_text("alpha references beta", encoding="utf-8")
+    (corpus_root / "b.md").write_text("beta references alpha", encoding="utf-8")
 
     corpus_cfg = CorpusConfig.model_validate(
         {
@@ -87,8 +87,8 @@ def test_bootstrap_on_sample_corpus(backend, tmp_path: Path) -> None:
 
     corpus_root = tmp_path / "corpus"
     corpus_root.mkdir()
-    (corpus_root / "a.md").write_text("alpha content mentioning beta")
-    (corpus_root / "b.md").write_text("beta content mentioning alpha")
+    (corpus_root / "a.md").write_text("alpha content mentioning beta", encoding="utf-8")
+    (corpus_root / "b.md").write_text("beta content mentioning alpha", encoding="utf-8")
 
     corpus_cfg = CorpusConfig.model_validate(
         {
@@ -148,7 +148,8 @@ def test_section_granular_bootstrap(backend, tmp_path: Path) -> None:
     corpus_root = tmp_path / "corpus"
     corpus_root.mkdir()
     (corpus_root / "doc.md").write_text(
-        "# Title\n\n## §1 First\n\nbody 1\n\n### §1.1 Sub\n\nbody 1.1\n\n## §2 Second\n\nbody 2\n"
+        "# Title\n\n## §1 First\n\nbody 1\n\n### §1.1 Sub\n\nbody 1.1\n\n## §2 Second\n\nbody 2\n",
+        encoding="utf-8",
     )
 
     cfg = CorpusConfig.model_validate(
@@ -164,8 +165,11 @@ def test_section_granular_bootstrap(backend, tmp_path: Path) -> None:
         }
     )
 
+    # One vector per input rather than a fixed-length list, so the stub cannot
+    # go out of sync with the section count (the strict zip in
+    # phase_enumerate_sections raises when it does).
     fake_embedder = MagicMock()
-    fake_embedder.embed.return_value = [[0.1] * 1024] * 3
+    fake_embedder.embed.side_effect = lambda texts: [[0.1] * 1024 for _ in texts]
     fake_summariser = MagicMock()
     fake_summariser.summarise.return_value = FileSummary(
         summary="s", key_points=[], entities_mentioned=[]
@@ -187,16 +191,19 @@ def test_section_granular_bootstrap(backend, tmp_path: Path) -> None:
     assert phase_names[0] == "enumerate_sections"
     assert "derive_file_level" in phase_names
 
-    # Three sections emitted (§1 First, §1.1 Sub, §2 Second).
+    # Four sections emitted: the "Title" preamble (the H1 is below min_level,
+    # so it heads the text above the first qualifying heading) plus §1 First,
+    # §1.1 Sub and §2 Second.
     sections = backend.exec_read("MATCH (s:Section) RETURN s.title AS title ORDER BY s.ordinal")
     titles = [r["title"] for r in sections]
+    assert "Title" in titles
     assert "§1 First" in titles
     assert "§1.1 Sub" in titles
     assert "§2 Second" in titles
 
     # Section summaries populated by phase_summarise_sections.
     summaries = backend.exec_read("MATCH (s:Section {corpus: 'sec'}) RETURN s.summary AS summary")
-    assert len(summaries) == 3
+    assert len(summaries) == 4
     assert all(row["summary"] == "s" for row in summaries)
 
     # File summary populated by phase_derive_file_level (concatenated first
@@ -227,7 +234,9 @@ def test_section_granular_inferred_edges(backend, tmp_path: Path) -> None:
 
     corpus_root = tmp_path / "corpus"
     corpus_root.mkdir()
-    (corpus_root / "doc.md").write_text("# Title\n\n## §A\n\nbody a\n\n## §B\n\nbody b\n")
+    (corpus_root / "doc.md").write_text(
+        "# Title\n\n## §A\n\nbody a\n\n## §B\n\nbody b\n", encoding="utf-8"
+    )
 
     cfg = CorpusConfig.model_validate(
         {
@@ -243,18 +252,24 @@ def test_section_granular_inferred_edges(backend, tmp_path: Path) -> None:
     )
 
     fake_embedder = MagicMock()
-    fake_embedder.embed.return_value = [[0.1] * 1024] * 2
+    fake_embedder.embed.side_effect = lambda texts: [[0.1] * 1024 for _ in texts]
     fake_summariser = MagicMock()
     fake_summariser.summarise.return_value = FileSummary(
         summary="s", key_points=[], entities_mentioned=[]
     )
 
-    # Each section emits one Section→Section REFERENCES edge to the other section.
+    # §A references §B and §B references §A; the preamble references nothing.
+    #
+    # Dispatch is on the heading line, not the body text: a Section's body
+    # starts with its own heading ("## §A\n\nbody a"), never with "body a", so
+    # matching on the body text sent every section down the same branch and the
+    # expected count of 2 was only met because one of the two edges was a
+    # self-edge.
     a_id = f"{corpus_root / 'doc.md'}#a"
     b_id = f"{corpus_root / 'doc.md'}#b"
 
     def infer(content: str, known_entities: list[str]) -> list[InferredRelationship]:
-        if content.startswith("body a"):
+        if content.startswith("## §A"):
             return [
                 InferredRelationship(
                     edge_type="REFERENCES",
@@ -264,15 +279,17 @@ def test_section_granular_inferred_edges(backend, tmp_path: Path) -> None:
                     reason="test",
                 )
             ]
-        return [
-            InferredRelationship(
-                edge_type="REFERENCES",
-                target_type="Section",
-                target_name=a_id,
-                confidence=0.9,
-                reason="test",
-            )
-        ]
+        if content.startswith("## §B"):
+            return [
+                InferredRelationship(
+                    edge_type="REFERENCES",
+                    target_type="Section",
+                    target_name=a_id,
+                    confidence=0.9,
+                    reason="test",
+                )
+            ]
+        return []
 
     fake_inferrer = MagicMock()
     fake_inferrer.infer.side_effect = infer
@@ -287,9 +304,13 @@ def test_section_granular_inferred_edges(backend, tmp_path: Path) -> None:
         entity_sampler=lambda _s: [],
     )
 
-    # Two Section→Section REFERENCES edges must exist.
+    # Two Section→Section REFERENCES edges must exist, in opposite directions.
     rows = backend.exec_read("MATCH (:Section)-[r:REFERENCES]->(:Section) RETURN count(r) AS c")
     assert rows[0]["c"] == 2
+    pairs = backend.exec_read(
+        "MATCH (s:Section)-[:REFERENCES]->(t:Section) RETURN s.anchor AS src, t.anchor AS dst"
+    )
+    assert sorted((r["src"], r["dst"]) for r in pairs) == [("a", "b"), ("b", "a")]
 
 
 def test_section_gc_removes_renamed_section(backend, tmp_path: Path) -> None:
@@ -310,7 +331,7 @@ def test_section_gc_removes_renamed_section(backend, tmp_path: Path) -> None:
     corpus_root = tmp_path / "corpus"
     corpus_root.mkdir()
     doc = corpus_root / "doc.md"
-    doc.write_text("# Title\n\n## §A\n\nbody a\n\n## §B\n\nbody b\n")
+    doc.write_text("# Title\n\n## §A\n\nbody a\n\n## §B\n\nbody b\n", encoding="utf-8")
 
     cfg = CorpusConfig.model_validate(
         {
@@ -354,10 +375,12 @@ def test_section_gc_removes_renamed_section(backend, tmp_path: Path) -> None:
         r["anchor"]
         for r in backend.exec_read("MATCH (s:Section {corpus: 'gc_sec'}) RETURN s.anchor AS anchor")
     )
-    assert anchors_after_first == ["a", "b"]
+    # "title" is the preamble section carrying the H1 and any text above the
+    # first qualifying heading.
+    assert anchors_after_first == ["a", "b", "title"]
 
     # Rename §B → §C and re-index.
-    doc.write_text("# Title\n\n## §A\n\nbody a\n\n## §C\n\nbody c\n")
+    doc.write_text("# Title\n\n## §A\n\nbody a\n\n## §C\n\nbody c\n", encoding="utf-8")
 
     run_bootstrap(
         corpus=cfg,
@@ -373,7 +396,7 @@ def test_section_gc_removes_renamed_section(backend, tmp_path: Path) -> None:
         r["anchor"]
         for r in backend.exec_read("MATCH (s:Section {corpus: 'gc_sec'}) RETURN s.anchor AS anchor")
     )
-    assert anchors_after_second == ["a", "c"]  # §B is gone, §C is new
+    assert anchors_after_second == ["a", "c", "title"]  # §B is gone, §C is new
     assert "b" not in anchors_after_second
 
 
@@ -407,8 +430,8 @@ def test_index_with_ontology_overrides_uses_canonical_edge_names(
     corpus_root.mkdir()
     a_path = corpus_root / "a.md"
     b_path = corpus_root / "b.md"
-    a_path.write_text("alpha cites beta")
-    b_path.write_text("beta cites alpha")
+    a_path.write_text("alpha cites beta", encoding="utf-8")
+    b_path.write_text("beta cites alpha", encoding="utf-8")
 
     # Build the ontology with the CITES→REFERENCES alias applied.
     overrides_file = tmp_path / "overrides.json"
@@ -511,15 +534,15 @@ def test_section_granular_mixed_extensions_routes_correctly(backend, tmp_path: P
 
     # Two .md files — each with 2 sections.
     (corpus_root / "doc1.md").write_text(
-        "# Doc1\n\n## §A First\n\nbody a\n\n## §B Second\n\nbody b\n"
+        "# Doc1\n\n## §A First\n\nbody a\n\n## §B Second\n\nbody b\n", encoding="utf-8"
     )
     (corpus_root / "doc2.md").write_text(
-        "# Doc2\n\n## §C Third\n\nbody c\n\n## §D Fourth\n\nbody d\n"
+        "# Doc2\n\n## §C Third\n\nbody c\n\n## §D Fourth\n\nbody d\n", encoding="utf-8"
     )
 
     # Two .lua files — no headings; heading parser yields zero sections.
-    (corpus_root / "mod1.lua").write_text("-- mod1\nregister_pattern('foo')\n")
-    (corpus_root / "mod2.lua").write_text("-- mod2\nregister_pattern('bar')\n")
+    (corpus_root / "mod1.lua").write_text("-- mod1\nregister_pattern('foo')\n", encoding="utf-8")
+    (corpus_root / "mod2.lua").write_text("-- mod2\nregister_pattern('bar')\n", encoding="utf-8")
 
     cfg = CorpusConfig.model_validate(
         {
@@ -585,8 +608,13 @@ def test_section_granular_mixed_extensions_routes_correctly(backend, tmp_path: P
     )
     section_parent_paths = {row["fp"] for row in section_rows}
 
-    md_paths = {str(corpus_root / n) for n in ("doc1.md", "doc2.md")}
-    lua_paths = {str(corpus_root / n) for n in ("mod1.lua", "mod2.lua")}
+    # Node identity is a canonical forward-slash path, so build the expected
+    # set the same way rather than with os.sep — otherwise this comparison
+    # passes on Linux CI and fails on Windows.
+    from contextd._paths import canonical_path
+
+    md_paths = {canonical_path(corpus_root / n) for n in ("doc1.md", "doc2.md")}
+    lua_paths = {canonical_path(corpus_root / n) for n in ("mod1.lua", "mod2.lua")}
 
     # Both .md files must have Section children.
     assert md_paths <= section_parent_paths, (
@@ -597,8 +625,11 @@ def test_section_granular_mixed_extensions_routes_correctly(backend, tmp_path: P
         f".lua files unexpectedly have Section children: {lua_paths & section_parent_paths}"
     )
 
-    # Exactly 4 Sections total (2 per .md file).
+    # Exactly 6 Sections total: 2 headings per .md file plus each file's
+    # preamble section ("Doc1" / "Doc2"). The .lua files contribute none.
     total_sections = backend.exec_read(
         "MATCH (s:Section {corpus: $c}) RETURN count(s) AS c", {"c": "mixed"}
     )
-    assert total_sections[0]["c"] == 4, f"expected 4 sections, got {total_sections[0]['c']}"
+    assert total_sections[0]["c"] == 6, f"expected 6 sections, got {total_sections[0]['c']}"
+    titles = sorted(row["title"] for row in section_rows)
+    assert titles == ["Doc1", "Doc2", "§A First", "§B Second", "§C Third", "§D Fourth"]
