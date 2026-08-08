@@ -37,6 +37,12 @@ dependencies = [
     "neo4j>=5.15",
     "google-genai>=0.3",
     "voyageai>=0.2",
+    # Direct dependency, not transitive: `voyageai` treats `tokenizers` as an
+    # optional extra and raises ImportError from count_tokens() without it.
+    # `VoyageEmbedder._count_batch_tokens` calls count_tokens() on every embed
+    # batch, so a resolve that omits it fails at the first embedding call
+    # rather than at import time.
+    "tokenizers>=0.15",
     "psutil>=5.9",
 ]
 
