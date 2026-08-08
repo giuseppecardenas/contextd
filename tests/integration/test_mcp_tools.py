@@ -33,16 +33,19 @@ def test_per_corpus_cypher_tool_appears_in_list_tools_and_is_callable(
     corpora_dir = tmp_path / "corpora"
     corpora_dir.mkdir()
     cypher_file = tmp_path / "find_file.cypher"
-    cypher_file.write_text(cypher)
+    cypher_file.write_text(cypher, encoding="utf-8")
 
+    # as_posix(): a Windows path interpolated into a TOML *basic* string turns
+    # its backslashes into escape sequences (\\U, \\t, ...), so the file fails
+    # to parse and the loader silently yields zero descriptors.
     toml_content = f"""
 [corpus]
 name = "test-corpus"
 root = "/tmp"
 [mcp.tools]
-find_file = "{cypher_file}"
+find_file = "{cypher_file.as_posix()}"
 """
-    (corpora_dir / "test-corpus.toml").write_text(toml_content)
+    (corpora_dir / "test-corpus.toml").write_text(toml_content, encoding="utf-8")
 
     # Load the per-corpus tool descriptors.
     corpus_descriptors, corpus_registry = build_tool_descriptors(tmp_path)

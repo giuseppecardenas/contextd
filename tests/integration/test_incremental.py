@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from contextd._paths import canonical_path
 from contextd.corpus_config import CorpusConfig
 from contextd.indexer.hasher import FileHasher
 from contextd.indexer.pipeline import run_bootstrap, run_incremental_file
@@ -34,7 +35,7 @@ def _fake_embedder() -> MagicMock:
 
 def test_incremental_updates_summary_after_file_change(backend: GraphStore, tmp_path: Path) -> None:
     md = tmp_path / "a.md"
-    md.write_text("original content")
+    md.write_text("original content", encoding="utf-8")
     corpus = _corpus(tmp_path)
     hasher = FileHasher()
 
@@ -48,10 +49,14 @@ def test_incremental_updates_summary_after_file_change(backend: GraphStore, tmp_
         lambda _s: [],
     )
 
-    rows = backend.exec_read("MATCH (f:File {path: $p}) RETURN f.summary AS s", {"p": str(md)})
+    # Node identity is a canonical forward-slash path; str(Path) is os.sep, so
+    # matching on it silently finds nothing on Windows.
+    rows = backend.exec_read(
+        "MATCH (f:File {path: $p}) RETURN f.summary AS s", {"p": canonical_path(md)}
+    )
     assert rows[0]["s"] == "original summary"
 
-    md.write_text("updated content")
+    md.write_text("updated content", encoding="utf-8")
     run_incremental_file(
         md,
         corpus,
@@ -63,13 +68,15 @@ def test_incremental_updates_summary_after_file_change(backend: GraphStore, tmp_
         lambda _s: [],
     )
 
-    rows = backend.exec_read("MATCH (f:File {path: $p}) RETURN f.summary AS s", {"p": str(md)})
+    rows = backend.exec_read(
+        "MATCH (f:File {path: $p}) RETURN f.summary AS s", {"p": canonical_path(md)}
+    )
     assert rows[0]["s"] == "updated summary"
 
 
 def test_incremental_deletion_removes_file_node(backend: GraphStore, tmp_path: Path) -> None:
     md = tmp_path / "b.md"
-    md.write_text("content")
+    md.write_text("content", encoding="utf-8")
     corpus = _corpus(tmp_path)
     hasher = FileHasher()
 
@@ -83,6 +90,9 @@ def test_incremental_deletion_removes_file_node(backend: GraphStore, tmp_path: P
         lambda _s: [],
     )
 
+    before = backend.exec_read("MATCH (f:File {path: $p}) RETURN f", {"p": canonical_path(md)})
+    assert len(before) == 1, "File node must exist before deletion for this test to mean anything"
+
     md.unlink()
     run_incremental_file(
         md,
@@ -95,13 +105,13 @@ def test_incremental_deletion_removes_file_node(backend: GraphStore, tmp_path: P
         lambda _s: [],
     )
 
-    rows = backend.exec_read("MATCH (f:File {path: $p}) RETURN f", {"p": str(md)})
+    rows = backend.exec_read("MATCH (f:File {path: $p}) RETURN f", {"p": canonical_path(md)})
     assert rows == []
 
 
 def test_incremental_clears_inferred_at_before_reindex(backend: GraphStore, tmp_path: Path) -> None:
     md = tmp_path / "c.md"
-    md.write_text("content")
+    md.write_text("content", encoding="utf-8")
     corpus = _corpus(tmp_path)
     hasher = FileHasher()
     inferrer = MagicMock()
@@ -117,7 +127,7 @@ def test_incremental_clears_inferred_at_before_reindex(backend: GraphStore, tmp_
         lambda _s: [],
     )
 
-    md.write_text("updated content")
+    md.write_text("updated content", encoding="utf-8")
     inferrer.infer.reset_mock()
     run_incremental_file(
         md,
