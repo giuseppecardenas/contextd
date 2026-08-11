@@ -70,6 +70,44 @@ def test_inference_target_labels_adds_file_and_section_only() -> None:
     assert "Meta" not in targets
 
 
+def test_load_base_parses_edge_constraints() -> None:
+    onto = Ontology.load_base()
+    assert "REFERENCES" in onto.edge_types
+    c = onto.edge_constraints["IDENTIFIES_RISK"]
+    assert c.dst == frozenset({"Risk"})
+
+
+def test_validate_triple_enforces_constrained_endpoints() -> None:
+    onto = Ontology.load_base()
+    assert onto.validate_triple("Section", "IDENTIFIES_RISK", "Risk")
+    assert not onto.validate_triple("Section", "IDENTIFIES_RISK", "Technology")
+    # CREATED_BY dst is Client/WorkSession only — the measured junk class.
+    assert not onto.validate_triple("File", "CREATED_BY", "Technology")
+    assert onto.validate_triple("File", "CREATED_BY", "WorkSession")
+
+
+def test_validate_triple_wildcards_and_aliases() -> None:
+    onto = Ontology.load_base().with_aliases({"GapEntry": "Risk"})
+    # SIMILAR_TO / RELATED_TO are fully wildcarded.
+    assert onto.validate_triple("Client", "SIMILAR_TO", "Technology")
+    # Node alias on an endpoint resolves before the check.
+    assert onto.validate_triple("Section", "IDENTIFIES_RISK", "GapEntry")
+    # Unknown edge type is invalid outright.
+    assert not onto.validate_triple("File", "HALLUCINATED", "Risk")
+
+
+def test_validate_triple_unconstrained_when_constraints_absent() -> None:
+    # Direct construction without edge_constraints (legacy/test shape) — every
+    # declared edge type is unconstrained.
+    onto = Ontology.load_base()
+    bare = Ontology(
+        node_types=onto.node_types,
+        edge_types=onto.edge_types,
+        edge_origin_values=onto.edge_origin_values,
+    )
+    assert bare.validate_triple("Client", "IDENTIFIES_RISK", "Technology")
+
+
 def test_with_aliases_rejects_unknown_target() -> None:
     """An alias whose target isn't a real node type must fail loudly —
     otherwise a typo in a per-corpus config would silently resolve to a

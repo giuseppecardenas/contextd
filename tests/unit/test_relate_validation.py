@@ -189,6 +189,16 @@ def test_apply_rejects_system_label_backstop(caplog: pytest.LogCaptureFixture) -
     store.upsert_node.assert_not_called()
 
 
+def test_disallowed_triple_dropped(caplog: pytest.LogCaptureFixture) -> None:
+    store = MagicMock()
+    rel = _rel(edge_type="IDENTIFIES_RISK", target_type="Technology", target_name="Lua")
+    with caplog.at_level(logging.INFO, logger="contextd.indexer.phases"):
+        written = _apply_inferred_edge(store, "src.md", "File", rel, "c")
+    assert written is False
+    assert "triple not allowed" in caplog.text
+    store.upsert_node.assert_not_called()
+
+
 def test_unknown_target_label_logged(caplog: pytest.LogCaptureFixture) -> None:
     store = MagicMock()
     with caplog.at_level(logging.INFO, logger="contextd.indexer.phases"):

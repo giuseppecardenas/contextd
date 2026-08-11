@@ -51,7 +51,7 @@ from contextd.indexer.heading_parser import (
 )
 from contextd.inference.relate import InferredRelationship, RelationshipInferrer
 from contextd.inference.summarise import Summariser
-from contextd.ontology.schema import ENUMERATION_OWNED_LABELS, NON_ENTITY_LABELS
+from contextd.ontology.schema import ENUMERATION_OWNED_LABELS, NON_ENTITY_LABELS, Ontology
 from contextd.providers.base import EmbeddingProvider
 from contextd.storage._keys import primary_key_for
 from contextd.storage.base import GraphStore
@@ -59,6 +59,12 @@ from contextd.storage.base import GraphStore
 _log = logging.getLogger(__name__)
 
 _T = TypeVar("_T")
+
+# Loaded once for the triple-constraint gate in _apply_inferred_edge. The
+# constraint table is base-ontology-level (per-corpus configs alias names but
+# never define constraints), and edge/node types arriving here are already
+# alias-resolved to canon, so the base table applies uniformly.
+_BASE_ONTOLOGY = Ontology.load_base()
 
 
 @dataclass
@@ -911,6 +917,19 @@ def _apply_inferred_edge(
             rel.target_type,
             src_id,
             rel.edge_type,
+            rel.target_name,
+        )
+        return False
+    if not _BASE_ONTOLOGY.validate_triple(src_label, rel.edge_type, rel.target_type):
+        # Combination-level gate: type-by-type checks let junk like
+        # Section -DOCUMENTS-> Client through. Edge types reach this point
+        # already alias-resolved to canon, so the base constraint table
+        # applies uniformly regardless of per-corpus aliases.
+        _log.info(
+            "relate drop: triple not allowed: %s -[%s]-> %s (%.80s)",
+            src_label,
+            rel.edge_type,
+            rel.target_type,
             rel.target_name,
         )
         return False

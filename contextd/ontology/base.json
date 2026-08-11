@@ -16,15 +16,29 @@
     "Corpus":      ["name", "root", "registered_at", "content_profile"],
     "Meta":        ["schema_version", "contextd_version", "backend_name", "initialised_at"]
   },
-  "edge_types": [
-    "CONTAINS", "PARENT_OF", "NEXT_SIBLING",
-    "BELONGS_TO", "CREATED_BY",
-    "DOCUMENTS", "DOCUMENTED_IN",
-    "APPLIES_TO", "PART_OF",
-    "SIMILAR_TO", "RELATED_TO", "REFERENCES", "SUPERSEDES", "CONTRADICTS",
-    "USES", "MODIFIES", "DEPENDS_ON",
-    "IDENTIFIES_RISK", "RECOMMENDS",
-    "EDITED_DURING", "VERIFIED_ON", "NEEDS_UPDATE"
-  ],
+  "edge_types": {
+    "CONTAINS":        {"src": ["File"],    "dst": ["Section"]},
+    "PARENT_OF":       {"src": ["Section"], "dst": ["Section"]},
+    "NEXT_SIBLING":    {"src": ["Section"], "dst": ["Section"]},
+    "BELONGS_TO":      {"src": ["File", "Section", "Artifact", "Ticket", "Pattern", "Service"], "dst": ["Client", "Service", "Repo", "Ticket"]},
+    "CREATED_BY":      {"src": ["File", "Section", "Artifact", "Ticket", "Repo"], "dst": ["Client", "WorkSession"]},
+    "DOCUMENTS":       {"src": ["File", "Section", "Artifact"], "dst": []},
+    "DOCUMENTED_IN":   {"src": [], "dst": ["File", "Section", "Artifact"]},
+    "APPLIES_TO":      {"src": ["Pattern", "Risk", "Ticket", "Artifact"], "dst": []},
+    "PART_OF":         {"src": [], "dst": ["Artifact", "Service", "Repo", "File", "Section"]},
+    "SIMILAR_TO":      {"src": [], "dst": []},
+    "RELATED_TO":      {"src": [], "dst": []},
+    "REFERENCES":      {"src": ["File", "Section", "Artifact"], "dst": []},
+    "SUPERSEDES":      {"src": ["File", "Section", "Ticket", "Artifact", "Pattern"], "dst": ["File", "Section", "Ticket", "Artifact", "Pattern"]},
+    "CONTRADICTS":     {"src": ["File", "Section", "Ticket", "Artifact", "Pattern"], "dst": ["File", "Section", "Ticket", "Artifact", "Pattern"]},
+    "USES":            {"src": ["File", "Section", "Service", "Pattern", "Artifact", "Repo"], "dst": ["Technology", "Pattern", "Service", "Integration", "Artifact"]},
+    "MODIFIES":        {"src": ["File", "Section", "Ticket", "WorkSession"], "dst": ["File", "Section", "Artifact", "Service"]},
+    "DEPENDS_ON":      {"src": ["File", "Section", "Service", "Artifact", "Ticket", "Pattern"], "dst": ["File", "Section", "Service", "Technology", "Artifact", "Pattern", "Integration"]},
+    "IDENTIFIES_RISK": {"src": ["File", "Section", "Ticket", "Pattern", "Artifact"], "dst": ["Risk"]},
+    "RECOMMENDS":      {"src": ["File", "Section", "Ticket", "Artifact"], "dst": ["Pattern", "Technology", "Artifact"]},
+    "EDITED_DURING":   {"src": ["File", "Section", "Artifact"], "dst": ["WorkSession"]},
+    "VERIFIED_ON":     {"src": [], "dst": ["WorkSession", "Technology"]},
+    "NEEDS_UPDATE":    {"src": ["File", "Section", "Artifact"], "dst": []}
+  },
   "edge_origin_values": ["inferred", "structural", "manual"]
 }

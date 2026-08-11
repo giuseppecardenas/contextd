@@ -74,6 +74,10 @@ The relate prompt advertises only the mintable + enumeration-owned labels (plus 
 
 `CONTAINS`, `PARENT_OF`, `NEXT_SIBLING`, and `EDITED_DURING` are always `structural`. `VERIFIED_ON` and `NEEDS_UPDATE` are always `manual`. All others are typically `inferred` but any origin value is technically legal.
 
+### Endpoint constraints
+
+Each edge type declares allowed `src`/`dst` label sets in `base.json` (an empty set is a wildcard). `Ontology.validate_triple(src, edge, dst)` enforces the combination at write time — independent type checks would let junk like `File -CREATED_BY-> Technology` through. The authoritative table is the `edge_types` object in `contextd/ontology/base.json`; notable tight rows: `IDENTIFIES_RISK` (dst `Risk` only), `CREATED_BY` (dst `Client`/`WorkSession`), `EDITED_DURING` (dst `WorkSession`), while `SIMILAR_TO`/`RELATED_TO` are fully wildcarded. Constraint rejections are logged at INFO (`relate drop: triple not allowed`), so an over-tight row is countable from the log and cheap to relax in the JSON.
+
 ---
 
 ## Edge origin values

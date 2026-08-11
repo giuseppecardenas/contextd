@@ -53,12 +53,24 @@ class OntologyError(ValueError):
 
 
 @dataclass(frozen=True)
+class EdgeConstraint:
+    """Allowed endpoint labels for one edge type; an empty set is a wildcard."""
+
+    src: frozenset[str]
+    dst: frozenset[str]
+
+
+@dataclass(frozen=True)
 class Ontology:
     node_types: Mapping[str, tuple[str, ...]]
     edge_types: frozenset[str]
     edge_origin_values: frozenset[str]
     aliases: Mapping[str, str] = field(default_factory=dict)
     edge_aliases: Mapping[str, str] = field(default_factory=dict)
+    # Per-edge (src, dst) label constraints. Parallel to ``edge_types`` rather
+    # than replacing it so direct constructions (tests, overrides) that omit
+    # constraints keep working — an absent entry means unconstrained.
+    edge_constraints: Mapping[str, EdgeConstraint] = field(default_factory=dict)
 
     @classmethod
     def load_base(cls) -> Ontology:
@@ -66,10 +78,25 @@ class Ontology:
             resources.files("contextd.ontology").joinpath("base.json").read_text(encoding="utf-8")
         )
         node_types: dict[str, tuple[str, ...]] = {k: tuple(v) for k, v in raw["node_types"].items()}
+        raw_edges = raw["edge_types"]
+        # Two accepted shapes: the legacy flat list (no constraints) and the
+        # object form {name: {"src": [...], "dst": [...]}} where an empty
+        # array means any inference-legal label.
+        constraints: dict[str, EdgeConstraint] = {}
+        if isinstance(raw_edges, dict):
+            edge_names = frozenset(raw_edges)
+            for name, spec in raw_edges.items():
+                constraints[name] = EdgeConstraint(
+                    src=frozenset(spec.get("src", ())),
+                    dst=frozenset(spec.get("dst", ())),
+                )
+        else:
+            edge_names = frozenset(raw_edges)
         return cls(
             node_types=MappingProxyType(node_types),
-            edge_types=frozenset(raw["edge_types"]),
+            edge_types=edge_names,
             edge_origin_values=frozenset(raw["edge_origin_values"]),
+            edge_constraints=MappingProxyType(constraints),
         )
 
     def with_aliases(self, aliases: Mapping[str, str]) -> Ontology:
@@ -127,3 +154,25 @@ class Ontology:
             raise OntologyError(f"Unknown edge type '{edge_type}'")
         if origin not in self.edge_origin_values:
             raise OntologyError(f"Unknown edge origin '{origin}'")
+
+    def validate_triple(self, src_label: str, edge_type: str, dst_label: str) -> bool:
+        """Return whether ``src -[edge]-> dst`` is a permitted combination.
+
+        Edge-type and node-label aliases are resolved first. An unknown edge
+        type is invalid; an edge type without a declared constraint (or with
+        an empty ``src``/``dst`` set — the wildcard form) permits any label on
+        that endpoint. Independent type checks let junk like
+        ``Section -DOCUMENTS-> Client`` through; this is the combination-level
+        gate.
+        """
+        resolved_edge = self.resolve_edge_alias(edge_type)
+        if resolved_edge not in self.edge_types:
+            return False
+        constraint = self.edge_constraints.get(resolved_edge)
+        if constraint is None:
+            return True
+        src = self.resolve_alias(src_label)
+        dst = self.resolve_alias(dst_label)
+        if constraint.src and src not in constraint.src:
+            return False
+        return not constraint.dst or dst in constraint.dst
