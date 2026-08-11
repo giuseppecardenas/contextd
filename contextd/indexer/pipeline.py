@@ -116,10 +116,10 @@ def _wipe_for_refresh(corpus: CorpusConfig, store: GraphStore, scope: RefreshSco
                    Cascades to all attached edges (structural, inferred, manual).
 
     REMOVE on a missing property is a no-op, so the helper is safe on corpora
-    at any state. Target-stub nodes created by relate (Pattern/Artifact/etc.
-    lacking a `corpus` property) are not touched by any scope — they may be
-    orphaned after `inferred` / `all` and will be gc'd by a future
-    --gc-orphans path, not by this helper.
+    at any state. The ``all`` scope also sweeps the corpus's entity nodes
+    (they carry ``corpus`` since mint time — see ``delete_corpus_nodes``);
+    the narrower scopes leave entities alone, and legacy pre-tagging stubs
+    are reaped by ``prune-entities``.
     """
     c = corpus.corpus.name
     if scope in ("inferred", "llm"):
@@ -151,25 +151,32 @@ def _wipe_for_refresh(corpus: CorpusConfig, store: GraphStore, scope: RefreshSco
 
 
 def delete_corpus_nodes(store: GraphStore, corpus_name: str) -> None:
-    """DETACH DELETE every ``Section`` / ``File`` / ``Corpus`` node of a corpus.
+    """DETACH DELETE every node of a corpus: Section, File, Corpus, entities.
 
     Cascades to all attached edges (structural, inferred, and manual alike).
     This is the graph-side of removing a corpus and is shared by the ``all``
     refresh scope (:func:`_wipe_for_refresh`) and the ``remove-corpus`` CLI
     command.
 
-    Inference-target stubs (``Pattern`` / ``Artifact`` / ``Ticket`` / etc.) are
-    NOT corpus-scoped and are deliberately left in place; once no file
-    references them they become orphaned and are reaped separately by
-    ``prune-entities``. Idempotent: deleting a corpus with no nodes is a no-op.
+    Entity nodes carry the ``corpus`` property since mint time, so the
+    corpus's entity population is swept here too — the wipe + re-bootstrap
+    repair path depends on it. Known limitation: entity PKs are globally
+    unique, so an entity name shared by two corpora carries only its last
+    writer's ``corpus`` and dies with that corpus; ``prune-entities`` remains
+    the cross-corpus backstop. Legacy entities minted before corpus tagging
+    (no ``corpus`` property) are untouched — reap them via ``prune-entities``.
+    Idempotent: deleting a corpus with no nodes is a no-op.
 
     :param store: The graph store to issue the deletes against.
     :param corpus_name: The corpus identifier stored as the ``corpus`` property
-        on ``File`` / ``Section`` nodes and as the ``name`` of the ``Corpus``
-        node.
+        on nodes and as the ``name`` of the ``Corpus`` node.
     """
+    from contextd.ontology.schema import Ontology
+
     store.exec_write("MATCH (n:Section {corpus: $c}) DETACH DELETE n", {"c": corpus_name})
     store.exec_write("MATCH (n:File {corpus: $c}) DETACH DELETE n", {"c": corpus_name})
+    for label in sorted(Ontology.load_base().mintable_labels()):
+        store.exec_write(f"MATCH (n:{label} {{corpus: $c}}) DETACH DELETE n", {"c": corpus_name})
     store.exec_write("MATCH (n:Corpus {name: $c}) DETACH DELETE n", {"c": corpus_name})
 
 

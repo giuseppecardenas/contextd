@@ -186,8 +186,9 @@ def remove_corpus(corpus_name: str) -> None:
     retried.
 
     Inference-target entities (``Ticket`` / ``Artifact`` / ``Pattern`` / ...)
-    that this corpus populated are not corpus-scoped and are left in place; run
-    ``contextd prune-entities`` afterwards to reap any that are now orphaned.
+    carry the ``corpus`` property since mint time and are swept with the
+    corpus; legacy entities minted before corpus tagging are left in place —
+    run ``contextd prune-entities`` afterwards to reap any now orphaned.
     """
     from contextd.indexer.pipeline import delete_corpus_nodes
     from contextd.storage.factory import build_graph_store
@@ -231,15 +232,27 @@ def remove_corpus(corpus_name: str) -> None:
 
 
 @cli.command("prune-entities")
-def prune_entities() -> None:
-    """Delete orphaned entity nodes (those with no relationships) from the graph.
+@click.option(
+    "--max-degree",
+    type=int,
+    default=0,
+    show_default=True,
+    help=(
+        "Prune entities with total degree <= N. 0 keeps the classic "
+        "orphan-only semantics; 1 sweeps single-use stubs."
+    ),
+)
+@click.option("--dry-run", is_flag=True, help="Report per-label counts without deleting.")
+def prune_entities(max_degree: int, dry_run: bool) -> None:
+    """Delete low-degree entity nodes from the graph.
 
     The relate phase creates entity nodes (``Ticket`` / ``Artifact`` /
     ``Pattern`` / ``Risk`` / ...) as targets of relationships from files. When
-    every file that referenced an entity is re-indexed away or removed (for
-    example via ``contextd remove-corpus``), the entity can be left with no
-    relationships at all. This command reaps those orphaned, zero-degree entity
-    nodes across every corpus.
+    every file that referenced an entity is re-indexed away or removed, the
+    entity is left with no relationships; ``--max-degree 1`` additionally
+    sweeps single-use stubs (the fragmentation class the graph audit measured
+    at 84-91% of all entities). Opt-in and dry-runnable because a degree-1
+    entity can be legitimately rare rather than junk.
 
     Structural nodes (``File`` / ``Section`` / ``Corpus`` / ``Meta``) are never
     pruned even when edgeless, since an isolated file is still a real file. The
@@ -250,22 +263,37 @@ def prune_entities() -> None:
     from contextd.storage.factory import build_graph_store
 
     entity_labels = sorted(set(Ontology.load_base().node_types) - NON_ENTITY_LABELS)
-    match = "MATCH (n) WHERE any(l IN labels(n) WHERE l IN $labels) AND NOT (n)--()"
+    match = "MATCH (n) WHERE any(l IN labels(n) WHERE l IN $labels) AND COUNT { (n)--() } <= $d"
+    params: dict[str, Any] = {"labels": entity_labels, "d": max_degree}
 
     cfg = _load_cfg()
     store = build_graph_store(cfg)
     store.connect()
     try:
-        rows = store.exec_read(f"{match} RETURN count(n) AS count", {"labels": entity_labels})
+        if dry_run:
+            rows = store.exec_read(
+                f"{match} RETURN labels(n)[0] AS label, count(n) AS count ORDER BY count DESC",
+                params,
+            )
+            if not rows:
+                console.print(f"[green]✓[/] nothing at degree <= {max_degree}")
+                return
+            total = 0
+            for r in rows:
+                console.print(f"  - {r['label']}: {r['count']}")
+                total += int(r["count"])
+            console.print(f"[bold]dry run:[/] {total} entities would be pruned")
+            return
+        rows = store.exec_read(f"{match} RETURN count(n) AS count", params)
         count = int(rows[0]["count"]) if rows else 0
         if count == 0:
-            console.print("[green]✓[/] no orphaned entities to prune")
+            console.print("[green]✓[/] no matching entities to prune")
             return
-        store.exec_write(f"{match} DETACH DELETE n", {"labels": entity_labels})
+        store.exec_write(f"{match} DETACH DELETE n", params)
     finally:
         store.close()
     noun = "entity" if count == 1 else "entities"
-    console.print(f"[green]✓[/] pruned {count} orphaned {noun}")
+    console.print(f"[green]✓[/] pruned {count} {noun} (degree <= {max_degree})")
 
 
 def _build_pipeline_deps(

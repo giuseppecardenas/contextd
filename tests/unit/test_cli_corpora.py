@@ -573,10 +573,12 @@ def test_remove_corpus_deletes_toml_state_and_graph(
 
     assert result.exit_code == 0, result.output
     assert "permanently deletes" in result.output
-    # The corpus's File/Section/Corpus nodes are DETACH DELETE'd (3 writes).
+    # Section + File + the 10 corpus-scoped entity labels + Corpus (13 writes).
     writes = [c.args[0] for c in mock_store.exec_write.call_args_list]
-    assert len(writes) == 3
+    assert len(writes) == 13
     assert all("DETACH DELETE" in w for w in writes)
+    assert any(":Pattern" in w for w in writes)
+    assert any(":Corpus" in w for w in writes)
     # Registration TOML and both per-corpus state files are gone.
     assert not corpus_toml.exists()
     assert not index_state.exists()
@@ -602,14 +604,37 @@ def test_prune_entities_deletes_orphans_and_reports_count(
         result = CliRunner().invoke(contextd.cli.cli, ["prune-entities"])
 
     assert result.exit_code == 0, result.output
-    assert "pruned 3 orphaned entities" in result.output
+    assert "pruned 3 entities (degree <= 0)" in result.output
     mock_store.exec_write.assert_called_once()
     write_cypher, write_params = mock_store.exec_write.call_args.args
     assert "DETACH DELETE" in write_cypher
+    assert write_params["d"] == 0
     labels = write_params["labels"]
     # Entity labels are prunable; structural labels are never pruned.
     assert "Ticket" in labels and "Artifact" in labels
     assert not ({"File", "Section", "Corpus", "Meta"} & set(labels))
+
+
+def test_prune_entities_max_degree_and_dry_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _setup_home(tmp_path, monkeypatch)
+    mock_store = MagicMock()
+    mock_store.exec_read.return_value = [
+        {"label": "Pattern", "count": 970},
+        {"label": "Artifact", "count": 1458},
+    ]
+    with patch("contextd.storage.factory.build_graph_store", return_value=mock_store):
+        result = CliRunner().invoke(
+            contextd.cli.cli, ["prune-entities", "--max-degree", "1", "--dry-run"]
+        )
+
+    assert result.exit_code == 0, result.output
+    assert "dry run:" in result.output
+    assert "2428 entities would be pruned" in result.output
+    mock_store.exec_write.assert_not_called()
+    read_params = mock_store.exec_read.call_args.args[1]
+    assert read_params["d"] == 1
 
 
 def test_prune_entities_reports_none_when_empty(
@@ -622,5 +647,5 @@ def test_prune_entities_reports_none_when_empty(
         result = CliRunner().invoke(contextd.cli.cli, ["prune-entities"])
 
     assert result.exit_code == 0, result.output
-    assert "no orphaned entities" in result.output
+    assert "no matching entities" in result.output
     mock_store.exec_write.assert_not_called()
