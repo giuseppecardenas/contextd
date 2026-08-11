@@ -1,10 +1,21 @@
 import json
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 
+from contextd.indexer.phases import RelateDeps
+from contextd.inference.context import EmptyRetriever
+
 pytestmark = pytest.mark.integration
+
+
+def _relate_deps(inferrer: Any = None) -> RelateDeps:
+    if inferrer is None:
+        inferrer = MagicMock()
+        inferrer.infer.return_value = []
+    return RelateDeps(inferrer=inferrer, retriever=EmptyRetriever())
 
 
 def test_bootstrap_creates_inferred_edges(backend, tmp_path: Path) -> None:
@@ -39,7 +50,9 @@ def test_bootstrap_creates_inferred_edges(backend, tmp_path: Path) -> None:
     a_path = str(corpus_root / "a.md")
     b_path = str(corpus_root / "b.md")
 
-    def infer(content: str, known_entities: list[str]) -> list[InferredRelationship]:
+    def infer(
+        content: str, *, identity: Any = None, candidates: Any = None
+    ) -> list[InferredRelationship]:
         # Emit "a → b" when the content starts with "alpha", "b → a" otherwise.
         if content.startswith("alpha"):
             return [
@@ -69,9 +82,8 @@ def test_bootstrap_creates_inferred_edges(backend, tmp_path: Path) -> None:
         store=backend,
         embedder=fake_embedder,
         summariser=fake_summariser,
-        inferrer=fake_inferrer,
+        relate=_relate_deps(fake_inferrer),
         hasher=FileHasher(),
-        entity_sampler=lambda _s: [],
     )
 
     # Assert 2 inferred REFERENCES edges exist.
@@ -114,9 +126,8 @@ def test_bootstrap_on_sample_corpus(backend, tmp_path: Path) -> None:
         store=backend,
         embedder=fake_embedder,
         summariser=fake_summariser,
-        inferrer=fake_inferrer,
+        relate=_relate_deps(fake_inferrer),
         hasher=FileHasher(),
-        entity_sampler=lambda _s: [],
     )
 
     phase_names = [p.name for p in result.phases]
@@ -182,9 +193,8 @@ def test_section_granular_bootstrap(backend, tmp_path: Path) -> None:
         store=backend,
         embedder=fake_embedder,
         summariser=fake_summariser,
-        inferrer=fake_inferrer,
+        relate=_relate_deps(fake_inferrer),
         hasher=FileHasher(),
-        entity_sampler=lambda _s: [],
     )
 
     phase_names = [p.name for p in result.phases]
@@ -268,7 +278,9 @@ def test_section_granular_inferred_edges(backend, tmp_path: Path) -> None:
     a_id = f"{corpus_root / 'doc.md'}#a"
     b_id = f"{corpus_root / 'doc.md'}#b"
 
-    def infer(content: str, known_entities: list[str]) -> list[InferredRelationship]:
+    def infer(
+        content: str, *, identity: Any = None, candidates: Any = None
+    ) -> list[InferredRelationship]:
         if content.startswith("## §A"):
             return [
                 InferredRelationship(
@@ -299,9 +311,8 @@ def test_section_granular_inferred_edges(backend, tmp_path: Path) -> None:
         store=backend,
         embedder=fake_embedder,
         summariser=fake_summariser,
-        inferrer=fake_inferrer,
+        relate=_relate_deps(fake_inferrer),
         hasher=FileHasher(),
-        entity_sampler=lambda _s: [],
     )
 
     # Two Section→Section REFERENCES edges must exist, in opposite directions.
@@ -366,9 +377,8 @@ def test_section_gc_removes_renamed_section(backend, tmp_path: Path) -> None:
         store=backend,
         embedder=fake_embedder,
         summariser=fake_summariser,
-        inferrer=fake_inferrer,
+        relate=_relate_deps(fake_inferrer),
         hasher=FileHasher(),
-        entity_sampler=lambda _s: [],
     )
 
     anchors_after_first = sorted(
@@ -387,9 +397,8 @@ def test_section_gc_removes_renamed_section(backend, tmp_path: Path) -> None:
         store=backend,
         embedder=fake_embedder,
         summariser=fake_summariser,
-        inferrer=fake_inferrer,
+        relate=_relate_deps(fake_inferrer),
         hasher=FileHasher(),
-        entity_sampler=lambda _s: [],
     )
 
     anchors_after_second = sorted(
@@ -498,9 +507,8 @@ def test_index_with_ontology_overrides_uses_canonical_edge_names(
         store=backend,  # type: ignore[arg-type]
         embedder=fake_embedder,
         summariser=fake_summariser,
-        inferrer=real_inferrer,
+        relate=_relate_deps(real_inferrer),
         hasher=FileHasher(),
-        entity_sampler=lambda _s: [],
     )
 
     # REFERENCES edges must exist (the canonical name, not the alias).
@@ -576,9 +584,8 @@ def test_section_granular_mixed_extensions_routes_correctly(backend, tmp_path: P
         store=backend,
         embedder=fake_embedder,
         summariser=fake_summariser,
-        inferrer=fake_inferrer,
+        relate=_relate_deps(fake_inferrer),
         hasher=FileHasher(),
-        entity_sampler=lambda _s: [],
     )
 
     # All 4 File nodes must exist.

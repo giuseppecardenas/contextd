@@ -272,6 +272,8 @@ def _build_pipeline_deps(
     paths — relative paths resolve relative to the TOML file's parent directory.
     """
     from contextd.indexer.hasher import FileHasher
+    from contextd.indexer.phases import RelateDeps
+    from contextd.inference.context import EmptyRetriever
     from contextd.inference.prompts import PromptRenderer
     from contextd.inference.relate import RelationshipInferrer
     from contextd.inference.summarise import Summariser
@@ -320,7 +322,12 @@ def _build_pipeline_deps(
         summariser=Summariser(
             inference_provider, renderer, max_words=max_words, prompt_path=prompt_path
         ),
-        inferrer=RelationshipInferrer(inference_provider, renderer, ontology),
+        relate=RelateDeps(
+            inferrer=RelationshipInferrer(inference_provider, renderer, ontology),
+            # Swapped for the graph-backed retriever when candidate retrieval
+            # lands; EmptyRetriever keeps behavior identical until then.
+            retriever=EmptyRetriever(),
+        ),
         hasher=FileHasher(state_path=contextd_home() / "state" / f"{corpus_name}-index-state.json"),
         embedder=embedding_provider,
         store=build_graph_store(cfg),
@@ -395,9 +402,8 @@ def index(
                 store=deps.store,
                 embedder=deps.embedder,
                 summariser=deps.summariser,
-                inferrer=deps.inferrer,
+                relate=deps.relate,
                 hasher=deps.hasher,
-                entity_sampler=lambda _s: [],
                 inference_concurrency=cfg.indexer.inference_concurrency,
                 refresh=cast("RefreshScope | None", refresh),
             )
@@ -425,8 +431,7 @@ def index(
                         hasher=deps.hasher,
                         embedder=deps.embedder,
                         summariser=deps.summariser,
-                        inferrer=deps.inferrer,
-                        entity_sampler=lambda _s: [],
+                        relate=deps.relate,
                         inference_concurrency=cfg.indexer.inference_concurrency,
                     )
                 except Exception as exc:

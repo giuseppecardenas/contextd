@@ -49,13 +49,13 @@ def _row(**overrides: object) -> dict[str, object]:
 
 
 def test_word_confidence_maps_to_documented_anchor() -> None:
-    rels = _inferrer([_row(confidence="high")]).infer("content", known_entities=[])
+    rels = _inferrer([_row(confidence="high")]).infer("content")
     assert len(rels) == 1
     assert rels[0].confidence == 0.9
 
 
 def test_numeric_string_confidence_parses() -> None:
-    rels = _inferrer([_row(confidence="0.75")]).infer("content", known_entities=[])
+    rels = _inferrer([_row(confidence="0.75")]).infer("content")
     assert rels[0].confidence == 0.75
 
 
@@ -63,7 +63,7 @@ def test_garbage_confidence_becomes_zero_not_crash(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     with caplog.at_level(logging.INFO, logger="contextd.inference.relate"):
-        rels = _inferrer([_row(confidence="certainly")]).infer("content", known_entities=[])
+        rels = _inferrer([_row(confidence="certainly")]).infer("content")
     assert rels[0].confidence == 0.0
     assert "unparseable confidence" in caplog.text
 
@@ -75,7 +75,7 @@ def test_confidence_clamped_to_unit_interval() -> None:
 
 def test_dict_reason_coerced_to_string(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.INFO, logger="contextd.inference.relate"):
-        rels = _inferrer([_row(reason={"because": "x"})]).infer("content", known_entities=[])
+        rels = _inferrer([_row(reason={"because": "x"})]).infer("content")
     assert isinstance(rels[0].reason, str)
     assert "non-string reason" in caplog.text
 
@@ -104,7 +104,7 @@ def test_each_drop_path_logs_reason(
     row: object, expected_fragment: str, caplog: pytest.LogCaptureFixture
 ) -> None:
     with caplog.at_level(logging.INFO, logger="contextd.inference.relate"):
-        rels = _inferrer([row]).infer("content", known_entities=[])
+        rels = _inferrer([row]).infer("content")
     assert rels == []
     assert "relate drop" in caplog.text
     assert expected_fragment in caplog.text
@@ -154,7 +154,7 @@ def test_alias_target_type_resolves_to_canonical_label() -> None:
     ontology = Ontology.load_base().with_aliases({"Registry": "Pattern"})
     inferrer = RelationshipInferrer(provider=provider, renderer=renderer, ontology=ontology)
 
-    rels = inferrer.infer("content", known_entities=[])
+    rels = inferrer.infer("content")
 
     assert len(rels) == 1
     assert rels[0].target_type == "Pattern"
@@ -166,9 +166,7 @@ def test_prompt_advertises_aliases_and_withholds_system_labels() -> None:
     renderer = MagicMock()
     renderer.render.return_value = "prompt"
     ontology = Ontology.load_base().with_aliases({"Registry": "Pattern"})
-    RelationshipInferrer(provider=provider, renderer=renderer, ontology=ontology).infer(
-        "content", known_entities=[]
-    )
+    RelationshipInferrer(provider=provider, renderer=renderer, ontology=ontology).infer("content")
 
     advertised = renderer.render.call_args.kwargs["allowed_node_types"]
     assert "Registry" in advertised

@@ -51,8 +51,7 @@ class CorpusDaemonEntry:
     hasher: FileHasher
     embedder: Any
     summariser: Any
-    inferrer: Any
-    entity_sampler: Callable[[Any], list[str]]
+    relate: Any  # indexer.phases.RelateDeps; Any matches the sibling fields
     watcher: CorpusWatcher | None = field(default=None, init=False)
 
 
@@ -407,8 +406,7 @@ def _handle_batch(
                 corpus_entry.hasher,
                 corpus_entry.embedder,
                 corpus_entry.summariser,
-                corpus_entry.inferrer,
-                corpus_entry.entity_sampler,
+                corpus_entry.relate,
                 inference_concurrency=inference_concurrency,
             )
             if result.action == "deleted":
@@ -683,8 +681,7 @@ def main() -> None:
                 hasher=deps.hasher,
                 embedder=deps.embedder,
                 summariser=deps.summariser,
-                inferrer=deps.inferrer,
-                entity_sampler=lambda _s: [],
+                relate=deps.relate,
             )
         )
 

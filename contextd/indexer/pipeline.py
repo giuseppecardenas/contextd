@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import fnmatch
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -13,8 +12,8 @@ from contextd.corpus_config import CorpusConfig
 from contextd.indexer import phases
 from contextd.indexer.hasher import FileHasher
 from contextd.indexer.heading_parser import section_hash
+from contextd.indexer.phases import RelateDeps
 from contextd.indexer.units import ParseCache
-from contextd.inference.relate import RelationshipInferrer
 from contextd.inference.summarise import Summariser
 from contextd.providers.base import EmbeddingProvider
 from contextd.storage.base import GraphStore
@@ -238,8 +237,7 @@ def run_incremental_file(
     hasher: FileHasher,
     embedder: EmbeddingProvider,
     summariser: Summariser,
-    inferrer: RelationshipInferrer,
-    entity_sampler: Callable[[GraphStore], list[str]],
+    relate: RelateDeps,
     *,
     inference_concurrency: int = 1,
 ) -> IncrementalResult:
@@ -333,9 +331,8 @@ def run_incremental_file(
         )
         phases.phase_relate_sections(
             corpus,
-            inferrer,
+            relate,
             store,
-            entity_sampler,
             concurrency=inference_concurrency,
             parse_cache=parse_cache,
         )
@@ -345,10 +342,9 @@ def run_incremental_file(
         phases.phase_summarise([path], summariser, store, concurrency=inference_concurrency)
         phases.phase_relate(
             [path],
-            inferrer,
+            relate,
             store,
-            entity_sampler,
-            corpus=corpus.corpus.name,
+            corpus_cfg=corpus,
             concurrency=inference_concurrency,
         )
 
@@ -360,9 +356,8 @@ def run_bootstrap(
     store: GraphStore,
     embedder: EmbeddingProvider,
     summariser: Summariser,
-    inferrer: RelationshipInferrer,
+    relate: RelateDeps,
     hasher: FileHasher,
-    entity_sampler: Callable[[GraphStore], list[str]],
     *,
     inference_concurrency: int = 1,
     refresh: RefreshScope | None = None,
@@ -408,9 +403,8 @@ def run_bootstrap(
         results.append(
             phases.phase_relate_sections(
                 corpus,
-                inferrer,
+                relate,
                 store,
-                entity_sampler,
                 concurrency=inference_concurrency,
                 parse_cache=parse_cache,
             )
@@ -431,10 +425,9 @@ def run_bootstrap(
             results.append(
                 phases.phase_relate(
                     other_files,
-                    inferrer,
+                    relate,
                     store,
-                    entity_sampler,
-                    corpus=corpus.corpus.name,
+                    corpus_cfg=corpus,
                     concurrency=inference_concurrency,
                 )
             )
@@ -453,10 +446,9 @@ def run_bootstrap(
         results.append(
             phases.phase_relate(
                 files,
-                inferrer,
+                relate,
                 store,
-                entity_sampler,
-                corpus=corpus.corpus.name,
+                corpus_cfg=corpus,
                 concurrency=inference_concurrency,
             )
         )

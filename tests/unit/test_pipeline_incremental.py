@@ -4,6 +4,15 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from contextd._paths import canonical_path
+from contextd.indexer.phases import RelateDeps
+from contextd.inference.context import EmptyRetriever
+
+
+def _relate_deps(inferrer: MagicMock | None = None) -> RelateDeps:
+    if inferrer is None:
+        inferrer = MagicMock()
+        inferrer.infer.return_value = []
+    return RelateDeps(inferrer=inferrer, retriever=EmptyRetriever())
 
 
 def _make_corpus(tmp_path: Path, granularity: str = "file"):
@@ -62,8 +71,7 @@ def test_run_incremental_file_deleted_file_detach_deletes_node(
         MagicMock(),
         MagicMock(),
         MagicMock(),
-        MagicMock(),
-        lambda _s: [],
+        _relate_deps(),
     )
 
     assert result.action == "deleted"
@@ -98,8 +106,7 @@ def test_run_incremental_file_calls_clear_then_phases(tmp_path: Path) -> None:
         MagicMock(),
         embedder,
         summariser,
-        inferrer,
-        lambda _s: [],
+        _relate_deps(inferrer),
     )
 
     assert result.action == "indexed"
@@ -125,7 +132,7 @@ def test_run_incremental_file_skips_unchanged_file_by_hash(tmp_path: Path) -> No
     inferrer = MagicMock()
 
     result = run_incremental_file(
-        md, corpus, store, hasher, embedder, summariser, inferrer, lambda _s: []
+        md, corpus, store, hasher, embedder, summariser, _relate_deps(inferrer)
     )
 
     assert result.action == "skipped"
@@ -165,7 +172,7 @@ def test_run_incremental_file_reindexes_when_hash_differs(tmp_path: Path) -> Non
     inferrer.infer.return_value = []
 
     result = run_incremental_file(
-        md, corpus, store, FileHasher(), embedder, summariser, inferrer, lambda _s: []
+        md, corpus, store, FileHasher(), embedder, summariser, _relate_deps(inferrer)
     )
 
     assert result.action == "indexed"
@@ -199,8 +206,7 @@ def test_run_incremental_file_section_granular(tmp_path: Path) -> None:
         MagicMock(),
         embedder,
         summariser,
-        inferrer,
-        lambda _s: [],
+        _relate_deps(inferrer),
     )
 
     assert result.action == "indexed"
@@ -237,8 +243,7 @@ def test_run_incremental_file_returns_skipped_when_no_sections_changed(
         MagicMock(),
         MagicMock(),
         MagicMock(),
-        MagicMock(),
-        lambda _s: [],
+        _relate_deps(),
     )
 
     assert result.action == "skipped"
@@ -296,7 +301,7 @@ def test_run_incremental_file_clears_only_changed_sections(tmp_path: Path) -> No
 
     with patch("contextd.indexer.pipeline._clear_section_for_reindex", side_effect=spy_clear):
         result = run_incremental_file(
-            md, corpus, store, MagicMock(), embedder, summariser, inferrer, lambda _s: []
+            md, corpus, store, MagicMock(), embedder, summariser, _relate_deps(inferrer)
         )
 
     assert result.action == "indexed"
@@ -344,7 +349,7 @@ def test_run_incremental_file_treats_missing_hash_as_changed(tmp_path: Path) -> 
 
     with patch("contextd.indexer.pipeline._clear_section_for_reindex", side_effect=spy_clear):
         result = run_incremental_file(
-            md, corpus, store, MagicMock(), embedder, summariser, inferrer, lambda _s: []
+            md, corpus, store, MagicMock(), embedder, summariser, _relate_deps(inferrer)
         )
 
     assert result.action == "indexed"
@@ -367,7 +372,7 @@ def test_run_incremental_file_skips_empty_file(tmp_path: Path) -> None:
     inferrer = MagicMock()
 
     result = run_incremental_file(
-        empty, corpus, store, MagicMock(), embedder, summariser, inferrer, lambda _s: []
+        empty, corpus, store, MagicMock(), embedder, summariser, _relate_deps(inferrer)
     )
 
     assert result.action == "skipped"
@@ -401,8 +406,7 @@ def test_run_incremental_file_section_corpus_non_md(tmp_path: Path) -> None:
         MagicMock(),
         embedder,
         summariser,
-        inferrer,
-        lambda _s: [],
+        _relate_deps(inferrer),
     )
 
     assert result.action == "indexed"

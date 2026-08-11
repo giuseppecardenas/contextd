@@ -8,11 +8,20 @@ import pytest
 from contextd._paths import canonical_path
 from contextd.corpus_config import CorpusConfig
 from contextd.indexer.hasher import FileHasher
+from contextd.indexer.phases import RelateDeps
 from contextd.indexer.pipeline import run_bootstrap, run_incremental_file
+from contextd.inference.context import EmptyRetriever
 from contextd.inference.summarise import FileSummary
 from contextd.storage.base import GraphStore
 
 pytestmark = pytest.mark.integration
+
+
+def _relate_deps(inferrer: MagicMock | None = None) -> RelateDeps:
+    if inferrer is None:
+        inferrer = MagicMock()
+        inferrer.infer.return_value = []
+    return RelateDeps(inferrer=inferrer, retriever=EmptyRetriever())
 
 
 def _corpus(tmp_path: Path, granularity: str = "file") -> CorpusConfig:
@@ -44,9 +53,8 @@ def test_incremental_updates_summary_after_file_change(backend: GraphStore, tmp_
         backend,
         _fake_embedder(),
         _fake_summariser("original summary"),
-        MagicMock(infer=MagicMock(return_value=[])),
+        _relate_deps(),
         hasher,
-        lambda _s: [],
     )
 
     # Node identity is a canonical forward-slash path; str(Path) is os.sep, so
@@ -64,8 +72,7 @@ def test_incremental_updates_summary_after_file_change(backend: GraphStore, tmp_
         hasher,
         _fake_embedder(),
         _fake_summariser("updated summary"),
-        MagicMock(infer=MagicMock(return_value=[])),
-        lambda _s: [],
+        _relate_deps(),
     )
 
     rows = backend.exec_read(
@@ -85,9 +92,8 @@ def test_incremental_deletion_removes_file_node(backend: GraphStore, tmp_path: P
         backend,
         _fake_embedder(),
         _fake_summariser("s"),
-        MagicMock(infer=MagicMock(return_value=[])),
+        _relate_deps(),
         hasher,
-        lambda _s: [],
     )
 
     before = backend.exec_read("MATCH (f:File {path: $p}) RETURN f", {"p": canonical_path(md)})
@@ -101,8 +107,7 @@ def test_incremental_deletion_removes_file_node(backend: GraphStore, tmp_path: P
         hasher,
         _fake_embedder(),
         MagicMock(),
-        MagicMock(),
-        lambda _s: [],
+        _relate_deps(),
     )
 
     rows = backend.exec_read("MATCH (f:File {path: $p}) RETURN f", {"p": canonical_path(md)})
@@ -122,9 +127,8 @@ def test_incremental_clears_inferred_at_before_reindex(backend: GraphStore, tmp_
         backend,
         _fake_embedder(),
         _fake_summariser("s"),
-        inferrer,
+        _relate_deps(inferrer),
         hasher,
-        lambda _s: [],
     )
 
     md.write_text("updated content", encoding="utf-8")
@@ -136,8 +140,7 @@ def test_incremental_clears_inferred_at_before_reindex(backend: GraphStore, tmp_
         hasher,
         _fake_embedder(),
         _fake_summariser("updated"),
-        inferrer,
-        lambda _s: [],
+        _relate_deps(inferrer),
     )
 
     assert inferrer.infer.called, "infer must be called — inferred_at was cleared"

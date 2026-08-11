@@ -45,6 +45,7 @@ from contextd.corpus_config import CorpusConfig
 from contextd.indexer.hasher import FileHasher
 from contextd.indexer.heading_parser import ParsedSection, _github_anchor, section_hash
 from contextd.indexer.units import ParseCache, extractor_for
+from contextd.inference.context import CandidateRetriever, UnitIdentity
 from contextd.inference.relate import InferredRelationship, RelationshipInferrer
 from contextd.inference.summarise import Summariser
 from contextd.ontology.schema import ENUMERATION_OWNED_LABELS, NON_ENTITY_LABELS, Ontology
@@ -68,6 +69,29 @@ class PhaseResult:
     name: str
     processed: int
     skipped: int
+
+
+@dataclass
+class RelateDeps:
+    """Dependencies of the relate phases beyond the store.
+
+    Grows as the resolution pipeline lands (resolver, lexical registry,
+    settings); starting shape is the inferrer plus the per-unit candidate
+    retriever. Constructed once in ``_build_pipeline_deps`` and threaded
+    through ``run_bootstrap`` / ``run_incremental_file`` / the daemon.
+    """
+
+    inferrer: RelationshipInferrer
+    retriever: CandidateRetriever
+
+
+def _rel_path(path: Path, root: Path) -> str:
+    """Corpus-root-relative posix path for prompts and routing; canonical
+    absolute path when the file is outside the root (defensive fallback)."""
+    try:
+        return path.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return canonical_path(path)
 
 
 def _parallel_map(
@@ -212,11 +236,10 @@ def phase_summarise(
 
 def phase_relate(
     files: list[Path],
-    inferrer: RelationshipInferrer,
+    relate: RelateDeps,
     store: GraphStore,
-    entity_sampler: Callable[[GraphStore], list[str]],
     *,
-    corpus: str,
+    corpus_cfg: CorpusConfig,
     concurrency: int = 1,
 ) -> PhaseResult:
     # Idempotent resume: skip files whose File node carries an inferred_at
@@ -233,12 +256,28 @@ def phase_relate(
         }
         files = [f for f in files if canonical_path(f) not in already]
 
-    known = entity_sampler(store)
+    corpus = corpus_cfg.corpus.name
+    root = Path(corpus_cfg.corpus.root)
 
     def _worker(f: Path) -> tuple[int, int]:
+        file_path = canonical_path(f)
+        identity = UnitIdentity(
+            corpus=corpus,
+            file_path=file_path,
+            rel_path=_rel_path(f, root),
+            suffix=f.suffix,
+            src_label="File",
+            src_id=file_path,
+        )
         try:
-            relations = inferrer.infer(
-                f.read_text(encoding="utf-8", errors="replace"), known_entities=known
+            # Candidates are retrieved per unit, inside the worker — the whole
+            # point of the retriever seam (a phase-global sample cannot offer
+            # unit-relevant targets).
+            candidates = relate.retriever.for_unit(store, identity=identity)
+            relations = relate.inferrer.infer(
+                f.read_text(encoding="utf-8", errors="replace"),
+                identity=identity,
+                candidates=candidates,
             )
         except Exception as exc:
             # Logged for the same reason as the summarise failure above, plus one
@@ -253,7 +292,6 @@ def phase_relate(
                 exc,
             )
             return (0, 1)
-        file_path = canonical_path(f)
         # Wipe-and-replace inferred edges (spec §5.5).
         # src_label="File" required by GraphStore.delete_edges (see ABC
         # docstring) — a label-less MATCH is ambiguous when endpoints
@@ -607,9 +645,8 @@ def phase_summarise_sections(
 
 def phase_relate_sections(
     corpus_cfg: CorpusConfig,
-    inferrer: RelationshipInferrer,
+    relate: RelateDeps,
     store: GraphStore,
-    entity_sampler: Callable[[GraphStore], list[str]],
     *,
     concurrency: int = 1,
     parse_cache: ParseCache | None = None,
@@ -639,17 +676,32 @@ def phase_relate_sections(
     cache = parse_cache if parse_cache is not None else ParseCache(corpus_cfg)
     for p in {Path(r["path"]) for r in rows}:
         cache.get(p)
-    known = entity_sampler(store)
     corpus_name = corpus_cfg.corpus.name
+    root = Path(corpus_cfg.corpus.root)
 
     def _worker(r: dict[str, str]) -> tuple[int, int]:
         anchor = r["id"].split("#", 1)[1]
-        sec = cache.get(Path(r["path"])).by_anchor(anchor)
+        path = Path(r["path"])
+        parsed = cache.get(path)
+        sec = parsed.by_anchor(anchor)
         if not sec:
             _log.debug("relate: section %s no longer present on disk; skipping", r["id"])
             return (0, 1)
+        identity = UnitIdentity(
+            corpus=corpus_name,
+            file_path=parsed.canonical,
+            rel_path=_rel_path(path, root),
+            suffix=path.suffix,
+            src_label="Section",
+            src_id=r["id"],
+            title=sec.title,
+            anchor=sec.anchor,
+            parent_titles=parsed.parent_chain(sec.anchor),
+        )
         try:
-            relations = inferrer.infer(sec.body, known_entities=known)
+            # Per-unit candidate retrieval — see phase_relate.
+            candidates = relate.retriever.for_unit(store, identity=identity)
+            relations = relate.inferrer.infer(sec.body, identity=identity, candidates=candidates)
         except Exception as exc:
             _log.warning(
                 "relate failed for section %s: %s: %s; no inferred edges written, "

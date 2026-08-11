@@ -78,8 +78,7 @@ def test_replay_calls_run_incremental_for_each_entry(tmp_path: Path) -> None:
     entry.hasher = MagicMock()
     entry.embedder = MagicMock()
     entry.summariser = MagicMock()
-    entry.inferrer = MagicMock()
-    entry.entity_sampler = MagicMock()
+    entry.relate = MagicMock()
 
     def corpus_lookup(name: str) -> MagicMock:
         return entry

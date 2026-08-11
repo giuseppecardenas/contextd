@@ -14,7 +14,9 @@ def test_full_bootstrap_then_mcp_query(backend, tmp_path: Path) -> None:
     """Exercise: files → bootstrap → describe_project."""
     from contextd.corpus_config import CorpusConfig
     from contextd.indexer.hasher import FileHasher
+    from contextd.indexer.phases import RelateDeps
     from contextd.indexer.pipeline import run_bootstrap
+    from contextd.inference.context import EmptyRetriever
     from contextd.inference.summarise import FileSummary
     from contextd.mcp import tools
 
@@ -51,9 +53,8 @@ def test_full_bootstrap_then_mcp_query(backend, tmp_path: Path) -> None:
         store=backend,
         embedder=fake_embedder,
         summariser=fake_summariser,
-        inferrer=fake_inferrer,
+        relate=RelateDeps(inferrer=fake_inferrer, retriever=EmptyRetriever()),
         hasher=FileHasher(),
-        entity_sampler=lambda _s: [],
     )
 
     overview = tools.describe_project(backend, corpus="e2e")

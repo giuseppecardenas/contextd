@@ -18,8 +18,20 @@ from typing import Any
 from unittest.mock import MagicMock
 
 from contextd.corpus_config import CorpusConfig
-from contextd.indexer.phases import phase_relate, phase_relate_sections
+from contextd.indexer.phases import RelateDeps, phase_relate, phase_relate_sections
+from contextd.inference.context import EmptyRetriever
 from contextd.inference.relate import InferredRelationship
+
+
+def _relate_deps(inferrer: MagicMock | None = None) -> RelateDeps:
+    if inferrer is None:
+        inferrer = MagicMock()
+        inferrer.infer.return_value = []
+    return RelateDeps(inferrer=inferrer, retriever=EmptyRetriever())
+
+
+def _corpus_cfg(tmp_path: Path) -> CorpusConfig:
+    return CorpusConfig.model_validate({"corpus": {"name": "c", "root": str(tmp_path)}})
 
 
 def _rel(target_type: str, target_name: str) -> InferredRelationship:
@@ -49,7 +61,7 @@ def test_phase_relate_merges_entity_content_and_protects_pk(tmp_path: Path) -> N
     store = MagicMock()
     store.exec_read.return_value = []
 
-    phase_relate([_file(tmp_path)], inferrer, store, entity_sampler=lambda _s: [], corpus="c")
+    phase_relate([_file(tmp_path)], _relate_deps(inferrer), store, corpus_cfg=_corpus_cfg(tmp_path))
 
     ticket_upserts = [c for c in store.upsert_node.call_args_list if c.args[0] == "Ticket"]
     assert len(ticket_upserts) == 1
@@ -79,7 +91,7 @@ def test_phase_relate_drops_unresolvable_file_target(tmp_path: Path) -> None:
     store.exec_read.return_value = []  # resume: none done; resolution: no match
 
     result = phase_relate(
-        [_file(tmp_path)], inferrer, store, entity_sampler=lambda _s: [], corpus="c"
+        [_file(tmp_path)], _relate_deps(inferrer), store, corpus_cfg=_corpus_cfg(tmp_path)
     )
 
     assert not any(c.args[0] == "File" for c in store.upsert_node.call_args_list)
@@ -102,7 +114,7 @@ def test_phase_relate_links_file_target_by_exact_path(tmp_path: Path) -> None:
 
     store.exec_read.side_effect = _read
 
-    phase_relate([_file(tmp_path)], inferrer, store, entity_sampler=lambda _s: [], corpus="c")
+    phase_relate([_file(tmp_path)], _relate_deps(inferrer), store, corpus_cfg=_corpus_cfg(tmp_path))
 
     assert not any(c.args[0] == "File" for c in store.upsert_node.call_args_list)
     store.upsert_edge.assert_called_once()
@@ -125,7 +137,7 @@ def test_phase_relate_links_file_target_by_unique_basename(tmp_path: Path) -> No
 
     store.exec_read.side_effect = _read
 
-    phase_relate([_file(tmp_path)], inferrer, store, entity_sampler=lambda _s: [], corpus="c")
+    phase_relate([_file(tmp_path)], _relate_deps(inferrer), store, corpus_cfg=_corpus_cfg(tmp_path))
 
     assert not any(c.args[0] == "File" for c in store.upsert_node.call_args_list)
     store.upsert_edge.assert_called_once()
@@ -148,7 +160,7 @@ def test_phase_relate_drops_ambiguous_basename(tmp_path: Path) -> None:
     store.exec_read.side_effect = _read
 
     result = phase_relate(
-        [_file(tmp_path)], inferrer, store, entity_sampler=lambda _s: [], corpus="c"
+        [_file(tmp_path)], _relate_deps(inferrer), store, corpus_cfg=_corpus_cfg(tmp_path)
     )
 
     store.upsert_edge.assert_not_called()
@@ -162,7 +174,7 @@ def test_phase_relate_still_stubs_pattern_target(tmp_path: Path) -> None:
     store = MagicMock()
     store.exec_read.return_value = []
 
-    phase_relate([_file(tmp_path)], inferrer, store, entity_sampler=lambda _s: [], corpus="c")
+    phase_relate([_file(tmp_path)], _relate_deps(inferrer), store, corpus_cfg=_corpus_cfg(tmp_path))
 
     pattern_upserts = [c for c in store.upsert_node.call_args_list if c.args[0] == "Pattern"]
     assert len(pattern_upserts) == 1
@@ -204,7 +216,7 @@ def test_phase_relate_sections_drops_unresolvable_section_target(tmp_path: Path)
 
     store.exec_read.side_effect = _read
 
-    result = phase_relate_sections(corpus, inferrer, store, entity_sampler=lambda _s: [])
+    result = phase_relate_sections(corpus, _relate_deps(inferrer), store)
 
     assert not any(c.args[0] == "Section" for c in store.upsert_node.call_args_list)
     store.upsert_edge.assert_not_called()
@@ -228,7 +240,7 @@ def test_phase_relate_sections_links_resolved_section_target(tmp_path: Path) -> 
 
     store.exec_read.side_effect = _read
 
-    phase_relate_sections(corpus, inferrer, store, entity_sampler=lambda _s: [])
+    phase_relate_sections(corpus, _relate_deps(inferrer), store)
 
     assert not any(c.args[0] == "Section" for c in store.upsert_node.call_args_list)
     store.upsert_edge.assert_called_once()

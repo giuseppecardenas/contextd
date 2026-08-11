@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from contextd.inference._json_body import loads_json_body
+from contextd.inference.context import CandidateBundle, UnitIdentity, identity_vars
 from contextd.inference.prompts import PromptRenderer
 from contextd.ontology.schema import NON_ENTITY_LABELS, STRUCTURAL_EDGE_TYPES, Ontology
 from contextd.providers.base import InferenceProvider, PromptRequest
@@ -202,7 +203,13 @@ class RelationshipInferrer:
                 lines.append(f"- {label}: {', '.join(props)}")
         return "\n".join(lines)
 
-    def infer(self, content: str, known_entities: list[str]) -> list[InferredRelationship]:
+    def infer(
+        self,
+        content: str,
+        *,
+        identity: UnitIdentity | None = None,
+        candidates: CandidateBundle | None = None,
+    ) -> list[InferredRelationship]:
         """Infer typed relationships the given content establishes.
 
         The edge-type allow-list advertised to the model and the allow-list
@@ -215,8 +222,11 @@ class RelationshipInferrer:
         against the ``inference`` call site.
 
         :param content: File or section body the model reasons over.
-        :param known_entities: Existing graph entity names offered to the model
-            as preferred targets; only the first hundred are sent.
+        :param identity: Where the content lives (path, section title, parent
+            chain) — rendered into the prompt's Source block. ``None`` renders
+            empty identity fields; production always supplies it.
+        :param candidates: Real graph nodes offered as preferred targets.
+            ``None`` behaves as an empty bundle.
         :return: The relationships that passed every validation gate, which may
             be empty. Rows failing any gate are dropped with an INFO log naming
             the reason.
@@ -229,13 +239,15 @@ class RelationshipInferrer:
         # its own vocabulary; they resolve to canonical labels at parse time.
         target_labels = self._onto.inference_target_labels()
         advertised_node_types = target_labels | set(self._onto.aliases)
+        bundle = candidates if candidates is not None else CandidateBundle.empty()
         prompt = self._renderer.render(
             "relate",
             content=content,
-            known_entities="\n".join(known_entities[:100]),
+            candidate_context=bundle.render(),
             allowed_edge_types=", ".join(sorted(emittable_edge_types)),
             allowed_node_types=", ".join(sorted(advertised_node_types)),
             target_property_schema=self._target_property_schema(),
+            **identity_vars(identity),
         )
         response = self._provider.generate(
             PromptRequest(system="", prompt=prompt, call_site="inference")

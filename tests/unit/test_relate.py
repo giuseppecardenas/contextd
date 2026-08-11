@@ -33,7 +33,7 @@ def test_returns_parsed_and_validated_relationships() -> None:
     mock_renderer = MagicMock()
     mock_renderer.render.return_value = "prompt"
     inferrer = RelationshipInferrer(mock_provider, mock_renderer, ontology)
-    result = inferrer.infer("some content", known_entities=["entity1"])
+    result = inferrer.infer("some content")
     # Only the valid one should be kept; UNKNOWN_EDGE is rejected by the ontology.
     assert len(result) == 1
     assert result[0].edge_type == "REFERENCES"
@@ -59,7 +59,7 @@ def test_rejects_unknown_target_type() -> None:
     mock_renderer = MagicMock()
     mock_renderer.render.return_value = "prompt"
     inferrer = RelationshipInferrer(mock_provider, mock_renderer, ontology)
-    result = inferrer.infer("content", known_entities=[])
+    result = inferrer.infer("content")
     assert result == []
 
 
@@ -72,7 +72,7 @@ def test_handles_yaml_language_tagged_fence() -> None:
     mock_renderer = MagicMock()
     mock_renderer.render.return_value = "prompt"
     inferrer = RelationshipInferrer(mock_provider, mock_renderer, ontology)
-    result = inferrer.infer("content", known_entities=[])
+    result = inferrer.infer("content")
     assert len(result) == 1
     assert result[0].target_name == "x.md"
 
@@ -89,7 +89,7 @@ def test_handles_prose_wrapper_around_json() -> None:
     mock_renderer = MagicMock()
     mock_renderer.render.return_value = "prompt"
     inferrer = RelationshipInferrer(mock_provider, mock_renderer, ontology)
-    result = inferrer.infer("content", known_entities=[])
+    result = inferrer.infer("content")
     assert len(result) == 1
     assert result[0].target_name == "y.md"
 
@@ -101,7 +101,7 @@ def test_non_list_relationships_returns_empty() -> None:
     mock_renderer = MagicMock()
     mock_renderer.render.return_value = "prompt"
     inferrer = RelationshipInferrer(mock_provider, mock_renderer, ontology)
-    result = inferrer.infer("content", known_entities=[])
+    result = inferrer.infer("content")
     assert result == []
 
 
@@ -125,7 +125,7 @@ def test_non_dict_row_is_skipped() -> None:
     mock_renderer = MagicMock()
     mock_renderer.render.return_value = "prompt"
     inferrer = RelationshipInferrer(mock_provider, mock_renderer, ontology)
-    result = inferrer.infer("content", known_entities=[])
+    result = inferrer.infer("content")
     assert len(result) == 1
     assert result[0].target_name == "z.md"
 
@@ -138,7 +138,7 @@ def test_no_json_object_raises_valueerror() -> None:
     mock_renderer.render.return_value = "prompt"
     inferrer = RelationshipInferrer(mock_provider, mock_renderer, ontology)
     with pytest.raises(ValueError, match="no JSON object"):
-        inferrer.infer("content", known_entities=[])
+        inferrer.infer("content")
 
 
 def test_infer_resolves_edge_aliases() -> None:
@@ -161,7 +161,7 @@ def test_infer_resolves_edge_aliases() -> None:
     mock_renderer = MagicMock()
     mock_renderer.render.return_value = "prompt"
     inferrer = RelationshipInferrer(mock_provider, mock_renderer, ontology)
-    result = inferrer.infer("content", known_entities=[])
+    result = inferrer.infer("content")
     assert len(result) == 1
     assert result[0].edge_type == "REFERENCES"  # canonical, not "CITES"
 
@@ -193,7 +193,7 @@ def test_extracts_declared_target_properties() -> None:
     mock_renderer = MagicMock()
     mock_renderer.render.return_value = "prompt"
     inferrer = RelationshipInferrer(mock_provider, mock_renderer, ontology)
-    result = inferrer.infer("content", known_entities=[])
+    result = inferrer.infer("content")
     assert result[0].target_properties == {"title": "Fix auth", "status": "open"}
 
 
@@ -216,7 +216,7 @@ def test_target_properties_default_empty_when_absent() -> None:
     mock_renderer = MagicMock()
     mock_renderer.render.return_value = "prompt"
     inferrer = RelationshipInferrer(mock_provider, mock_renderer, ontology)
-    result = inferrer.infer("content", known_entities=[])
+    result = inferrer.infer("content")
     assert result[0].target_properties == {}
 
 
@@ -245,7 +245,7 @@ def test_target_properties_accepts_lists_and_drops_objects() -> None:
     mock_renderer = MagicMock()
     mock_renderer.render.return_value = "prompt"
     inferrer = RelationshipInferrer(mock_provider, mock_renderer, ontology)
-    result = inferrer.infer("content", known_entities=[])
+    result = inferrer.infer("content")
     assert result[0].target_properties == {"description": "desc", "examples": ["a", "b"]}
 
 
@@ -258,7 +258,7 @@ def test_prompt_receives_per_type_property_schema() -> None:
     mock_renderer = MagicMock()
     mock_renderer.render.return_value = "prompt"
     inferrer = RelationshipInferrer(mock_provider, mock_renderer, ontology)
-    inferrer.infer("content", known_entities=[])
+    inferrer.infer("content")
     schema = mock_renderer.render.call_args.kwargs["target_property_schema"]
     assert "Ticket: status, title" in schema
     assert "File:" not in schema
@@ -296,7 +296,7 @@ def test_missing_or_empty_target_name_is_silently_discarded() -> None:
     mock_renderer = MagicMock()
     mock_renderer.render.return_value = "prompt"
     inferrer = RelationshipInferrer(mock_provider, mock_renderer, ontology)
-    result = inferrer.infer("content", known_entities=[])
+    result = inferrer.infer("content")
     assert len(result) == 1
     assert result[0].target_name == "ok.md"
 
@@ -349,7 +349,7 @@ def test_rejects_structural_edge_types() -> None:
     mock_renderer = MagicMock()
     mock_renderer.render.return_value = "prompt"
     inferrer = RelationshipInferrer(mock_provider, mock_renderer, ontology)
-    result = inferrer.infer("content", known_entities=[])
+    result = inferrer.infer("content")
     assert [r.edge_type for r in result] == ["REFERENCES"]
 
 
@@ -361,7 +361,7 @@ def test_prompt_allow_list_withholds_structural_edge_types() -> None:
     mock_renderer = MagicMock()
     mock_renderer.render.return_value = "prompt"
     inferrer = RelationshipInferrer(mock_provider, mock_renderer, ontology)
-    inferrer.infer("content", known_entities=[])
+    inferrer.infer("content")
     advertised = {
         t.strip() for t in mock_renderer.render.call_args.kwargs["allowed_edge_types"].split(",")
     }
@@ -389,4 +389,4 @@ def test_edge_alias_cannot_reintroduce_structural_type() -> None:
     mock_renderer = MagicMock()
     mock_renderer.render.return_value = "prompt"
     inferrer = RelationshipInferrer(mock_provider, mock_renderer, ontology)
-    assert inferrer.infer("content", known_entities=[]) == []
+    assert inferrer.infer("content") == []

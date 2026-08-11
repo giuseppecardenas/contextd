@@ -17,13 +17,23 @@ from unittest.mock import MagicMock
 
 from contextd.corpus_config import CorpusConfig
 from contextd.indexer.phases import (
+    RelateDeps,
     phase_relate,
     phase_relate_sections,
     phase_summarise,
     phase_summarise_sections,
 )
+from contextd.inference.context import EmptyRetriever
 from contextd.inference.relate import InferredRelationship
 from contextd.inference.summarise import FileSummary
+
+
+def _relate_deps(inferrer: MagicMock) -> RelateDeps:
+    return RelateDeps(inferrer=inferrer, retriever=EmptyRetriever())
+
+
+def _corpus_cfg(tmp_path: Path, name: str) -> CorpusConfig:
+    return CorpusConfig.model_validate({"corpus": {"name": name, "root": str(tmp_path)}})
 
 
 def _tracking_summariser(delay: float = 0.02) -> tuple[MagicMock, list[int]]:
@@ -44,7 +54,9 @@ def _tracking_inferrer(delay: float = 0.02) -> tuple[MagicMock, list[int]]:
     """Mock inferrer that records the thread id of each call."""
     thread_ids: list[int] = []
 
-    def _infer(content: str, known_entities: list[str]) -> list[InferredRelationship]:
+    def _infer(
+        content: str, *, identity: Any = None, candidates: Any = None
+    ) -> list[InferredRelationship]:
         thread_ids.append(threading.get_ident())
         time.sleep(delay)
         return []
@@ -120,7 +132,7 @@ def test_phase_relate_parallel_uses_multiple_threads(tmp_path: Path) -> None:
     store = MagicMock()
 
     result = phase_relate(
-        files, inferrer, store, entity_sampler=lambda _s: [], corpus="c", concurrency=4
+        files, _relate_deps(inferrer), store, corpus_cfg=_corpus_cfg(tmp_path, "c"), concurrency=4
     )
 
     assert result.processed == 6
@@ -133,7 +145,9 @@ def test_phase_relate_sequential_preserves_order(tmp_path: Path) -> None:
     inferrer, _ = _tracking_inferrer(delay=0)
     store = MagicMock()
 
-    phase_relate(files, inferrer, store, entity_sampler=lambda _s: [], corpus="c", concurrency=1)
+    phase_relate(
+        files, _relate_deps(inferrer), store, corpus_cfg=_corpus_cfg(tmp_path, "c"), concurrency=1
+    )
 
     called = [c.args[0] for c in inferrer.infer.call_args_list]
     assert called == ["content-0", "content-1", "content-2"]
@@ -202,9 +216,7 @@ def test_phase_relate_sections_parallel_uses_multiple_threads(tmp_path: Path) ->
     store = MagicMock()
     store.exec_read.return_value = rows
 
-    result = phase_relate_sections(
-        corpus, inferrer, store, entity_sampler=lambda _s: [], concurrency=4
-    )
+    result = phase_relate_sections(corpus, _relate_deps(inferrer), store, concurrency=4)
 
     assert result.processed == len(rows)
     assert result.skipped == 0

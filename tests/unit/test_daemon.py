@@ -8,6 +8,15 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from contextd._paths import canonical_path
+from contextd.indexer.phases import RelateDeps
+from contextd.inference.context import EmptyRetriever
+
+
+def _relate_deps(inferrer: MagicMock | None = None) -> RelateDeps:
+    if inferrer is None:
+        inferrer = MagicMock()
+        inferrer.infer.return_value = []
+    return RelateDeps(inferrer=inferrer, retriever=EmptyRetriever())
 
 
 def test_drain_relay_moves_all_queued_paths(tmp_path: Path) -> None:
@@ -82,8 +91,7 @@ def test_handle_batch_skips_when_branch_not_allowed(tmp_path: Path) -> None:
         hasher=MagicMock(),
         embedder=MagicMock(),
         summariser=MagicMock(),
-        inferrer=MagicMock(),
-        entity_sampler=lambda _s: [],
+        relate=_relate_deps(),
     )
 
     with (
@@ -111,8 +119,7 @@ def test_handle_batch_skips_when_git_busy(tmp_path: Path) -> None:
         hasher=MagicMock(),
         embedder=MagicMock(),
         summariser=MagicMock(),
-        inferrer=MagicMock(),
-        entity_sampler=lambda _s: [],
+        relate=_relate_deps(),
     )
 
     with (
@@ -149,8 +156,7 @@ def test_handle_batch_calls_run_incremental_for_changed_files(
         hasher=hasher,
         embedder=MagicMock(),
         summariser=MagicMock(),
-        inferrer=MagicMock(),
-        entity_sampler=lambda _s: [],
+        relate=_relate_deps(),
     )
 
     with (
@@ -185,8 +191,7 @@ def _entry_for(tmp_path: Path, store: object | None = None, **corpus_overrides: 
         hasher=FileHasher(),
         embedder=MagicMock(),
         summariser=MagicMock(),
-        inferrer=MagicMock(),
-        entity_sampler=lambda _s: [],
+        relate=_relate_deps(),
     )
 
 
@@ -368,8 +373,7 @@ def test_handle_batch_processes_multiple_files_concurrently(
         hasher=hasher,
         embedder=MagicMock(),
         summariser=MagicMock(),
-        inferrer=MagicMock(),
-        entity_sampler=lambda _s: [],
+        relate=_relate_deps(),
     )
 
     call_times: list[float] = []
@@ -416,8 +420,7 @@ def test_handle_batch_logs_and_continues_on_error(tmp_path: Path) -> None:
         hasher=hasher,
         embedder=MagicMock(),
         summariser=MagicMock(),
-        inferrer=MagicMock(),
-        entity_sampler=lambda _s: [],
+        relate=_relate_deps(),
     )
 
     results = []
@@ -565,8 +568,7 @@ def test_run_daemon_loop_continues_after_handle_batch_raises(tmp_path: Path) -> 
         hasher=MagicMock(),
         embedder=MagicMock(),
         summariser=MagicMock(),
-        inferrer=MagicMock(),
-        entity_sampler=lambda _s: [],
+        relate=_relate_deps(),
     )
     cfg = DaemonConfig(corpora=[entry], debounce_seconds=0.01, poll_interval_seconds=0.01)
 
@@ -667,8 +669,7 @@ def test_handle_batch_saves_checkpoint_before_processing(tmp_path: Path) -> None
         hasher=FileHasher(),
         embedder=MagicMock(),
         summariser=MagicMock(),
-        inferrer=MagicMock(),
-        entity_sampler=lambda _s: [],
+        relate=_relate_deps(),
     )
     ckpt_store = MagicMock(spec=CheckpointStore)
     call_order: list[str] = []
@@ -713,8 +714,7 @@ def test_handle_batch_clears_checkpoint_after_batch_completes(tmp_path: Path) ->
         hasher=FileHasher(),
         embedder=MagicMock(),
         summariser=MagicMock(),
-        inferrer=MagicMock(),
-        entity_sampler=lambda _s: [],
+        relate=_relate_deps(),
     )
     ckpt_store = MagicMock(spec=CheckpointStore)
 
@@ -757,8 +757,7 @@ def _make_section_entry(tmp_path: Path):  # type: ignore[no-untyped-def]
         hasher=MagicMock(),
         embedder=MagicMock(),
         summariser=MagicMock(),
-        inferrer=MagicMock(),
-        entity_sampler=lambda _s: [],
+        relate=_relate_deps(),
     )
 
 
@@ -985,8 +984,7 @@ def test_sweep_file_granular_enqueues_changed_file(tmp_path: Path) -> None:
         hasher=hasher,
         embedder=MagicMock(),
         summariser=MagicMock(),
-        inferrer=MagicMock(),
-        entity_sampler=lambda _s: [],
+        relate=_relate_deps(),
     )
     unit = SweepWorkUnit(path=str(f), sections=[])
     relay: queue.Queue[Path] = queue.Queue()
@@ -1011,8 +1009,7 @@ def test_handle_batch_does_not_clear_checkpoint_on_error(tmp_path: Path) -> None
         hasher=FileHasher(),
         embedder=MagicMock(),
         summariser=MagicMock(),
-        inferrer=MagicMock(),
-        entity_sampler=lambda _s: [],
+        relate=_relate_deps(),
     )
     ckpt_store = MagicMock(spec=CheckpointStore)
 

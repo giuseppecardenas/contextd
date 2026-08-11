@@ -238,9 +238,9 @@ def test_build_pipeline_deps_no_overrides_is_noop(
     # No overrides → edge_aliases stays empty.
     from contextd.inference.relate import RelationshipInferrer
 
-    assert isinstance(deps.inferrer, RelationshipInferrer)
+    assert isinstance(deps.relate.inferrer, RelationshipInferrer)
     # Access the ontology stored on the inferrer's attribute.
-    ontology = deps.inferrer._onto  # type: ignore[attr-defined]
+    ontology = deps.relate.inferrer._onto  # type: ignore[attr-defined]
     assert dict(ontology.edge_aliases) == {}
 
 
@@ -281,7 +281,7 @@ def test_build_pipeline_deps_resolves_relative_overrides_path(
     ):
         deps = _build_pipeline_deps(cfg, corpus_cfg, "docs", corpus_toml)
 
-    ontology = deps.inferrer._onto  # type: ignore[attr-defined]
+    ontology = deps.relate.inferrer._onto  # type: ignore[attr-defined]
     assert dict(ontology.edge_aliases) == {"CITES": "REFERENCES"}
 
 
@@ -324,7 +324,7 @@ def test_build_pipeline_deps_absolute_overrides_path_respected(
     ):
         deps = _build_pipeline_deps(cfg, corpus_cfg, "docs", corpus_toml)
 
-    ontology = deps.inferrer._onto  # type: ignore[attr-defined]
+    ontology = deps.relate.inferrer._onto  # type: ignore[attr-defined]
     assert dict(ontology.edge_aliases) == {"CONSUMES": "USES"}
 
 
@@ -377,7 +377,7 @@ def test_build_pipeline_deps_stacks_node_and_edge_aliases(
     ):
         deps = _build_pipeline_deps(cfg, corpus_cfg, "docs", corpus_toml)
 
-    ontology = deps.inferrer._onto  # type: ignore[attr-defined]
+    ontology = deps.relate.inferrer._onto  # type: ignore[attr-defined]
     # Node alias preserved.
     assert ontology.resolve_alias("Registry") == "Pattern"
     # Edge alias from overrides applied.

@@ -18,13 +18,26 @@ from unittest.mock import MagicMock
 from contextd._paths import canonical_path
 from contextd.corpus_config import CorpusConfig
 from contextd.indexer.phases import (
+    RelateDeps,
     phase_relate,
     phase_relate_sections,
     phase_summarise,
     phase_summarise_sections,
 )
 from contextd.indexer.pipeline import _wipe_for_refresh
+from contextd.inference.context import EmptyRetriever
 from contextd.inference.summarise import FileSummary
+
+
+def _relate_deps(inferrer: MagicMock | None = None) -> RelateDeps:
+    if inferrer is None:
+        inferrer = MagicMock()
+        inferrer.infer.return_value = []
+    return RelateDeps(inferrer=inferrer, retriever=EmptyRetriever())
+
+
+def _corpus_cfg(tmp_path: Path, name: str) -> CorpusConfig:
+    return CorpusConfig.model_validate({"corpus": {"name": name, "root": str(tmp_path)}})
 
 
 def _make_files(tmp_path: Path, n: int, suffix: str = ".txt") -> list[Path]:
@@ -170,7 +183,7 @@ def test_phase_relate_sections_read_query_filters_path_null_stubs(
     store = MagicMock()
     store.exec_read.return_value = []
     inferrer = MagicMock()
-    phase_relate_sections(corpus, inferrer, store, entity_sampler=lambda _s: [])
+    phase_relate_sections(corpus, _relate_deps(inferrer), store)
     called_cypher = store.exec_read.call_args.args[0]
     assert "s.path IS NOT NULL" in called_cypher
 
@@ -185,7 +198,9 @@ def test_phase_relate_skips_files_with_inferred_at(tmp_path: Path) -> None:
     store = MagicMock()
     store.exec_read.return_value = [{"path": canonical_path(files[1])}]  # one already done
 
-    result = phase_relate(files, inferrer, store, entity_sampler=lambda _s: [], corpus="c")
+    result = phase_relate(
+        files, _relate_deps(inferrer), store, corpus_cfg=_corpus_cfg(tmp_path, "c")
+    )
 
     assert result.processed == 3
     assert inferrer.infer.call_count == 3
@@ -198,7 +213,7 @@ def test_phase_relate_sets_inferred_at_after_successful_upsert(tmp_path: Path) -
     store = MagicMock()
     store.exec_read.return_value = []  # none already processed
 
-    phase_relate(files, inferrer, store, entity_sampler=lambda _s: [], corpus="c")
+    phase_relate(files, _relate_deps(inferrer), store, corpus_cfg=_corpus_cfg(tmp_path, "c"))
 
     # Find the exec_write that set inferred_at.
     marker_calls = [c for c in store.exec_write.call_args_list if "SET f.inferred_at" in c.args[0]]
@@ -232,7 +247,7 @@ def test_phase_relate_tags_auto_created_targets_with_corpus(tmp_path: Path) -> N
     store = MagicMock()
     store.exec_read.return_value = []
 
-    phase_relate(files, inferrer, store, entity_sampler=lambda _s: [], corpus="acme")
+    phase_relate(files, _relate_deps(inferrer), store, corpus_cfg=_corpus_cfg(tmp_path, "acme"))
 
     # The upsert_node call for the auto-created target must include corpus.
     target_upserts = [
@@ -267,7 +282,7 @@ def test_phase_relate_sections_tags_auto_created_targets_with_corpus(tmp_path: P
     store = MagicMock()
     store.exec_read.return_value = rows
 
-    phase_relate_sections(corpus, inferrer, store, entity_sampler=lambda _s: [])
+    phase_relate_sections(corpus, _relate_deps(inferrer), store)
 
     target_upserts = [
         c
@@ -285,7 +300,9 @@ def test_phase_relate_does_not_set_marker_on_llm_error(tmp_path: Path) -> None:
     store = MagicMock()
     store.exec_read.return_value = []
 
-    result = phase_relate(files, inferrer, store, entity_sampler=lambda _s: [], corpus="c")
+    result = phase_relate(
+        files, _relate_deps(inferrer), store, corpus_cfg=_corpus_cfg(tmp_path, "c")
+    )
 
     assert result.processed == 0
     assert result.skipped == 1
@@ -303,7 +320,7 @@ def test_phase_relate_sections_read_query_filters_on_inferred_at(tmp_path: Path)
     store = MagicMock()
     store.exec_read.return_value = rows
 
-    phase_relate_sections(corpus, inferrer, store, entity_sampler=lambda _s: [])
+    phase_relate_sections(corpus, _relate_deps(inferrer), store)
 
     called_cypher = store.exec_read.call_args.args[0]
     assert "s.inferred_at IS NULL" in called_cypher
@@ -316,7 +333,7 @@ def test_phase_relate_sections_sets_marker_on_zero_edges(tmp_path: Path) -> None
     store = MagicMock()
     store.exec_read.return_value = rows
 
-    phase_relate_sections(corpus, inferrer, store, entity_sampler=lambda _s: [])
+    phase_relate_sections(corpus, _relate_deps(inferrer), store)
 
     marker_calls = [c for c in store.exec_write.call_args_list if "SET s.inferred_at" in c.args[0]]
     assert len(marker_calls) == 1
@@ -400,9 +417,8 @@ def test_run_bootstrap_applies_refresh_when_set() -> None:
         store=store,
         embedder=MagicMock(),
         summariser=MagicMock(),
-        inferrer=MagicMock(),
+        relate=_relate_deps(),
         hasher=MagicMock(),
-        entity_sampler=lambda _s: [],
         refresh="inferred",
     )
     # At least one exec_write from _wipe_for_refresh must have landed.

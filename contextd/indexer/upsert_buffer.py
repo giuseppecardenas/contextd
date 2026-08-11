@@ -96,8 +96,7 @@ class PendingUpsertBuffer:
                     entry.hasher,
                     entry.embedder,
                     entry.summariser,
-                    entry.inferrer,
-                    entry.entity_sampler,
+                    entry.relate,
                     inference_concurrency=inference_concurrency,
                 )
                 succeeded += 1

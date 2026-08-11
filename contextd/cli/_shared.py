@@ -20,7 +20,7 @@ from contextd._paths import contextd_home
 if TYPE_CHECKING:
     from contextd.config import Config
     from contextd.indexer.hasher import FileHasher
-    from contextd.inference.relate import RelationshipInferrer
+    from contextd.indexer.phases import RelateDeps
     from contextd.inference.summarise import Summariser
     from contextd.providers.base import EmbeddingProvider
     from contextd.storage.base import GraphStore
@@ -49,7 +49,7 @@ class PipelineDeps:
     """
 
     summariser: Summariser
-    inferrer: RelationshipInferrer
+    relate: RelateDeps
     hasher: FileHasher
     embedder: EmbeddingProvider
     store: GraphStore

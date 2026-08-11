@@ -21,11 +21,20 @@ import pytest
 
 from contextd.corpus_config import CorpusConfig
 from contextd.indexer.phases import (
+    RelateDeps,
     phase_relate,
     phase_relate_sections,
     phase_summarise,
     phase_summarise_sections,
 )
+from contextd.inference.context import EmptyRetriever
+
+
+def _relate_deps(inferrer: MagicMock | None = None) -> RelateDeps:
+    if inferrer is None:
+        inferrer = MagicMock()
+        inferrer.infer.return_value = []
+    return RelateDeps(inferrer=inferrer, retriever=EmptyRetriever())
 
 
 def _file(tmp_path: Path, name: str = "a.md") -> Path:
@@ -73,7 +82,9 @@ def test_relate_failure_is_logged_and_marker_left_unset(
     store.exec_read.return_value = []
 
     with caplog.at_level(logging.WARNING, logger="contextd.indexer.phases"):
-        result = phase_relate([f], inferrer, store, entity_sampler=lambda _s: [], corpus="c")
+        result = phase_relate(
+            [f], _relate_deps(inferrer), store, corpus_cfg=_section_corpus(tmp_path)
+        )
 
     assert result.skipped == 1
     assert str(f) in caplog.text
@@ -111,9 +122,7 @@ def test_relate_sections_failure_is_logged(
     store.exec_read.return_value = [{"id": f"{f}#heading-one", "path": str(f)}]
 
     with caplog.at_level(logging.WARNING, logger="contextd.indexer.phases"):
-        result = phase_relate_sections(
-            _section_corpus(tmp_path), inferrer, store, entity_sampler=lambda _s: []
-        )
+        result = phase_relate_sections(_section_corpus(tmp_path), _relate_deps(inferrer), store)
 
     assert result.skipped == 1
     assert "connection reset" in caplog.text
