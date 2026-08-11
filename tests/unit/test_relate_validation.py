@@ -110,6 +110,71 @@ def test_each_drop_path_logs_reason(
     assert expected_fragment in caplog.text
 
 
+# --- gleaning -----------------------------------------------------------------
+
+
+def _gleaning_inferrer(responses: list[str], rounds: int) -> tuple[RelationshipInferrer, MagicMock]:
+    provider = MagicMock()
+    provider.generate.side_effect = responses
+    renderer = MagicMock()
+    renderer.render.return_value = "prompt"
+    inferrer = RelationshipInferrer(
+        provider=provider,
+        renderer=renderer,
+        ontology=Ontology.load_base(),
+        gleaning_rounds=rounds,
+    )
+    return inferrer, renderer
+
+
+def test_gleaning_round_adds_novel_rows_and_dedupes_reemitted() -> None:
+    first = json.dumps({"relationships": [_row(target_name="alpha")]})
+    glean = json.dumps({"relationships": [_row(target_name="alpha"), _row(target_name="beta")]})
+    inferrer, renderer = _gleaning_inferrer([first, glean], rounds=1)
+
+    rels = inferrer.infer("content")
+
+    assert [r.target_name for r in rels] == ["alpha", "beta"]
+    glean_call = renderer.render.call_args_list[1]
+    assert glean_call.args == ("relate_glean",)
+    assert "alpha" in glean_call.kwargs["previous_relationships"]
+
+
+def test_gleaning_zero_rounds_is_single_call() -> None:
+    first = json.dumps({"relationships": [_row()]})
+    inferrer, renderer = _gleaning_inferrer([first], rounds=0)
+    rels = inferrer.infer("content")
+    assert len(rels) == 1
+    assert renderer.render.call_count == 1
+
+
+def test_gleaning_early_exits_when_round_adds_nothing() -> None:
+    first = json.dumps({"relationships": [_row(target_name="alpha")]})
+    empty_glean = json.dumps({"relationships": [_row(target_name="alpha")]})
+    inferrer, renderer = _gleaning_inferrer([first, empty_glean, "UNUSED"], rounds=3)
+    rels = inferrer.infer("content")
+    assert len(rels) == 1
+    assert renderer.render.call_count == 2  # initial + one glean, then early exit
+
+
+def test_gleaning_failure_keeps_first_pass(caplog: pytest.LogCaptureFixture) -> None:
+    first = json.dumps({"relationships": [_row(target_name="alpha")]})
+    inferrer, _ = _gleaning_inferrer([first, "not json at all {{{", "also bad"], rounds=2)
+    with caplog.at_level(logging.WARNING, logger="contextd.inference.relate"):
+        rels = inferrer.infer("content")
+    assert [r.target_name for r in rels] == ["alpha"]
+    assert "glean round 1 failed" in caplog.text
+
+
+def test_gleaning_dedupe_is_case_sensitive() -> None:
+    first = json.dumps({"relationships": [_row(target_name="Alpha")]})
+    glean = json.dumps({"relationships": [_row(target_name="alpha")]})
+    inferrer, _ = _gleaning_inferrer([first, glean], rounds=1)
+    rels = inferrer.infer("content")
+    # Case variants both survive here; casefold merging is the cascade's job.
+    assert [r.target_name for r in rels] == ["Alpha", "alpha"]
+
+
 # --- guards in _apply_inferred_edge ------------------------------------------
 
 

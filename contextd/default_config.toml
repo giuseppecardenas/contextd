@@ -62,6 +62,9 @@ cpu_limit = 1.0
 
 [inference]
 summary_max_words = 100
+# Extra "what did you miss?" relate passes per unit. Proven recall lever
+# (Microsoft GraphRAG); roughly doubles relate input spend at 1. 0 opts out.
+relate_gleaning_rounds = 1
 
 [indexer]
 inference_concurrency = 8  # parallel inference calls per phase; higher uses more provider RPM

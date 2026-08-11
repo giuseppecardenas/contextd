@@ -181,10 +181,13 @@ class RelationshipInferrer:
         provider: InferenceProvider,
         renderer: PromptRenderer,
         ontology: Ontology,
+        *,
+        gleaning_rounds: int = 0,
     ) -> None:
         self._provider = provider
         self._renderer = renderer
         self._onto = ontology
+        self._gleaning_rounds = gleaning_rounds
 
     def _target_property_schema(self) -> str:
         """Render the per-type content-property guidance for the relate prompt.
@@ -240,19 +243,76 @@ class RelationshipInferrer:
         target_labels = self._onto.inference_target_labels()
         advertised_node_types = target_labels | set(self._onto.aliases)
         bundle = candidates if candidates is not None else CandidateBundle.empty()
-        prompt = self._renderer.render(
-            "relate",
-            content=content,
-            candidate_context=bundle.render(),
-            allowed_edge_types=", ".join(sorted(emittable_edge_types)),
-            allowed_node_types=", ".join(sorted(advertised_node_types)),
-            target_property_schema=self._target_property_schema(),
+        shared_vars: dict[str, str] = {
+            "content": content,
+            "candidate_context": bundle.render(),
+            "allowed_edge_types": ", ".join(sorted(emittable_edge_types)),
+            "allowed_node_types": ", ".join(sorted(advertised_node_types)),
+            "target_property_schema": self._target_property_schema(),
             **identity_vars(identity),
-        )
+        }
+        prompt = self._renderer.render("relate", **shared_vars)
         response = self._provider.generate(
             PromptRequest(system="", prompt=prompt, call_site="inference")
         )
-        data = loads_json_body(response)
+        valid = self._validate_rows(loads_json_body(response), emittable_edge_types, target_labels)
+        self._glean(valid, shared_vars, emittable_edge_types, target_labels)
+        return valid
+
+    def _glean(
+        self,
+        valid: list[InferredRelationship],
+        shared_vars: dict[str, str],
+        emittable_edge_types: frozenset[str],
+        target_labels: frozenset[str],
+    ) -> None:
+        """Extra "what did you miss?" extraction passes (Microsoft-GraphRAG
+        gleaning). Each round re-sends the content plus the prior rows and
+        keeps only novel triples; a round that adds nothing ends the loop
+        early, and a malformed glean response loses only that round's rows.
+
+        Dedupe key is exact case-sensitive (edge, target_type, name.strip()) —
+        casefold merging belongs to the resolution cascade, which sees these
+        rows later; merging here would collapse distinct code symbols.
+        """
+        seen = {(r.edge_type, r.target_type, r.target_name.strip()) for r in valid}
+        for round_no in range(self._gleaning_rounds):
+            previous = (
+                "\n".join(f"{r.edge_type} -> {r.target_type}: {r.target_name}" for r in valid)
+                or "(none)"
+            )
+            try:
+                glean_prompt = self._renderer.render(
+                    "relate_glean", previous_relationships=previous, **shared_vars
+                )
+                glean_response = self._provider.generate(
+                    PromptRequest(system="", prompt=glean_prompt, call_site="inference")
+                )
+                rows = self._validate_rows(
+                    loads_json_body(glean_response), emittable_edge_types, target_labels
+                )
+            except Exception as exc:
+                _log.warning(
+                    "relate glean round %d failed: %s: %s; keeping prior rounds",
+                    round_no + 1,
+                    type(exc).__name__,
+                    exc,
+                )
+                return
+            fresh = [
+                r for r in rows if (r.edge_type, r.target_type, r.target_name.strip()) not in seen
+            ]
+            if not fresh:
+                return
+            valid.extend(fresh)
+            seen.update((r.edge_type, r.target_type, r.target_name.strip()) for r in fresh)
+
+    def _validate_rows(
+        self,
+        data: dict[str, Any],
+        emittable_edge_types: frozenset[str],
+        target_labels: frozenset[str],
+    ) -> list[InferredRelationship]:
         valid: list[InferredRelationship] = []
         relationships = data.get("relationships")
         if not isinstance(relationships, list):

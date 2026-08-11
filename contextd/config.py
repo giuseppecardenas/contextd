@@ -127,6 +127,10 @@ class StorageConfig(BaseModel):
 class InferenceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     summary_max_words: int = 100
+    relate_gleaning_rounds: int = Field(default=1, ge=0, le=5)
+    """Extra "what did you miss?" relate passes per unit (Microsoft-GraphRAG
+    gleaning). Each round re-sends the unit's content, roughly doubling relate
+    input spend at 1; set 0 to opt out."""
 
 
 class IndexerConfig(BaseModel):

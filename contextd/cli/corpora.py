@@ -377,7 +377,12 @@ def _build_pipeline_deps(
             router=router,
         ),
         relate=RelateDeps(
-            inferrer=RelationshipInferrer(inference_provider, renderer, ontology),
+            inferrer=RelationshipInferrer(
+                inference_provider,
+                renderer,
+                ontology,
+                gleaning_rounds=cfg.inference.relate_gleaning_rounds,
+            ),
             retriever=GraphCandidateRetriever(ontology),
             resolver=EntityCascadeResolver(store, settings, embed=embedding_provider.embed),
             settings=settings,
