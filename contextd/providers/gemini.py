@@ -66,10 +66,14 @@ class GeminiProvider(InferenceProvider):
             if request.call_site == "translation"
             else None
         )
+        # Low temperature suits the JSON-extraction call sites; translation
+        # keeps the model default (mirrors the thinking-config carve-out).
+        temperature = self._cfg.temperature if request.call_site != "translation" else None
         config = genai_types.GenerateContentConfig(
             system_instruction=request.system,
             safety_settings=safety,
             thinking_config=thinking_config,
+            temperature=temperature,
         )
 
         attempt = 0

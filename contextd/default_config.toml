@@ -28,6 +28,8 @@ model_translation = "qwen2.5:14b-instruct"
 max_retries = 5
 request_timeout_seconds = 120.0
 json_mode = true
+# temperature = 0.2  # recommended for JSON extraction; unset = server default
+#                    # (applies to summary/inference; translation keeps default)
 
 [providers.voyage]
 model = "voyage-4-large"

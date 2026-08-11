@@ -133,6 +133,38 @@ def test_generate_omits_response_format_for_translation_call_site(
     assert "response_format" not in client.post.call_args.kwargs["json"]
 
 
+def test_generate_sends_temperature_for_json_call_sites(cfg: OpenAICompatConfig) -> None:
+    cfg_with_temp = cfg.model_copy(update={"temperature": 0.2})
+    client = _mock_client()
+    provider = OpenAICompatProvider(cfg_with_temp, client=client)
+    for site in ("summary", "inference"):
+        client.post.reset_mock()
+        provider.generate(PromptRequest(system="s", prompt="p", call_site=site))  # type: ignore[arg-type]
+        assert client.post.call_args.kwargs["json"]["temperature"] == 0.2
+
+
+def test_generate_omits_temperature_for_translation_and_when_unset(
+    cfg: OpenAICompatConfig,
+) -> None:
+    client = _mock_client()
+    provider = OpenAICompatProvider(cfg.model_copy(update={"temperature": 0.2}), client=client)
+    provider.generate(PromptRequest(system="s", prompt="p", call_site="translation"))
+    assert "temperature" not in client.post.call_args.kwargs["json"]
+    client.post.reset_mock()
+    provider = OpenAICompatProvider(cfg, client=client)  # unset temperature
+    provider.generate(PromptRequest(system="s", prompt="p", call_site="summary"))
+    assert "temperature" not in client.post.call_args.kwargs["json"]
+
+
+def test_temperature_bounds_rejected() -> None:
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError):
+        OpenAICompatConfig(temperature=2.5)
+    with pytest.raises(pydantic.ValidationError):
+        OpenAICompatConfig(temperature=-0.1)
+
+
 def test_generate_retries_on_500_then_succeeds(cfg: OpenAICompatConfig) -> None:
     client = _mock_client(
         side_effect=[_http_response(500), _http_response(200)],

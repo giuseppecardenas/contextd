@@ -74,6 +74,11 @@ class OpenAICompatProvider(InferenceProvider):
         if self._cfg.json_mode and request.call_site != "translation":
             body["response_format"] = {"type": "json_object"}
 
+        # Low temperature suits the JSON-extraction call sites; translation
+        # keeps the server default (mirrors the json_mode carve-out above).
+        if self._cfg.temperature is not None and request.call_site != "translation":
+            body["temperature"] = self._cfg.temperature
+
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if self._api_key is not None:
             headers["Authorization"] = f"Bearer {self._api_key}"

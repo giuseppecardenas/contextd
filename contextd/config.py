@@ -32,6 +32,10 @@ class GeminiConfig(BaseModel):
     max_retries: int = 5
     safety_block: SafetyBlock = "BLOCK_NONE"
     daily_budget: str | int = "unlimited"
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    """Sampling temperature for summary/inference calls (translation keeps
+    the provider default). Unset = provider default; ~0.2 recommended for
+    JSON extraction."""
 
 
 class VoyageConfig(BaseModel):
@@ -83,6 +87,10 @@ class OpenAICompatConfig(BaseModel):
     request_timeout_seconds: float = Field(default=120.0, gt=0)
     json_mode: bool = True
     max_output_tokens: int | None = Field(default=None, ge=1)
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    """Sampling temperature for summary/inference calls (translation keeps
+    the server default). Unset = server default; ~0.2 recommended for JSON
+    extraction."""
 
 
 class ProvidersConfig(BaseModel):
