@@ -20,3 +20,6 @@ build/
 # Superpowers subagent-driven-development scratch plans.
 .claude/
 docs/superpowers/
+
+# Local investigation notes (not published with the repo).
+docs/investigations/
