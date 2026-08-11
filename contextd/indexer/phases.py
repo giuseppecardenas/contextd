@@ -49,6 +49,7 @@ from contextd.indexer.lexical import LexicalReference, LexicalRegistry
 from contextd.indexer.resolution import EntityCascadeResolver, Resolution, ResolutionSettings
 from contextd.indexer.units import ParseCache, extractor_for, own_prose
 from contextd.inference.context import CandidateRetriever, UnitIdentity
+from contextd.inference.merge import DescriptionMerger
 from contextd.inference.relate import InferredRelationship, RelationshipInferrer
 from contextd.inference.summarise import Summariser
 from contextd.ontology.schema import ENUMERATION_OWNED_LABELS, NON_ENTITY_LABELS, Ontology
@@ -90,6 +91,7 @@ class RelateDeps:
     resolver: EntityCascadeResolver | None = None
     settings: ResolutionSettings | None = None
     lexical: LexicalRegistry | None = None
+    merger: DescriptionMerger | None = None
 
 
 def _extract_lexical(
@@ -401,6 +403,59 @@ def phase_relate(
 
     processed, skipped = _parallel_map(files, _worker, concurrency)
     return PhaseResult(name="relate", processed=processed, skipped=skipped)
+
+
+def phase_merge_descriptions(
+    corpus_cfg: CorpusConfig,
+    relate: RelateDeps,
+    store: GraphStore,
+) -> PhaseResult:
+    """Synthesise entity descriptions whose fragment lists crossed threshold.
+
+    Batch backstop of the merge-summarize wheel: entities with >= 6
+    accumulated ``description_fragments`` get one LLM merge call; the merged
+    text becomes ``description`` and the fragment list resets to the single
+    merged entry (bounded growth). Runs after relate, before close, in
+    bootstrap only — the daemon's next bootstrap/sweep picks up incremental
+    accumulation. Failures leave fragments intact for retry next pass.
+    """
+    if relate.merger is None:
+        return PhaseResult(name="merge_descriptions", processed=0, skipped=0)
+    processed = skipped = 0
+    for label in sorted(_BASE_ONTOLOGY.mintable_labels()):
+        pk = primary_key_for(label)
+        if pk == "description":  # Risk: PK is the description; never rewritten
+            continue
+        try:
+            rows = store.exec_read(
+                f"MATCH (n:{label} {{corpus: $c}}) "
+                "WHERE size(coalesce(n.description_fragments, [])) >= 6 "
+                f"RETURN n.{pk} AS name, n.description_fragments AS fragments",
+                {"c": corpus_cfg.corpus.name},
+            )
+        except Exception as exc:
+            _log.warning("merge_descriptions: query failed for %s: %s", label, exc)
+            continue
+        for r in rows:
+            try:
+                merged = relate.merger.merge(str(r["name"]), label, list(r["fragments"]))
+            except Exception as exc:
+                _log.warning(
+                    "merge_descriptions failed for %s %.80r: %s: %s; fragments kept",
+                    label,
+                    r["name"],
+                    type(exc).__name__,
+                    exc,
+                )
+                skipped += 1
+                continue
+            store.exec_write(
+                f"MATCH (n:{label}) WHERE n.{pk} = $v "
+                "SET n.description = $d, n.description_fragments = [$d]",
+                {"v": r["name"], "d": merged},
+            )
+            processed += 1
+    return PhaseResult(name="merge_descriptions", processed=processed, skipped=skipped)
 
 
 def phase_close(
@@ -1399,10 +1454,32 @@ def _apply_inferred_edge(
             props["name_norm"] = resolution.norm
             if resolution.vector is not None:
                 props["embedding"] = resolution.vector
-        for key, value in rel.target_properties.items():
-            if key != pk:
-                props[key] = value
+        content_props = {k: v for k, v in rel.target_properties.items() if k != pk}
+        # Merge-summarize wheel: on a MATCHED entity, a model-supplied
+        # description becomes an accumulated fragment instead of a direct
+        # overwrite — later mentions must never clobber `description`, and the
+        # fragment list is what phase_merge_descriptions synthesises. Risk is
+        # excluded structurally (its PK *is* description, filtered above).
+        fragment: str | None = None
+        if resolution is not None and resolution.action == "matched":
+            desc = content_props.pop("description", None)
+            if isinstance(desc, str) and desc:
+                fragment = desc
+        props.update(content_props)
         store.upsert_node(rel.target_type, props)
+        if fragment is not None:
+            store.exec_write(
+                # Distinct-append with a hard cap: past 12 fragments the
+                # entity's description is rich enough that more adds noise.
+                f"MATCH (n:{rel.target_type}) WHERE n.{pk} = $v "
+                "SET n.description_fragments = CASE "
+                "WHEN $frag IN coalesce(n.description_fragments, []) "
+                "THEN n.description_fragments "
+                "WHEN size(coalesce(n.description_fragments, [])) >= 12 "
+                "THEN n.description_fragments "
+                "ELSE coalesce(n.description_fragments, []) + [$frag] END",
+                {"v": target_value, "frag": fragment},
+            )
     store.upsert_edge(
         src_id,
         target_value,

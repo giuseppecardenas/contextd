@@ -107,6 +107,8 @@ _SYSTEM_PROPS: frozenset[str] = frozenset(
         "root",
         "content_profile",
         "embedding",
+        "name_norm",
+        "description_fragments",
         "summary",
         "key_points",
         "summary_generated_at",

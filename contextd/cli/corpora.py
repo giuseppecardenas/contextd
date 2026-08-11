@@ -285,6 +285,7 @@ def _build_pipeline_deps(
     from contextd.indexer.lexical import LexicalRegistry
     from contextd.indexer.phases import RelateDeps
     from contextd.indexer.resolution import EntityCascadeResolver, ResolutionSettings
+    from contextd.inference.merge import DescriptionMerger
     from contextd.inference.prompts import PromptRenderer
     from contextd.inference.relate import RelationshipInferrer
     from contextd.inference.routing import PromptRoute, SummaryPromptRouter
@@ -387,6 +388,7 @@ def _build_pipeline_deps(
             resolver=EntityCascadeResolver(store, settings, embed=embedding_provider.embed),
             settings=settings,
             lexical=LexicalRegistry(ontology, corpus_cfg.lexical.patterns),
+            merger=DescriptionMerger(inference_provider),
         ),
         hasher=FileHasher(state_path=contextd_home() / "state" / f"{corpus_name}-index-state.json"),
         embedder=embedding_provider,

@@ -451,6 +451,7 @@ def run_bootstrap(
                 )
             )
 
+        results.append(phases.phase_merge_descriptions(corpus, relate, store))
         results.append(phases.phase_close(corpus.corpus.name, store, results))
     else:
         # File-granular path (default, spec §5.9).
@@ -473,5 +474,6 @@ def run_bootstrap(
                 concurrency=inference_concurrency,
             )
         )
+        results.append(phases.phase_merge_descriptions(corpus, relate, store))
         results.append(phases.phase_close(corpus.corpus.name, store, results))
     return BootstrapResult(phases=results)

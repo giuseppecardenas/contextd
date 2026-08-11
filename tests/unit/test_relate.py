@@ -260,7 +260,7 @@ def test_prompt_receives_per_type_property_schema() -> None:
     inferrer = RelationshipInferrer(mock_provider, mock_renderer, ontology)
     inferrer.infer("content")
     schema = mock_renderer.render.call_args.kwargs["target_property_schema"]
-    assert "Ticket: status, title" in schema
+    assert "Ticket: description, status, title" in schema
     assert "File:" not in schema
     assert "Section:" not in schema
 
