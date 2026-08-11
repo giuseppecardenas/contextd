@@ -132,6 +132,15 @@ def _add_corpus_from_template(
         raw["summarization"]["prompt_override"] = _rewrite_template_path(
             str(raw["summarization"]["prompt_override"]), anchor
         )
+    if "summarization" in raw and "overrides" in raw["summarization"]:
+        raw["summarization"]["overrides"] = {
+            pattern: (
+                value
+                if str(value).startswith("builtin:")
+                else _rewrite_template_path(str(value), anchor)
+            )
+            for pattern, value in raw["summarization"]["overrides"].items()
+        }
     if "mcp" in raw and "tools" in raw["mcp"]:
         raw["mcp"]["tools"] = {
             k: _rewrite_template_path(str(v), anchor) for k, v in raw["mcp"]["tools"].items()
@@ -278,6 +287,7 @@ def _build_pipeline_deps(
     from contextd.indexer.resolution import EntityCascadeResolver, ResolutionSettings
     from contextd.inference.prompts import PromptRenderer
     from contextd.inference.relate import RelationshipInferrer
+    from contextd.inference.routing import PromptRoute, SummaryPromptRouter
     from contextd.inference.summarise import Summariser
     from contextd.ontology.overrides import OntologyOverridesError, apply_overrides
     from contextd.ontology.schema import Ontology, OntologyError
@@ -320,6 +330,34 @@ def _build_pipeline_deps(
                 f"summarization.prompt_override file is not valid UTF-8: {resolved_prompt} ({exc})"
             ) from exc
         prompt_path = resolved_prompt
+    routes: list[PromptRoute] = []
+    for pattern, value in corpus_cfg.summarization.overrides.items():
+        if value.startswith("builtin:"):
+            # Packaged template, resolved through the same user-overridable
+            # prompts dir as everything else the renderer serves.
+            route_path = contextd_home() / "prompts" / f"{value.removeprefix('builtin:')}.md"
+        else:
+            route_path = Path(value)
+            if not route_path.is_absolute():
+                route_path = corpus_toml_path.parent / route_path
+            route_path = route_path.resolve()
+        if not route_path.exists():
+            raise click.ClickException(
+                f"summarization.overrides[{pattern!r}] template not found: {route_path}"
+            )
+        try:
+            route_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise click.ClickException(
+                f"summarization.overrides[{pattern!r}] template not readable: {route_path} ({exc})"
+            ) from exc
+        except UnicodeDecodeError as exc:
+            raise click.ClickException(
+                f"summarization.overrides[{pattern!r}] template is not valid UTF-8: "
+                f"{route_path} ({exc})"
+            ) from exc
+        routes.append(PromptRoute(pattern=pattern, path=route_path))
+    router = SummaryPromptRouter(routes) if routes else None
     store = build_graph_store(cfg)
     res = corpus_cfg.resolution
     settings = ResolutionSettings(
@@ -332,7 +370,11 @@ def _build_pipeline_deps(
     )
     return PipelineDeps(
         summariser=Summariser(
-            inference_provider, renderer, max_words=max_words, prompt_path=prompt_path
+            inference_provider,
+            renderer,
+            max_words=max_words,
+            prompt_path=prompt_path,
+            router=router,
         ),
         relate=RelateDeps(
             inferrer=RelationshipInferrer(inference_provider, renderer, ontology),

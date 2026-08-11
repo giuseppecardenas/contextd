@@ -56,6 +56,12 @@ class McpSection(BaseModel):
 class SummarizationSection(BaseModel):
     model_config = ConfigDict(extra="forbid")
     prompt_override: str | None = None
+    overrides: dict[str, str] = Field(default_factory=dict)
+    """Per-suffix prompt routing: glob (against corpus-root-relative posix
+    path, first match in declaration order wins) → template path relative to
+    the corpus TOML, or ``builtin:<name>`` for a packaged template copied to
+    ``~/.contextd/prompts/<name>.md``. Falls back to ``prompt_override``,
+    then the packaged default."""
     max_words: int | None = None
     """Per-corpus override of the global [inference] summary_max_words.
 

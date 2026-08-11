@@ -8,6 +8,7 @@ from pathlib import Path
 from contextd.inference._json_body import loads_json_body
 from contextd.inference.context import UnitIdentity, identity_vars
 from contextd.inference.prompts import PromptRenderer
+from contextd.inference.routing import SummaryPromptRouter
 from contextd.providers.base import InferenceProvider, PromptRequest
 
 
@@ -38,6 +39,7 @@ class Summariser:
         *,
         max_words: int = 100,
         prompt_path: Path | None = None,
+        router: SummaryPromptRouter | None = None,
     ) -> None:
         """Wire provider + renderer + config for per-file summarisation.
 
@@ -51,20 +53,30 @@ class Summariser:
         self._renderer = renderer
         self._max_words = max_words
         self._prompt_path = prompt_path
+        self._router = router
 
     def summarise(self, content: str, *, context: UnitIdentity | None = None) -> FileSummary:
         """Summarise one unit of content.
 
         ``context`` carries the unit's identity (path, section title, parent
         chain) into the prompt's Source block so the model knows what it is
-        reading; ``None`` renders empty identity fields.
+        reading; ``None`` renders empty identity fields. Template resolution
+        order: per-suffix router (keyed by the unit's relative path) →
+        corpus-wide ``prompt_path`` override → packaged default.
         """
         template_vars = {
             "content": content,
             "max_words": str(self._max_words),
             **identity_vars(context),
         }
-        if self._prompt_path is not None:
+        routed = (
+            self._router.resolve(context.rel_path)
+            if self._router is not None and context is not None
+            else None
+        )
+        if routed is not None:
+            prompt = self._renderer.render_path(routed, **template_vars)
+        elif self._prompt_path is not None:
             prompt = self._renderer.render_path(self._prompt_path, **template_vars)
         else:
             prompt = self._renderer.render("summarise", **template_vars)

@@ -59,8 +59,15 @@ def init(yes: bool) -> None:
         compose_path.write_text(compose, encoding="utf-8")
         console.print(f"[green]✓[/] wrote docker-compose template to {compose_path}")
 
+    # Copy every packaged template (new templates ship automatically);
+    # existing files are left alone so user customisations survive.
     copied = 0
-    for name in ("summarise.md", "relate.md", "translate.md"):
+    packaged = sorted(
+        entry.name
+        for entry in resources.files("contextd.prompts").iterdir()
+        if entry.name.endswith(".md")
+    )
+    for name in packaged:
         dst = home / "prompts" / name
         if not dst.exists():
             src_text = (
@@ -69,7 +76,9 @@ def init(yes: bool) -> None:
             dst.write_text(src_text, encoding="utf-8")
             copied += 1
     if copied:
-        console.print(f"[green]✓[/] prompt templates copied ({copied}/3, overridable)")
+        console.print(
+            f"[green]✓[/] prompt templates copied ({copied}/{len(packaged)}, overridable)"
+        )
     else:
         console.print("[dim]·[/] prompt templates already present")
 
