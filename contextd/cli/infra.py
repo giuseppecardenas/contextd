@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import shutil
 import subprocess
@@ -365,3 +366,35 @@ def status() -> None:
             console.print("[bold]daemon:[/] not running")
             if pid is not None:
                 _pid_path().unlink(missing_ok=True)
+    _report_prompt_drift()
+
+
+def _report_prompt_drift() -> None:
+    """Compare ~/.contextd/prompts against the packaged templates.
+
+    ``contextd init`` copies templates once and never updates them, so a
+    packaged prompt upgrade silently never reaches an existing install — the
+    exact failure mode that left a 3-month-stale relate.md running in
+    production. Provenance is not tracked, so a differing file may be a
+    deliberate customisation OR stale; the wording owns that honestly.
+    """
+    from importlib import resources
+
+    prompts_dir = contextd_home() / "prompts"
+    console.print("[bold]prompts:[/]")
+    for entry in sorted(resources.files("contextd.prompts").iterdir(), key=lambda e: e.name):
+        if not entry.name.endswith(".md"):
+            continue
+        packaged = hashlib.md5(entry.read_text(encoding="utf-8").encode("utf-8")).hexdigest()
+        local_path = prompts_dir / entry.name
+        if not local_path.exists():
+            console.print(f"  - {entry.name}: [yellow]MISSING[/] — run `contextd init`")
+            continue
+        local = hashlib.md5(local_path.read_text(encoding="utf-8").encode("utf-8")).hexdigest()
+        if local == packaged:
+            console.print(f"  - {entry.name}: [dim]matches packaged[/]")
+        else:
+            console.print(
+                f"  - {entry.name}: [yellow]differs from packaged[/] "
+                "(customised or stale — `contextd init --refresh-prompts` to overwrite)"
+            )

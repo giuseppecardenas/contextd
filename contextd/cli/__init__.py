@@ -36,7 +36,15 @@ def cli() -> None:
 
 @cli.command()
 @click.option("--yes", is_flag=True, help="Accept all defaults non-interactively.")
-def init(yes: bool) -> None:
+@click.option(
+    "--refresh-prompts",
+    is_flag=True,
+    help=(
+        "Overwrite every packaged-named template in ~/.contextd/prompts with "
+        "the packaged version (corpus-level prompt files are untouched)."
+    ),
+)
+def init(yes: bool, refresh_prompts: bool) -> None:
     """First-run wizard — creates ~/.contextd/ layout and registers MCP."""
     home = contextd_home()
     for sub in ("corpora", "state", "state/session-log", "state/checkpoints", "logs", "prompts"):
@@ -60,8 +68,11 @@ def init(yes: bool) -> None:
         console.print(f"[green]✓[/] wrote docker-compose template to {compose_path}")
 
     # Copy every packaged template (new templates ship automatically);
-    # existing files are left alone so user customisations survive.
+    # existing files are left alone so user customisations survive — unless
+    # --refresh-prompts explicitly overwrites them (the recovery path for
+    # stale copies, which otherwise silently never receive packaged updates).
     copied = 0
+    refreshed: list[str] = []
     packaged = sorted(
         entry.name
         for entry in resources.files("contextd.prompts").iterdir()
@@ -69,17 +80,20 @@ def init(yes: bool) -> None:
     )
     for name in packaged:
         dst = home / "prompts" / name
+        src_text = resources.files("contextd.prompts").joinpath(name).read_text(encoding="utf-8")
         if not dst.exists():
-            src_text = (
-                resources.files("contextd.prompts").joinpath(name).read_text(encoding="utf-8")
-            )
             dst.write_text(src_text, encoding="utf-8")
             copied += 1
+        elif refresh_prompts and dst.read_text(encoding="utf-8") != src_text:
+            dst.write_text(src_text, encoding="utf-8")
+            refreshed.append(name)
     if copied:
         console.print(
             f"[green]✓[/] prompt templates copied ({copied}/{len(packaged)}, overridable)"
         )
-    else:
+    if refreshed:
+        console.print(f"[green]✓[/] prompt templates refreshed: {', '.join(refreshed)}")
+    if not copied and not refreshed:
         console.print("[dim]·[/] prompt templates already present")
 
     # Env-var prerequisite check.
