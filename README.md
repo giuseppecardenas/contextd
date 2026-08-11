@@ -244,7 +244,7 @@ contextd index notes --estimate-only
 | scope | wipes | preserves | re-costs |
 |---|---|---|---|
 | `inferred` | `origin='inferred'` edges + `inferred_at` markers | summaries, structural, embeddings | Gemini relate only |
-| `summaries` | `summary`/`key_points`/`summary_confidence` | inferred edges, structural, embeddings | Gemini summarise only |
+| `summaries` | `summary`/`key_points`/`entities_mentioned`/`summary_generated_at` | inferred edges, structural, embeddings | Gemini summarise only |
 | `llm` | both of the above | structural, embeddings | all Gemini work |
 | `all` | DETACH DELETE every `Section`/`File`/`Corpus` node for this corpus | nothing (structural + inferred edges cascade-deleted) | Voyage + Gemini from zero |
 

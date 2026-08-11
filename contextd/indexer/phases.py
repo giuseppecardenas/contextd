@@ -185,8 +185,15 @@ def phase_summarise(
             return (0, 1)
         store.exec_write(
             "MATCH (n:File {path: $path}) "
-            "SET n.summary = $summary, n.key_points = $key_points, n.summary_confidence = 1.0",
-            {"path": canonical_path(f), "summary": result.summary, "key_points": result.key_points},
+            "SET n.summary = $summary, n.key_points = $key_points, "
+            "n.entities_mentioned = $entities_mentioned, "
+            "n.summary_generated_at = datetime()",
+            {
+                "path": canonical_path(f),
+                "summary": result.summary,
+                "key_points": result.key_points,
+                "entities_mentioned": result.entities_mentioned,
+            },
         )
         return (1, 0)
 
@@ -574,11 +581,14 @@ def phase_summarise_sections(
             return (0, 1)
         store.exec_write(
             "MATCH (s:Section {id: $id}) "
-            "SET s.summary = $summary, s.key_points = $key_points, s.summary_confidence = 1.0",
+            "SET s.summary = $summary, s.key_points = $key_points, "
+            "s.entities_mentioned = $entities_mentioned, "
+            "s.summary_generated_at = datetime()",
             {
                 "id": r["id"],
                 "summary": result.summary,
                 "key_points": result.key_points,
+                "entities_mentioned": result.entities_mentioned,
             },
         )
         return (1, 0)

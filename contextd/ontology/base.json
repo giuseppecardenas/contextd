@@ -1,8 +1,8 @@
 {
   "version": 1,
   "node_types": {
-    "File":        ["path", "name", "type", "hash", "size", "updated", "embedding", "summary", "key_points", "summary_generated_at", "summary_confidence", "corpus"],
-    "Section":     ["id", "anchor", "title", "level", "path", "corpus", "file_id", "ordinal", "embedding", "summary", "key_points", "entities_mentioned", "summary_generated_at", "summary_confidence", "updated"],
+    "File":        ["path", "name", "type", "hash", "size", "updated", "embedding", "summary", "key_points", "entities_mentioned", "summary_generated_at", "corpus"],
+    "Section":     ["id", "anchor", "title", "level", "path", "corpus", "file_id", "ordinal", "embedding", "summary", "key_points", "entities_mentioned", "summary_generated_at", "updated"],
     "Artifact":    ["id", "title", "description", "reusable", "created", "updated", "corpus"],
     "Ticket":      ["id", "title", "status", "created", "updated", "corpus"],
     "Pattern":     ["name", "description", "when_to_use", "examples", "corpus"],

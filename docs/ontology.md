@@ -10,8 +10,8 @@ The base ontology file: `contextd/ontology/base.json`.
 
 | Node type | Primary key | Key properties |
 |---|---|---|
-| `File` | `path` | `path`, `name`, `type`, `hash`, `size`, `updated`, `embedding`, `summary`, `key_points`, `summary_generated_at`, `summary_confidence`, `corpus` |
-| `Section` | `id` | `id`, `anchor`, `title`, `level`, `path`, `corpus`, `file_id`, `ordinal`, `embedding`, `summary`, `key_points`, `entities_mentioned`, `summary_generated_at`, `summary_confidence` |
+| `File` | `path` | `path`, `name`, `type`, `hash`, `size`, `updated`, `embedding`, `summary`, `key_points`, `entities_mentioned`, `summary_generated_at`, `corpus` |
+| `Section` | `id` | `id`, `anchor`, `title`, `level`, `path`, `corpus`, `file_id`, `ordinal`, `embedding`, `summary`, `key_points`, `entities_mentioned`, `summary_generated_at` |
 | `Artifact` | `id` | `id`, `title`, `description`, `reusable`, `created`, `updated`, `corpus` |
 | `Ticket` | `id` | `id`, `title`, `status`, `created`, `updated`, `corpus` |
 | `Pattern` | `name` | `name`, `description`, `when_to_use`, `examples`, `corpus` |

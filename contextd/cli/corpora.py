@@ -339,7 +339,7 @@ def _build_pipeline_deps(
     help=(
         "Wipe a dependency layer before bootstrap and re-fill it. "
         "'inferred': origin='inferred' edges + inferred_at markers. "
-        "'summaries': summary/key_points/summary_confidence. "
+        "'summaries': summary/key_points/entities_mentioned/summary_generated_at. "
         "'llm': both of the above. "
         "'all': DETACH DELETE every Section/File/Corpus node for this corpus. "
         "Default (no --refresh): idempotent resume skipping already-processed nodes."

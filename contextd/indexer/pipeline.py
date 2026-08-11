@@ -109,7 +109,8 @@ def _wipe_for_refresh(corpus: CorpusConfig, store: GraphStore, scope: RefreshSco
 
     Scopes:
       - inferred:  DELETE origin='inferred' edges + REMOVE inferred_at markers.
-      - summaries: REMOVE summary + key_points + summary_confidence on nodes.
+      - summaries: REMOVE summary + key_points + entities_mentioned +
+                   summary_generated_at (+ legacy summary_confidence) on nodes.
       - llm:       union of inferred + summaries.
       - all:       DETACH DELETE Section + File + Corpus for this corpus.
                    Cascades to all attached edges (structural, inferred, manual).
@@ -136,11 +137,13 @@ def _wipe_for_refresh(corpus: CorpusConfig, store: GraphStore, scope: RefreshSco
         )
     if scope in ("summaries", "llm"):
         store.exec_write(
-            "MATCH (n:Section {corpus: $c}) REMOVE n.summary, n.key_points, n.summary_confidence",
+            "MATCH (n:Section {corpus: $c}) REMOVE n.summary, n.key_points, "
+            "n.entities_mentioned, n.summary_generated_at, n.summary_confidence",
             {"c": c},
         )
         store.exec_write(
-            "MATCH (n:File {corpus: $c}) REMOVE n.summary, n.key_points, n.summary_confidence",
+            "MATCH (n:File {corpus: $c}) REMOVE n.summary, n.key_points, "
+            "n.entities_mentioned, n.summary_generated_at, n.summary_confidence",
             {"c": c},
         )
     if scope == "all":
@@ -181,7 +184,7 @@ def _clear_file_for_reindex(path: Path, store: GraphStore) -> None:
 
     Order: delete inferred edges first (edge cleanup must precede marker
     removal so a crash between the two leaves the file in a retry-able state),
-    then REMOVE inferred_at, then REMOVE summary/key_points/summary_confidence.
+    then REMOVE inferred_at, then REMOVE the summary-layer properties.
     REMOVE on a missing property is a no-op on both backends.
     """
     file_path = canonical_path(path)
@@ -191,7 +194,8 @@ def _clear_file_for_reindex(path: Path, store: GraphStore) -> None:
         {"path": file_path},
     )
     store.exec_write(
-        "MATCH (f:File {path: $path}) REMOVE f.summary, f.key_points, f.summary_confidence",
+        "MATCH (f:File {path: $path}) REMOVE f.summary, f.key_points, "
+        "f.entities_mentioned, f.summary_generated_at, f.summary_confidence",
         {"path": file_path},
     )
 
@@ -206,7 +210,8 @@ def _clear_sections_for_reindex(path: Path, store: GraphStore, corpus: str) -> N
     )
     store.exec_write(
         "MATCH (s:Section {corpus: $corpus, path: $path}) "
-        "REMOVE s.inferred_at, s.summary, s.key_points, s.summary_confidence",
+        "REMOVE s.inferred_at, s.summary, s.key_points, "
+        "s.entities_mentioned, s.summary_generated_at, s.summary_confidence",
         {"corpus": corpus, "path": file_path},
     )
 
@@ -219,7 +224,8 @@ def _clear_section_for_reindex(section_id: str, corpus: str, store: GraphStore) 
     )
     store.exec_write(
         "MATCH (s:Section {id: $id, corpus: $corpus}) "
-        "REMOVE s.inferred_at, s.summary, s.key_points, s.summary_confidence",
+        "REMOVE s.inferred_at, s.summary, s.key_points, "
+        "s.entities_mentioned, s.summary_generated_at, s.summary_confidence",
         {"id": section_id, "corpus": corpus},
     )
 

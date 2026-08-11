@@ -83,6 +83,30 @@ def test_phase_summarise_skips_already_summarised(tmp_path: Path) -> None:
     assert summariser.summarise.call_count == 2
 
 
+def test_phase_summarise_persists_entities_and_timestamp(tmp_path: Path) -> None:
+    """The summary write carries entities_mentioned + summary_generated_at and
+    no longer writes the retired hardcoded summary_confidence."""
+    files = _make_files(tmp_path, 1)
+    summariser = MagicMock()
+    summariser.summarise.return_value = FileSummary(
+        summary="s", key_points=["k"], entities_mentioned=["FR-ECO-001", "register_x"]
+    )
+    store = MagicMock()
+    store.exec_read.return_value = []
+
+    phase_summarise(files, summariser, store)
+
+    write_calls = [
+        c for c in store.exec_write.call_args_list if "n.summary = $summary" in c.args[0]
+    ]
+    assert len(write_calls) == 1
+    cypher, params = write_calls[0].args
+    assert "entities_mentioned" in cypher
+    assert "summary_generated_at" in cypher
+    assert "summary_confidence" not in cypher
+    assert params["entities_mentioned"] == ["FR-ECO-001", "register_x"]
+
+
 def test_phase_summarise_all_already_done(tmp_path: Path) -> None:
     files = _make_files(tmp_path, 3)
     summariser = MagicMock()
