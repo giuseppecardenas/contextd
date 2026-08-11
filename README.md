@@ -885,7 +885,8 @@ Contextd is a single-user local tool. Its security posture reflects that:
 | Neo4j container won't start on port 7687 | Another backend already bound to the port | `contextd down` first, then switch `backend` in config and `contextd up` |
 | Edits from Windows don't trigger re-indexing | WSL2 inotify doesn't see Windows-side writes | Lower `sweep_interval_seconds` in config (see [periodic sweep](#periodic-sweep-wsl2--windows-side-edits)); or touch the file from WSL |
 | Large MCP search payloads | Embedding vectors included in results (pre-`96c409a`) | Update to latest; the `search` tool now strips embedding vectors from results |
-| Entity nodes (`Ticket`, `Artifact`, …) have no content, or `find_reusable` returns nothing | `~/.contextd/prompts/relate.md` predates entity-content extraction — prompt templates are copied to the home dir at `contextd init` and are not auto-updated, so the feature silently no-ops on an install created earlier | Copy the packaged `contextd/prompts/relate.md` over `~/.contextd/prompts/relate.md`, then `contextd index <corpus> --bootstrap --refresh inferred` to backfill entity content |
+| Entity nodes (`Ticket`, `Artifact`, …) have no content, or `find_reusable` returns nothing | `~/.contextd/prompts/` templates are copied at `contextd init` and never auto-updated, so packaged prompt upgrades silently no-op on older installs | `contextd status` now reports per-template drift; run `contextd init --refresh-prompts`, then `contextd index <corpus> --bootstrap --refresh inferred` |
+| Inferred edges sparse or missing after upgrade | Stale home prompt templates (see above), or discards you can now inspect | `grep "relate drop:" ~/.contextd/logs/contextd.log` — every discarded edge logs its reason (ontology, triple constraint, unresolved target, confidence floor) |
 
 ---
 

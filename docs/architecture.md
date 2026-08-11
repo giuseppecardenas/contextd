@@ -146,6 +146,18 @@ Hybrid search needs both a vector and a full-text index on the queried label, so
 
 **CLI** — `contextd` is a short-lived Click process. Each invocation connects to the backend, does its work, and disconnects. See [cli.md](cli.md).
 
+### Relationship inference pipeline (per unit)
+
+The relate phases process each file/section through a layered pipeline (`contextd/indexer/phases.py`, deps in `RelateDeps`):
+
+1. **Lexical extraction** (`indexer/lexical.py`) — deterministic references (markdown links, `§`-anchors, Lua `require`, per-corpus `[[lexical.patterns]]`) become edges at confidence 1.0, `method="lexical"`, without the LLM.
+2. **Candidate retrieval** (`indexer/candidates.py`) — per-unit graph context (degree-ranked entities, same-file + vector-similar sections, neighbour files) rendered into the relate prompt so the model cites real nodes by exact id.
+3. **LLM inference** (`inference/relate.py`) — identity-aware prompt, ontology + triple-constraint validation, optional gleaning rounds; every dropped row logs at INFO.
+4. **Resolution cascade** (`indexer/resolution.py`) — before minting an entity: normalized-exact match (per-kind case policy) → rapidfuzz → embedding similarity (`EntityResolver`); mints write `name_norm` + embedding.
+5. **Description accumulation** — matched entities collect description fragments; `phase_merge_descriptions` LLM-synthesises entities past the fragment threshold.
+
+Summaries are exclusive-body: each byte lives in exactly one Section; parents and files are represented by LLM roll-ups (`Summariser.roll_up`) gated by `summary_input_hash`.
+
 ---
 
 ## Process model
