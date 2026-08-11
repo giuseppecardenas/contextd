@@ -138,12 +138,12 @@ def _wipe_for_refresh(corpus: CorpusConfig, store: GraphStore, scope: RefreshSco
     if scope in ("summaries", "llm"):
         store.exec_write(
             "MATCH (n:Section {corpus: $c}) REMOVE n.summary, n.key_points, "
-            "n.entities_mentioned, n.summary_generated_at, n.summary_confidence",
+            "n.entities_mentioned, n.summary_generated_at, n.summary_input_hash, n.summary_confidence",
             {"c": c},
         )
         store.exec_write(
             "MATCH (n:File {corpus: $c}) REMOVE n.summary, n.key_points, "
-            "n.entities_mentioned, n.summary_generated_at, n.summary_confidence",
+            "n.entities_mentioned, n.summary_generated_at, n.summary_input_hash, n.summary_confidence",
             {"c": c},
         )
     if scope == "all":
@@ -195,7 +195,7 @@ def _clear_file_for_reindex(path: Path, store: GraphStore) -> None:
     )
     store.exec_write(
         "MATCH (f:File {path: $path}) REMOVE f.summary, f.key_points, "
-        "f.entities_mentioned, f.summary_generated_at, f.summary_confidence",
+        "f.entities_mentioned, f.summary_generated_at, f.summary_input_hash, f.summary_confidence",
         {"path": file_path},
     )
 
@@ -211,7 +211,7 @@ def _clear_sections_for_reindex(path: Path, store: GraphStore, corpus: str) -> N
     store.exec_write(
         "MATCH (s:Section {corpus: $corpus, path: $path}) "
         "REMOVE s.inferred_at, s.summary, s.key_points, "
-        "s.entities_mentioned, s.summary_generated_at, s.summary_confidence",
+        "s.entities_mentioned, s.summary_generated_at, s.summary_input_hash, s.summary_confidence",
         {"corpus": corpus, "path": file_path},
     )
 
@@ -225,7 +225,7 @@ def _clear_section_for_reindex(section_id: str, corpus: str, store: GraphStore) 
     store.exec_write(
         "MATCH (s:Section {id: $id, corpus: $corpus}) "
         "REMOVE s.inferred_at, s.summary, s.key_points, "
-        "s.entities_mentioned, s.summary_generated_at, s.summary_confidence",
+        "s.entities_mentioned, s.summary_generated_at, s.summary_input_hash, s.summary_confidence",
         {"id": section_id, "corpus": corpus},
     )
 
@@ -329,6 +329,9 @@ def run_incremental_file(
             concurrency=inference_concurrency,
             parse_cache=parse_cache,
         )
+        phases.rollup_sections_for_path(
+            path, corpus, summariser, embedder, store, parse_cache=parse_cache
+        )
         phases.phase_relate_sections(
             corpus,
             relate,
@@ -397,6 +400,16 @@ def run_bootstrap(
             phases.phase_summarise_sections(
                 corpus,
                 summariser,
+                store,
+                concurrency=inference_concurrency,
+                parse_cache=parse_cache,
+            )
+        )
+        results.append(
+            phases.phase_rollup_sections(
+                corpus,
+                summariser,
+                embedder,
                 store,
                 concurrency=inference_concurrency,
                 parse_cache=parse_cache,

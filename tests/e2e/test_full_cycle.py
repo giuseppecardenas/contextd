@@ -40,6 +40,7 @@ def test_full_bootstrap_then_mcp_query(backend, tmp_path: Path) -> None:
     fake_embedder = MagicMock()
     fake_embedder.embed.return_value = [[0.1] * 1024, [0.2] * 1024, [0.3] * 1024]
     fake_summariser = MagicMock()
+    fake_summariser.roll_up.return_value = "rolled"
     fake_summariser.summarise.side_effect = [
         FileSummary(summary="alpha file", key_points=["k1"], entities_mentioned=[]),
         FileSummary(summary="beta file", key_points=["k2"], entities_mentioned=[]),

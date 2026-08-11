@@ -33,6 +33,7 @@ def _corpus(tmp_path: Path, granularity: str = "file") -> CorpusConfig:
 def _fake_summariser(summary: str) -> MagicMock:
     s = MagicMock()
     s.summarise.return_value = FileSummary(summary=summary, key_points=[], entities_mentioned=[])
+    s.roll_up.return_value = f"rolled:{summary}"
     return s
 
 

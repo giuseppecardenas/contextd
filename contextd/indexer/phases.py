@@ -32,6 +32,7 @@ mis-routing by future callers.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import logging
 import re
 from collections.abc import Callable, Sequence
@@ -46,7 +47,7 @@ from contextd.indexer.hasher import FileHasher
 from contextd.indexer.heading_parser import ParsedSection, _github_anchor, section_hash
 from contextd.indexer.lexical import LexicalReference, LexicalRegistry
 from contextd.indexer.resolution import EntityCascadeResolver, Resolution, ResolutionSettings
-from contextd.indexer.units import ParseCache, extractor_for
+from contextd.indexer.units import ParseCache, extractor_for, own_prose
 from contextd.inference.context import CandidateRetriever, UnitIdentity
 from contextd.inference.relate import InferredRelationship, RelationshipInferrer
 from contextd.inference.summarise import Summariser
@@ -705,6 +706,11 @@ def phase_summarise_sections(
         if not sec:
             _log.debug("summarise: section %s no longer present on disk; skipping", r["id"])
             return (0, 1)
+        if parsed.children_of(sec.anchor):
+            # Parents are summarised by exactly one roll_up call over their
+            # own prose + child summaries (phase_rollup_sections) — never
+            # directly, which would double-bill prose-ful parents.
+            return (0, 0)
         identity = UnitIdentity(
             corpus=corpus_name,
             file_path=parsed.canonical,
@@ -742,6 +748,172 @@ def phase_summarise_sections(
 
     processed, skipped = _parallel_map(rows, _worker, concurrency)
     return PhaseResult(name="summarise_sections", processed=processed, skipped=skipped)
+
+
+def _rollup_input_hash(prose: str, child_summaries: list[str]) -> str:
+    """Gate hash for a parent's roll-up: own prose + child summaries in order.
+
+    A child edit changes its summary → the parent's input hash mismatches →
+    the parent re-rolls (and its ancestors cascade), while untouched subtrees
+    cost zero LLM calls. Bookkeeping property (like ``inferred_at``), stored
+    as ``summary_input_hash`` and deliberately not declared in base.json.
+    """
+    payload = prose + "\x00" + "\x00".join(child_summaries)
+    return hashlib.md5(payload.encode("utf-8")).hexdigest()
+
+
+def _rollup_parents(
+    rows: list[dict[str, Any]],
+    corpus_cfg: CorpusConfig,
+    summariser: Summariser,
+    embedder: EmbeddingProvider,
+    store: GraphStore,
+    cache: ParseCache,
+    concurrency: int,
+) -> tuple[int, int]:
+    """Roll up the given parent rows bottom-up (deepest level first).
+
+    Levels are processed sequentially (shallower parents must read committed
+    deeper roll-ups); parents within a level run through ``_parallel_map``.
+    """
+    corpus_name = corpus_cfg.corpus.name
+    root = Path(corpus_cfg.corpus.root)
+
+    def _worker(r: dict[str, Any]) -> tuple[int, int]:
+        anchor = r["id"].split("#", 1)[1]
+        path = Path(r["path"])
+        parsed = cache.get(path)
+        sec = parsed.by_anchor(anchor)
+        if not sec:
+            _log.debug("rollup: section %s no longer present on disk; skipping", r["id"])
+            return (0, 1)
+        prose = own_prose(sec)
+        child_rows = store.exec_read(
+            "MATCH (p:Section {id: $id})-[:PARENT_OF]->(ch:Section) "
+            "RETURN ch.summary AS s ORDER BY ch.ordinal",
+            {"id": r["id"]},
+        )
+        summaries = [row["s"] for row in child_rows if row.get("s")]
+        if not summaries and not prose.strip():
+            # All children failed summarisation and there is no own prose —
+            # leave summary NULL so the next pass retries, mirroring
+            # summarise-failure semantics.
+            return (0, 1)
+        input_hash = _rollup_input_hash(prose, summaries)
+        if r.get("summary_input_hash") == input_hash and r.get("summary"):
+            return (0, 0)
+        identity = UnitIdentity(
+            corpus=corpus_name,
+            file_path=parsed.canonical,
+            rel_path=_rel_path(path, root),
+            suffix=path.suffix,
+            src_label="Section",
+            src_id=r["id"],
+            title=sec.title,
+            anchor=sec.anchor,
+            parent_titles=parsed.parent_chain(sec.anchor),
+        )
+        try:
+            summary = summariser.roll_up(
+                child_summaries=summaries, own_prose=prose, context=identity
+            )
+        except Exception as exc:
+            _log.warning(
+                "rollup failed for section %s: %s: %s; Section left without a summary",
+                r["id"],
+                type(exc).__name__,
+                exc,
+            )
+            return (0, 1)
+        vec: list[float] | None
+        try:
+            [vec] = embedder.embed([summary])
+        except Exception as exc:
+            # Subtree-recall mitigation is best-effort: the CREATE-time body
+            # embedding remains in place when the roll-up embed fails.
+            _log.warning("rollup embed failed for section %s: %s; keeping old vector", r["id"], exc)
+            vec = None
+        if vec is not None:
+            store.exec_write(
+                "MATCH (s:Section {id: $id}) SET s.summary = $summary, "
+                "s.summary_generated_at = datetime(), s.summary_input_hash = $h, "
+                "s.embedding = $vec",
+                {"id": r["id"], "summary": summary, "h": input_hash, "vec": vec},
+            )
+        else:
+            store.exec_write(
+                "MATCH (s:Section {id: $id}) SET s.summary = $summary, "
+                "s.summary_generated_at = datetime(), s.summary_input_hash = $h",
+                {"id": r["id"], "summary": summary, "h": input_hash},
+            )
+        return (1, 0)
+
+    processed = skipped = 0
+    for level in sorted({r["level"] for r in rows}, reverse=True):
+        level_rows = [r for r in rows if r["level"] == level]
+        p, s = _parallel_map(level_rows, _worker, concurrency)
+        processed += p
+        skipped += s
+    return processed, skipped
+
+
+def phase_rollup_sections(
+    corpus_cfg: CorpusConfig,
+    summariser: Summariser,
+    embedder: EmbeddingProvider,
+    store: GraphStore,
+    *,
+    concurrency: int = 1,
+    parse_cache: ParseCache | None = None,
+) -> PhaseResult:
+    """Synthesise parent-section summaries bottom-up from child summaries.
+
+    With exclusive bodies, a parent owns only its own prose (possibly none);
+    its summary is one ``roll_up`` call over own prose + child summaries, and
+    its embedding is re-pointed at the roll-up text so subtree-level retrieval
+    still works. Gated by ``summary_input_hash`` so unchanged subtrees cost
+    zero LLM calls on re-runs.
+    """
+    rows = store.exec_read(
+        "MATCH (p:Section {corpus: $c})-[:PARENT_OF]->(:Section) "
+        "WHERE p.path IS NOT NULL "
+        "RETURN DISTINCT p.id AS id, p.path AS path, p.level AS level, "
+        "p.summary AS summary, p.summary_input_hash AS summary_input_hash",
+        {"c": corpus_cfg.corpus.name},
+    )
+    cache = parse_cache if parse_cache is not None else ParseCache(corpus_cfg)
+    for p in {Path(r["path"]) for r in rows}:
+        cache.get(p)
+    processed, skipped = _rollup_parents(
+        rows, corpus_cfg, summariser, embedder, store, cache, concurrency
+    )
+    return PhaseResult(name="rollup_sections", processed=processed, skipped=skipped)
+
+
+def rollup_sections_for_path(
+    path: Path,
+    corpus_cfg: CorpusConfig,
+    summariser: Summariser,
+    embedder: EmbeddingProvider,
+    store: GraphStore,
+    *,
+    parse_cache: ParseCache | None = None,
+) -> None:
+    """File-scoped roll-up for incremental re-index.
+
+    Section trees are per-file, so cross-file ancestors cannot exist and the
+    file scope is complete. The input-hash gate keeps this cheap: only
+    ancestors of actually re-summarised sections re-roll.
+    """
+    file_path = canonical_path(path)
+    rows = store.exec_read(
+        "MATCH (p:Section {corpus: $c, path: $p})-[:PARENT_OF]->(:Section) "
+        "RETURN DISTINCT p.id AS id, p.path AS path, p.level AS level, "
+        "p.summary AS summary, p.summary_input_hash AS summary_input_hash",
+        {"c": corpus_cfg.corpus.name, "p": file_path},
+    )
+    cache = parse_cache if parse_cache is not None else ParseCache(corpus_cfg)
+    _rollup_parents(rows, corpus_cfg, summariser, embedder, store, cache, concurrency=1)
 
 
 def phase_relate_sections(
@@ -788,6 +960,15 @@ def phase_relate_sections(
         if not sec:
             _log.debug("relate: section %s no longer present on disk; skipping", r["id"])
             return (0, 1)
+        if parsed.children_of(sec.anchor) and not own_prose(sec).strip():
+            # Prose-less parent: its exclusive body is just the heading line —
+            # nothing to infer from. Mark inferred_at anyway or the resume
+            # query re-selects it forever.
+            store.exec_write(
+                "MATCH (s:Section {id: $id}) SET s.inferred_at = datetime()",
+                {"id": r["id"]},
+            )
+            return (0, 0)
         identity = UnitIdentity(
             corpus=corpus_name,
             file_path=parsed.canonical,

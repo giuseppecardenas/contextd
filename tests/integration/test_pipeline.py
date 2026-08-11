@@ -42,6 +42,7 @@ def test_bootstrap_creates_inferred_edges(backend, tmp_path: Path) -> None:
     fake_embedder.embed.return_value = [[0.1] * 1024, [0.2] * 1024]
 
     fake_summariser = MagicMock()
+    fake_summariser.roll_up.return_value = "rolled"
     fake_summariser.summarise.return_value = FileSummary(
         summary="stub", key_points=[], entities_mentioned=[]
     )
@@ -112,6 +113,7 @@ def test_bootstrap_on_sample_corpus(backend, tmp_path: Path) -> None:
     fake_embedder.embed.return_value = [[0.1] * 1024, [0.2] * 1024]
 
     fake_summariser = MagicMock()
+    fake_summariser.roll_up.return_value = "rolled"
     from contextd.inference.summarise import FileSummary
 
     fake_summariser.summarise.return_value = FileSummary(
@@ -182,6 +184,7 @@ def test_section_granular_bootstrap(backend, tmp_path: Path) -> None:
     fake_embedder = MagicMock()
     fake_embedder.embed.side_effect = lambda texts: [[0.1] * 1024 for _ in texts]
     fake_summariser = MagicMock()
+    fake_summariser.roll_up.return_value = "rolled"
     fake_summariser.summarise.return_value = FileSummary(
         summary="s", key_points=[], entities_mentioned=[]
     )
@@ -264,6 +267,7 @@ def test_section_granular_inferred_edges(backend, tmp_path: Path) -> None:
     fake_embedder = MagicMock()
     fake_embedder.embed.side_effect = lambda texts: [[0.1] * 1024 for _ in texts]
     fake_summariser = MagicMock()
+    fake_summariser.roll_up.return_value = "rolled"
     fake_summariser.summarise.return_value = FileSummary(
         summary="s", key_points=[], entities_mentioned=[]
     )
@@ -365,6 +369,7 @@ def test_section_gc_removes_renamed_section(backend, tmp_path: Path) -> None:
     fake_embedder = MagicMock()
     fake_embedder.embed.side_effect = _embed_side_effect
     fake_summariser = MagicMock()
+    fake_summariser.roll_up.return_value = "rolled"
     fake_summariser.summarise.return_value = FileSummary(
         summary="s", key_points=[], entities_mentioned=[]
     )
@@ -463,6 +468,7 @@ def test_index_with_ontology_overrides_uses_canonical_edge_names(
     fake_embedder.embed.return_value = [[0.1] * 1024, [0.2] * 1024]
 
     fake_summariser = MagicMock()
+    fake_summariser.roll_up.return_value = "rolled"
     fake_summariser.summarise.return_value = FileSummary(
         summary="stub", key_points=[], entities_mentioned=[]
     )
@@ -573,6 +579,7 @@ def test_section_granular_mixed_extensions_routes_correctly(backend, tmp_path: P
     fake_embedder.embed.side_effect = _embed
 
     fake_summariser = MagicMock()
+    fake_summariser.roll_up.return_value = "rolled"
     fake_summariser.summarise.return_value = FileSummary(
         summary="stub_summary", key_points=[], entities_mentioned=[]
     )
