@@ -1,7 +1,8 @@
 """Infers typed relationships from file (or section) content.
 
 Enforces the strict-ontology invariant: any relationship whose edge type or
-target type is not declared in the ontology is discarded silently (spec §3.5).
+target type is not declared in the ontology is discarded (spec §3.5), with an
+INFO log naming the reason so discards are countable from the log.
 This is the primary defence against hallucinated edges.
 
 The permitted edge types are narrower than the ontology's declared set. The
@@ -13,13 +14,63 @@ advertises them to the model nor accepts them back.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
-from typing import Any, cast
+from typing import Any
 
 from contextd.inference._json_body import loads_json_body
 from contextd.inference.prompts import PromptRenderer
 from contextd.ontology.schema import NON_ENTITY_LABELS, STRUCTURAL_EDGE_TYPES, Ontology
 from contextd.providers.base import InferenceProvider, PromptRequest
+
+_log = logging.getLogger(__name__)
+
+# Word-form confidences some models emit despite the numeric-scale instruction.
+_CONFIDENCE_WORDS = {"high": 0.9, "medium": 0.7, "low": 0.5}
+
+# Reasons are stored as an edge property; keep them bounded so a rambling
+# completion can't bloat the graph.
+_MAX_REASON_CHARS = 500
+
+
+def _coerce_confidence(value: Any) -> float:
+    """Coerce a model-supplied confidence into a float in [0, 1]. Never raises.
+
+    A bare ``float(value)`` on a string like ``"high"`` used to escape
+    ``infer()`` and lose the whole unit's edge batch; word forms now map to
+    their prompt-documented anchors and anything unparseable becomes 0.0 (which
+    the confidence floor then drops) with an INFO log.
+    """
+    if isinstance(value, bool):
+        _log.info("relate drop-signal: boolean confidence %r coerced to 0.0", value)
+        return 0.0
+    if isinstance(value, (int, float)):
+        return min(1.0, max(0.0, float(value)))
+    if isinstance(value, str):
+        word = _CONFIDENCE_WORDS.get(value.strip().lower())
+        if word is not None:
+            return word
+        try:
+            return min(1.0, max(0.0, float(value)))
+        except ValueError:
+            pass
+    _log.info("relate drop-signal: unparseable confidence %r coerced to 0.0", value)
+    return 0.0
+
+
+def _coerce_reason(value: Any) -> str:
+    """Coerce a model-supplied reason into a bounded string. Never raises.
+
+    A non-string reason (dicts have been observed) previously reached the
+    store as a map property and aborted the run; anything non-string is
+    stringified with an INFO log, and all reasons are truncated.
+    """
+    if isinstance(value, str):
+        text = value
+    else:
+        _log.info("relate: non-string reason %.80r coerced to str", value)
+        text = "" if value is None else str(value)
+    return text[:_MAX_REASON_CHARS]
 
 
 @dataclass
@@ -167,7 +218,8 @@ class RelationshipInferrer:
         :param known_entities: Existing graph entity names offered to the model
             as preferred targets; only the first hundred are sent.
         :return: The relationships that passed every validation gate, which may
-            be empty. Rows failing any gate are dropped silently.
+            be empty. Rows failing any gate are dropped with an INFO log naming
+            the reason.
         """
         emittable_edge_types = _emittable_edge_types(self._onto)
         prompt = self._renderer.render(
@@ -188,29 +240,46 @@ class RelationshipInferrer:
             relationships = []
         for row in relationships:
             if not isinstance(row, dict):
+                _log.info("relate drop: non-dict row %.120r", row)
                 continue
             edge_type = row.get("type")
             target_type = row.get("target_type")
             target_name = row.get("target_name")
             if not isinstance(edge_type, str):
+                _log.info("relate drop: non-string edge type in row %.120r", row)
                 continue
             resolved_edge_type = self._onto.resolve_edge_alias(edge_type)
             if resolved_edge_type not in emittable_edge_types:
+                _log.info(
+                    "relate drop: edge type %r (resolved %r) not emittable; target %.80r",
+                    edge_type,
+                    resolved_edge_type,
+                    target_name,
+                )
                 continue
-            if target_type not in self._onto.node_types:
+            if not isinstance(target_type, str) or target_type not in self._onto.node_types:
+                _log.info(
+                    "relate drop: unknown target type %r; target %.80r",
+                    target_type,
+                    target_name,
+                )
                 continue
             if not isinstance(target_name, str) or not target_name:
+                _log.info(
+                    "relate drop: empty or non-string target name for %s -> %s",
+                    resolved_edge_type,
+                    target_type,
+                )
                 continue
-            resolved_target_type = cast(str, target_type)
             valid.append(
                 InferredRelationship(
                     edge_type=resolved_edge_type,
-                    target_type=resolved_target_type,
+                    target_type=target_type,
                     target_name=target_name,
-                    confidence=float(row.get("confidence", 0.0)),
-                    reason=cast(str, row.get("reason", "")),
+                    confidence=_coerce_confidence(row.get("confidence", 0.0)),
+                    reason=_coerce_reason(row.get("reason", "")),
                     target_properties=self._extract_target_properties(
-                        resolved_target_type, row.get("properties")
+                        target_type, row.get("properties")
                     ),
                 )
             )

@@ -746,6 +746,11 @@ def _infer_key(target_type: str) -> str:
 # the existing node instead — or dropped.
 _ENUMERATION_OWNED_LABELS = frozenset({"File", "Section"})
 
+# Edges below this confidence are dropped at write time. The relate prompt
+# documents "below 0.5 skip", but prompt rules are advisory — this is the
+# enforced floor. Becomes per-corpus configurable with ResolutionSettings.
+_CONFIDENCE_FLOOR = 0.5
+
 
 def _resolve_existing_node(store: GraphStore, label: str, raw_name: str, corpus: str) -> str | None:
     """Resolve an inferred-edge target to an EXISTING node's primary-key value.
@@ -799,15 +804,49 @@ def _apply_inferred_edge(
     the current ``corpus`` so corpus-scoped GC and queries can see it.
 
     ``src_label``/``dst_label`` are required by ``GraphStore.upsert_edge``.
+    Every drop path emits an INFO log naming the reason, so discarded edges
+    are countable from the log rather than invisible.
     """
+    if rel.confidence < _CONFIDENCE_FLOOR:
+        _log.info(
+            "relate drop: confidence %.2f below floor %.2f: %s -[%s]-> %s(%.80s)",
+            rel.confidence,
+            _CONFIDENCE_FLOOR,
+            src_id,
+            rel.edge_type,
+            rel.target_type,
+            rel.target_name,
+        )
+        return False
     try:
         pk = _infer_key(rel.target_type)
     except ValueError:
         # Hallucinated target label absent from the ontology key map.
+        _log.info(
+            "relate drop: unknown target label %r: %s -[%s]-> %.80s",
+            rel.target_type,
+            src_id,
+            rel.edge_type,
+            rel.target_name,
+        )
         return False
     if rel.target_type in _ENUMERATION_OWNED_LABELS:
         target_value = _resolve_existing_node(store, rel.target_type, rel.target_name, corpus)
         if target_value is None:
+            _log.info(
+                "relate drop: %s target did not resolve: %s -[%s]-> %.80s",
+                rel.target_type,
+                src_id,
+                rel.edge_type,
+                rel.target_name,
+            )
+            return False
+        if target_value == src_id and rel.target_type == src_label:
+            _log.info(
+                "relate drop: self-loop: %s -[%s]-> itself",
+                src_id,
+                rel.edge_type,
+            )
             return False
     else:
         # Stub-able entity: seed identity + corpus, then layer on the model's
