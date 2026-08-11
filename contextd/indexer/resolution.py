@@ -12,8 +12,9 @@ before minting; this module is contextd's cascade:
       map, lazily loaded from the graph (backed by the ``name_norm`` btree
       index from migration _0007) and updated on every mint so intra-batch
       duplicates collapse without a second pass,
-  (c) fuzzy match (rapidfuzz) — next commit,
-  (d) embedding similarity — later commit.
+  (c) fuzzy match (rapidfuzz WRatio, length-gated),
+  (d) embedding similarity via ``EntityResolver`` — the name is embedded
+      once and the vector is reused at mint time when nothing matches.
 
 Ambiguity (two distinct nodes sharing one normalized name — possible on
 legacy data written before ``name_norm``) logs and falls through: matching
@@ -33,6 +34,7 @@ from typing import Literal
 
 from rapidfuzz import fuzz, process
 
+from contextd.indexer.entity_resolver import EntityResolver
 from contextd.storage._keys import primary_key_for
 from contextd.storage.base import GraphStore
 
@@ -92,6 +94,11 @@ class EntityCascadeResolver:
         self._store = store
         self._settings = settings
         self._embed = embed
+        self._entity_resolver = (
+            EntityResolver(store, embed, threshold=settings.embedding_threshold)
+            if embed is not None
+            else None
+        )
         self._maps: dict[tuple[str, str], dict[str, str | None]] = {}
         self._lock = threading.Lock()
 
@@ -119,13 +126,15 @@ class EntityCascadeResolver:
         fuzzy = self._fuzzy_match(label, name, norm, mapping)
         if fuzzy is not None:
             return fuzzy
-        # Rung (d) embedding slots in here in a later commit.
+        embedded, vec = self._embedding_match(label, name, norm, corpus)
+        if embedded is not None:
+            return embedded
         with self._lock:
             if not known:
                 # Record the mint so intra-batch duplicates collapse; an
                 # ambiguous marker is never overwritten.
                 mapping[norm] = name
-        return Resolution(action="minted", pk_value=name, rule="minted", norm=norm)
+        return Resolution(action="minted", pk_value=name, rule="minted", norm=norm, vector=vec)
 
     def _fuzzy_match(
         self, label: str, name: str, norm: str, mapping: dict[str, str | None]
@@ -171,6 +180,44 @@ class EntityCascadeResolver:
             s.fuzzy_threshold,
         )
         return None
+
+    def _embedding_match(
+        self, label: str, name: str, norm: str, corpus: str
+    ) -> tuple[Resolution | None, list[float] | None]:
+        """Rung (d): embedding similarity, delegated to ``EntityResolver``.
+
+        The name is embedded once; on a miss the vector is returned so the
+        mint writes it as the node's ``embedding`` — one embed call serves
+        both the check and the mint. Any failure (provider, missing index)
+        degrades to a vector-less mint, never blocks the edge.
+        """
+        s = self._settings
+        if not s.embedding_enabled or self._embed is None or self._entity_resolver is None:
+            return None, None
+        try:
+            [vec] = self._embed([name])
+        except Exception as exc:
+            _log.warning("resolve: embed failed for %s %.80r: %s", label, name, exc)
+            return None, None
+        try:
+            scored = self._entity_resolver.resolve_scored(label, name, vector=vec, corpus=corpus)
+        except Exception as exc:
+            _log.warning("resolve: embedding search failed for %s %.80r: %s", label, name, exc)
+            return None, vec
+        if scored is not None:
+            pk, score = scored
+            _log.info(
+                "resolve: %s %.80r matched existing %.80r by embedding (score %.3f)",
+                label,
+                name,
+                pk,
+                score,
+            )
+            return (
+                Resolution(action="matched", pk_value=pk, rule=f"embedding:{score:.3f}", norm=norm),
+                vec,
+            )
+        return None, vec
 
     def _mapping(self, label: str, corpus: str) -> dict[str, str | None]:
         key = (corpus, label)

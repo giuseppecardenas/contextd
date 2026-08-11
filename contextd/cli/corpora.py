@@ -336,7 +336,7 @@ def _build_pipeline_deps(
         relate=RelateDeps(
             inferrer=RelationshipInferrer(inference_provider, renderer, ontology),
             retriever=GraphCandidateRetriever(ontology),
-            resolver=EntityCascadeResolver(store, settings),
+            resolver=EntityCascadeResolver(store, settings, embed=embedding_provider.embed),
             settings=settings,
         ),
         hasher=FileHasher(state_path=contextd_home() / "state" / f"{corpus_name}-index-state.json"),

@@ -144,6 +144,75 @@ def test_fuzzy_never_matches_across_dissimilar_names() -> None:
     assert r.action == "minted"
 
 
+# --- embedding rung -----------------------------------------------------------
+
+
+def test_embedding_match_reuses_supplied_vector_and_corpus_filters() -> None:
+    store = MagicMock()
+    store.exec_read.return_value = []  # empty norm cache
+    store.vector_search.return_value = [
+        {"node": {"name": "other-corpus twin", "corpus": "other"}, "score": 0.99},
+        {"node": {"name": "spatial hashing", "corpus": "c"}, "score": 0.95},
+    ]
+    embed = MagicMock(return_value=[[0.1] * 4])
+    resolver = EntityCascadeResolver(store, ResolutionSettings(), embed=embed)
+    r = resolver.resolve("Pattern", "spatial hash grid layout", "c")
+    assert r.action == "matched"
+    assert r.pk_value == "spatial hashing"
+    assert r.rule.startswith("embedding:")
+    embed.assert_called_once_with(["spatial hash grid layout"])
+    assert store.vector_search.call_args.kwargs["query"] == [0.1] * 4
+
+
+def test_embedding_miss_mints_with_vector() -> None:
+    store = MagicMock()
+    store.exec_read.return_value = []
+    store.vector_search.return_value = []
+    embed = MagicMock(return_value=[[0.2] * 4])
+    resolver = EntityCascadeResolver(store, ResolutionSettings(), embed=embed)
+    r = resolver.resolve("Pattern", "temporal amortisation", "c")
+    assert r.action == "minted"
+    assert r.vector == [0.2] * 4  # one embed call serves check AND mint
+
+
+def test_embedding_disabled_skips_embed_call() -> None:
+    store = MagicMock()
+    store.exec_read.return_value = []
+    embed = MagicMock()
+    resolver = EntityCascadeResolver(
+        store, ResolutionSettings(embedding_enabled=False), embed=embed
+    )
+    r = resolver.resolve("Pattern", "spatial hash", "c")
+    assert r.action == "minted"
+    assert r.vector is None
+    embed.assert_not_called()
+
+
+def test_embed_failure_degrades_to_vectorless_mint() -> None:
+    store = MagicMock()
+    store.exec_read.return_value = []
+    embed = MagicMock(side_effect=RuntimeError("provider down"))
+    resolver = EntityCascadeResolver(store, ResolutionSettings(), embed=embed)
+    r = resolver.resolve("Pattern", "spatial hash", "c")
+    assert r.action == "minted"
+    assert r.vector is None
+
+
+def test_mint_with_vector_writes_embedding_property() -> None:
+    store = MagicMock()
+    store.exec_read.return_value = []
+    store.vector_search.return_value = []
+    embed = MagicMock(return_value=[[0.3] * 4])
+    resolver = EntityCascadeResolver(store, ResolutionSettings(), embed=embed)
+    written = _apply_inferred_edge(
+        store, "src.md", "File", _rel(), "c", resolver=resolver, settings=resolver.settings
+    )
+    assert written is True
+    _, props = store.upsert_node.call_args.args
+    assert props["embedding"] == [0.3] * 4
+    assert props["name_norm"] == "spatial hash"
+
+
 # --- _apply_inferred_edge integration ----------------------------------------
 
 
