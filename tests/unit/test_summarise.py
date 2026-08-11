@@ -45,6 +45,48 @@ def test_forwards_max_words_to_renderer() -> None:
     assert call_kwargs["content"] == "content"
 
 
+def test_context_identity_reaches_renderer() -> None:
+    from contextd.inference.context import UnitIdentity
+
+    mock_provider = MagicMock()
+    mock_provider.generate.return_value = json.dumps(
+        {"summary": "x", "key_points": [], "entities_mentioned": []}
+    )
+    mock_renderer = MagicMock()
+    mock_renderer.render.return_value = "rendered"
+    summariser = Summariser(provider=mock_provider, renderer=mock_renderer)
+    identity = UnitIdentity(
+        corpus="c",
+        file_path="C:/x/docs/a.md",
+        rel_path="docs/a.md",
+        suffix=".md",
+        src_label="Section",
+        src_id="C:/x/docs/a.md#intro",
+        title="Intro",
+        anchor="intro",
+        parent_titles=("Top",),
+    )
+    summariser.summarise("content", context=identity)
+    kw = mock_renderer.render.call_args.kwargs
+    assert kw["source_path"] == "docs/a.md"
+    assert kw["section_title"] == "Intro"
+    assert kw["parent_chain"] == "Top"
+    assert kw["corpus_name"] == "c"
+
+
+def test_no_context_renders_empty_identity_fields() -> None:
+    mock_provider = MagicMock()
+    mock_provider.generate.return_value = json.dumps(
+        {"summary": "x", "key_points": [], "entities_mentioned": []}
+    )
+    mock_renderer = MagicMock()
+    mock_renderer.render.return_value = "rendered"
+    Summariser(provider=mock_provider, renderer=mock_renderer).summarise("content")
+    kw = mock_renderer.render.call_args.kwargs
+    assert kw["source_path"] == ""
+    assert kw["section_title"] == ""
+
+
 def test_handles_code_fences_in_provider_response() -> None:
     """The LLM sometimes wraps JSON in ```json fences — strip them."""
     mock_provider = MagicMock()
@@ -157,7 +199,11 @@ def test_summariser_uses_default_template_when_no_override() -> None:
     mock_renderer.render.return_value = "default-prompt"
     summariser = Summariser(provider=mock_provider, renderer=mock_renderer, max_words=50)
     summariser.summarise("body text")
-    mock_renderer.render.assert_called_once_with("summarise", content="body text", max_words="50")
+    mock_renderer.render.assert_called_once()
+    assert mock_renderer.render.call_args.args == ("summarise",)
+    kw = mock_renderer.render.call_args.kwargs
+    assert kw["content"] == "body text"
+    assert kw["max_words"] == "50"
     mock_renderer.render_path.assert_not_called()
 
 
@@ -176,9 +222,11 @@ def test_summariser_uses_override_when_prompt_path_set(tmp_path: Path) -> None:
         provider=mock_provider, renderer=mock_renderer, max_words=75, prompt_path=override
     )
     summariser.summarise("some content")
-    mock_renderer.render_path.assert_called_once_with(
-        override, content="some content", max_words="75"
-    )
+    mock_renderer.render_path.assert_called_once()
+    assert mock_renderer.render_path.call_args.args == (override,)
+    kw = mock_renderer.render_path.call_args.kwargs
+    assert kw["content"] == "some content"
+    assert kw["max_words"] == "75"
     mock_renderer.render.assert_not_called()
 
 

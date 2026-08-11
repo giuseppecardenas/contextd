@@ -186,6 +186,7 @@ def phase_summarise(
     store: GraphStore,
     *,
     concurrency: int = 1,
+    corpus_cfg: CorpusConfig | None = None,
 ) -> PhaseResult:
     # Idempotent resume: skip files whose File node already has a summary.
     # One batch lookup against the store; set-subtracted from the input list.
@@ -200,9 +201,24 @@ def phase_summarise(
         }
         files = [f for f in files if canonical_path(f) not in already]
 
+    def _identity(f: Path) -> UnitIdentity | None:
+        if corpus_cfg is None:
+            return None
+        file_path = canonical_path(f)
+        return UnitIdentity(
+            corpus=corpus_cfg.corpus.name,
+            file_path=file_path,
+            rel_path=_rel_path(f, Path(corpus_cfg.corpus.root)),
+            suffix=f.suffix,
+            src_label="File",
+            src_id=file_path,
+        )
+
     def _worker(f: Path) -> tuple[int, int]:
         try:
-            result = summariser.summarise(f.read_text(encoding="utf-8", errors="replace"))
+            result = summariser.summarise(
+                f.read_text(encoding="utf-8", errors="replace"), context=_identity(f)
+            )
         except Exception as exc:
             # Must be logged, not just counted. The caller reports this file as
             # indexed regardless (its node and embedding do exist), so without a
@@ -609,14 +625,30 @@ def phase_summarise_sections(
     for p in {Path(r["path"]) for r in rows}:
         cache.get(p)
 
+    corpus_name = corpus_cfg.corpus.name
+    root = Path(corpus_cfg.corpus.root)
+
     def _worker(r: dict[str, str]) -> tuple[int, int]:
         anchor = r["id"].split("#", 1)[1]
-        sec = cache.get(Path(r["path"])).by_anchor(anchor)
+        path = Path(r["path"])
+        parsed = cache.get(path)
+        sec = parsed.by_anchor(anchor)
         if not sec:
             _log.debug("summarise: section %s no longer present on disk; skipping", r["id"])
             return (0, 1)
+        identity = UnitIdentity(
+            corpus=corpus_name,
+            file_path=parsed.canonical,
+            rel_path=_rel_path(path, root),
+            suffix=path.suffix,
+            src_label="Section",
+            src_id=r["id"],
+            title=sec.title,
+            anchor=sec.anchor,
+            parent_titles=parsed.parent_chain(sec.anchor),
+        )
         try:
-            result = summariser.summarise(sec.body)
+            result = summariser.summarise(sec.body, context=identity)
         except Exception as exc:
             _log.warning(
                 "summarise failed for section %s: %s: %s; Section left without a summary",

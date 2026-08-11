@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from contextd.inference._json_body import loads_json_body
+from contextd.inference.context import UnitIdentity, identity_vars
 from contextd.inference.prompts import PromptRenderer
 from contextd.providers.base import InferenceProvider, PromptRequest
 
@@ -42,28 +43,31 @@ class Summariser:
 
         ``prompt_path``: absolute path to an override template. If None,
         Summariser uses the default 'summarise' template from the renderer's
-        search directory. The override receives the same {content, max_words}
-        variable set as the default — templates that reference only a subset
-        are valid.
+        search directory. The override receives the same variable set as the
+        default (content, max_words, and the identity keys) — templates that
+        reference only a subset are valid.
         """
         self._provider = provider
         self._renderer = renderer
         self._max_words = max_words
         self._prompt_path = prompt_path
 
-    def summarise(self, content: str) -> FileSummary:
+    def summarise(self, content: str, *, context: UnitIdentity | None = None) -> FileSummary:
+        """Summarise one unit of content.
+
+        ``context`` carries the unit's identity (path, section title, parent
+        chain) into the prompt's Source block so the model knows what it is
+        reading; ``None`` renders empty identity fields.
+        """
+        template_vars = {
+            "content": content,
+            "max_words": str(self._max_words),
+            **identity_vars(context),
+        }
         if self._prompt_path is not None:
-            prompt = self._renderer.render_path(
-                self._prompt_path,
-                content=content,
-                max_words=str(self._max_words),
-            )
+            prompt = self._renderer.render_path(self._prompt_path, **template_vars)
         else:
-            prompt = self._renderer.render(
-                "summarise",
-                content=content,
-                max_words=str(self._max_words),
-            )
+            prompt = self._renderer.render("summarise", **template_vars)
         response = self._provider.generate(
             PromptRequest(system="", prompt=prompt, call_site="summary")
         )

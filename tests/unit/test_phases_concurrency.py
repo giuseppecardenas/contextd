@@ -40,7 +40,7 @@ def _tracking_summariser(delay: float = 0.02) -> tuple[MagicMock, list[int]]:
     """Mock summariser that records the thread id of each call."""
     thread_ids: list[int] = []
 
-    def _summarise(content: str) -> FileSummary:
+    def _summarise(content: str, *, context: object = None) -> FileSummary:
         thread_ids.append(threading.get_ident())
         time.sleep(delay)  # force overlap windows when workers are parallel
         return FileSummary(summary=f"s:{content[:10]}", key_points=[], entities_mentioned=[])
@@ -108,7 +108,7 @@ def test_phase_summarise_parallel_uses_multiple_threads(tmp_path: Path) -> None:
 def test_phase_summarise_parallel_llm_error_is_skipped(tmp_path: Path) -> None:
     files = _make_files(tmp_path, 4)
 
-    def _maybe_raise(content: str) -> FileSummary:
+    def _maybe_raise(content: str, *, context: object = None) -> FileSummary:
         if content == "content-2":
             raise RuntimeError("provider failure")
         return FileSummary(summary="ok", key_points=[], entities_mentioned=[])

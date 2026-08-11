@@ -339,7 +339,9 @@ def run_incremental_file(
         phases.derive_file_level_for_path(path, corpus, store)
     else:
         phases.phase_enumerate([path], corpus.corpus.name, hasher, store, embedder)
-        phases.phase_summarise([path], summariser, store, concurrency=inference_concurrency)
+        phases.phase_summarise(
+            [path], summariser, store, concurrency=inference_concurrency, corpus_cfg=corpus
+        )
         phases.phase_relate(
             [path],
             relate,
@@ -419,7 +421,11 @@ def run_bootstrap(
             results.append(phases.phase_embed(other_files))
             results.append(
                 phases.phase_summarise(
-                    other_files, summariser, store, concurrency=inference_concurrency
+                    other_files,
+                    summariser,
+                    store,
+                    concurrency=inference_concurrency,
+                    corpus_cfg=corpus,
                 )
             )
             results.append(
@@ -441,7 +447,9 @@ def run_bootstrap(
         # phase_embed is an accounting-only pass (embedding already done in enumerate).
         results.append(phases.phase_embed(files))
         results.append(
-            phases.phase_summarise(files, summariser, store, concurrency=inference_concurrency)
+            phases.phase_summarise(
+                files, summariser, store, concurrency=inference_concurrency, corpus_cfg=corpus
+            )
         )
         results.append(
             phases.phase_relate(

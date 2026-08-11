@@ -160,6 +160,28 @@ def test_phase_summarise_sections_read_query_filters_on_summary(tmp_path: Path) 
     assert "s.summary IS NULL" in called_cypher
 
 
+def test_phase_summarise_sections_passes_populated_identity(tmp_path: Path) -> None:
+    """The section worker hands the summariser a UnitIdentity carrying the
+    section's title/anchor and corpus-relative path."""
+    corpus, rows = _make_section_corpus(tmp_path, 1, 1)
+    summariser = MagicMock()
+    summariser.summarise.return_value = FileSummary(
+        summary="s", key_points=[], entities_mentioned=[]
+    )
+    store = MagicMock()
+    store.exec_read.return_value = rows
+
+    phase_summarise_sections(corpus, summariser, store)
+
+    ctx = summariser.summarise.call_args.kwargs["context"]
+    assert ctx is not None
+    assert ctx.src_label == "Section"
+    assert ctx.title == "Heading 0"
+    assert ctx.anchor == "heading-0"
+    assert ctx.rel_path == "doc0.md"
+    assert ctx.corpus == "test"
+
+
 def test_phase_summarise_sections_read_query_filters_path_null_stubs(
     tmp_path: Path,
 ) -> None:
