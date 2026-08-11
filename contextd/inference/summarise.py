@@ -96,3 +96,39 @@ class Summariser:
             key_points=_as_str_list(data.get("key_points")),
             entities_mentioned=_as_str_list(data.get("entities_mentioned")),
         )
+
+    def roll_up(
+        self,
+        *,
+        child_summaries: list[str],
+        own_prose: str,
+        context: UnitIdentity | None = None,
+    ) -> str:
+        """Synthesise a parent-level summary from child summaries + own prose.
+
+        Used for parent sections (whose bodies are exclusive and may be
+        prose-less) and for file-level summaries over top-level section
+        summaries. Always renders the packaged ``rollup`` template — never the
+        per-corpus override or the router: the input is already-normalised
+        summaries, format-neutral by design.
+        """
+        bullets = "\n".join(f"- {s}" for s in child_summaries) or "(none)"
+        prompt = self._renderer.render(
+            "rollup",
+            child_summaries=bullets,
+            own_prose=own_prose,
+            max_words=str(self._max_words),
+            **identity_vars(context),
+        )
+        response = self._provider.generate(
+            PromptRequest(system="", prompt=prompt, call_site="summary")
+        )
+        data = loads_json_body(response)
+        if "summary" not in data:
+            raise KeyError(f"Provider response missing 'summary'; got keys {list(data.keys())}")
+        summary = data["summary"]
+        if not isinstance(summary, str):
+            raise TypeError(
+                f"Provider response 'summary' must be a string; got {type(summary).__name__}"
+            )
+        return summary

@@ -87,6 +87,35 @@ def test_no_context_renders_empty_identity_fields() -> None:
     assert kw["section_title"] == ""
 
 
+def test_roll_up_renders_children_and_prose_via_rollup_template() -> None:
+    provider = MagicMock()
+    provider.generate.return_value = json.dumps({"summary": "synth"})
+    renderer = MagicMock()
+    renderer.render.return_value = "rendered"
+    summariser = Summariser(provider=provider, renderer=renderer, max_words=80)
+    got = summariser.roll_up(child_summaries=["child one", "child two"], own_prose="parent prose")
+    assert got == "synth"
+    assert renderer.render.call_args.args == ("rollup",)
+    kw = renderer.render.call_args.kwargs
+    assert kw["child_summaries"] == "- child one\n- child two"
+    assert kw["own_prose"] == "parent prose"
+    assert kw["max_words"] == "80"
+    # Never routed through render_path (corpus overrides don't apply).
+    renderer.render_path.assert_not_called()
+
+
+def test_roll_up_missing_summary_raises() -> None:
+    import pytest
+
+    provider = MagicMock()
+    provider.generate.return_value = json.dumps({"text": "nope"})
+    renderer = MagicMock()
+    renderer.render.return_value = "rendered"
+    summariser = Summariser(provider=provider, renderer=renderer)
+    with pytest.raises(KeyError, match="got keys"):
+        summariser.roll_up(child_summaries=["a"], own_prose="")
+
+
 def test_handles_code_fences_in_provider_response() -> None:
     """The LLM sometimes wraps JSON in ```json fences — strip them."""
     mock_provider = MagicMock()
