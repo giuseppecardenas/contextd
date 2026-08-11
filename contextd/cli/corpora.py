@@ -271,9 +271,9 @@ def _build_pipeline_deps(
     ``corpus_toml_path`` is used to resolve relative ``[ontology] overrides``
     paths — relative paths resolve relative to the TOML file's parent directory.
     """
+    from contextd.indexer.candidates import GraphCandidateRetriever
     from contextd.indexer.hasher import FileHasher
     from contextd.indexer.phases import RelateDeps
-    from contextd.inference.context import EmptyRetriever
     from contextd.inference.prompts import PromptRenderer
     from contextd.inference.relate import RelationshipInferrer
     from contextd.inference.summarise import Summariser
@@ -324,9 +324,7 @@ def _build_pipeline_deps(
         ),
         relate=RelateDeps(
             inferrer=RelationshipInferrer(inference_provider, renderer, ontology),
-            # Swapped for the graph-backed retriever when candidate retrieval
-            # lands; EmptyRetriever keeps behavior identical until then.
-            retriever=EmptyRetriever(),
+            retriever=GraphCandidateRetriever(ontology),
         ),
         hasher=FileHasher(state_path=contextd_home() / "state" / f"{corpus_name}-index-state.json"),
         embedder=embedding_provider,
