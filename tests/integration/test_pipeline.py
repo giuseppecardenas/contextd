@@ -133,7 +133,14 @@ def test_bootstrap_on_sample_corpus(backend, tmp_path: Path) -> None:
     )
 
     phase_names = [p.name for p in result.phases]
-    assert phase_names == ["enumerate", "embed", "summarise", "relate", "close"]
+    assert phase_names == [
+        "enumerate",
+        "embed",
+        "summarise",
+        "relate",
+        "merge_descriptions",
+        "close",
+    ]
     assert result.phases[0].processed == 2  # two files enumerated
     assert result.phases[1].processed == 2  # two files embedded
     assert result.phases[2].processed == 2  # two files summarised
@@ -214,13 +221,20 @@ def test_section_granular_bootstrap(backend, tmp_path: Path) -> None:
     assert "§1.1 Sub" in titles
     assert "§2 Second" in titles
 
-    # Section summaries populated by phase_summarise_sections.
-    summaries = backend.exec_read("MATCH (s:Section {corpus: 'sec'}) RETURN s.summary AS summary")
-    assert len(summaries) == 4
-    assert all(row["summary"] == "s" for row in summaries)
+    # Leaves are summarised directly; the parent (§1 First has §1.1 Sub as a
+    # child) gets its summary from the roll-up phase instead.
+    rows = backend.exec_read(
+        "MATCH (s:Section {corpus: 'sec'}) RETURN s.title AS title, s.summary AS summary"
+    )
+    by_title = {r["title"]: r["summary"] for r in rows}
+    assert len(by_title) == 4
+    assert by_title["§1 First"] == "rolled"
+    assert by_title["§1.1 Sub"] == "s"
+    assert by_title["§2 Second"] == "s"
+    assert by_title["Title"] == "s"  # preamble is a leaf
 
-    # File summary populated by phase_derive_file_level (concatenated first
-    # sentences of child section summaries, capped at 500 chars).
+    # File summary populated by phase_derive_file_level (LLM roll-up over
+    # top-level section summaries).
     file_rows = backend.exec_read("MATCH (f:File {corpus: 'sec'}) RETURN f.summary AS summary")
     assert len(file_rows) == 1
     assert file_rows[0]["summary"] is not None
