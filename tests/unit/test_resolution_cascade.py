@@ -93,6 +93,57 @@ def test_cache_load_failure_degrades_to_mint() -> None:
     assert r.action == "minted"
 
 
+# --- fuzzy rung ---------------------------------------------------------------
+
+
+def test_near_duplicate_matches_by_fuzzy() -> None:
+    resolver, _ = _resolver(
+        rows=[{"name": "Steam Workshop Integrations", "name_norm": "steam workshop integrations"}]
+    )
+    r = resolver.resolve("Integration", "Steam Workshop Integration", "c")
+    assert r.action == "matched"
+    assert r.pk_value == "Steam Workshop Integrations"
+    assert r.rule.startswith("fuzzy:")
+
+
+def test_short_names_skip_fuzzy() -> None:
+    resolver, _ = _resolver(
+        rows=[{"name": "orc", "name_norm": "orc"}],
+        settings=ResolutionSettings(fuzzy_min_length=6),
+    )
+    r = resolver.resolve("Pattern", "orcs", "c")
+    assert r.action == "minted"  # 4 chars < gate — collision-prone, never fuzzed
+
+
+def test_below_threshold_logs_ambiguous_and_mints() -> None:
+    import logging
+
+    import pytest  # noqa: F401  (caplog fixture import hint for readers)
+
+    resolver, _ = _resolver(
+        rows=[{"name": "economy simulation", "name_norm": "economy simulation"}],
+        settings=ResolutionSettings(fuzzy_threshold=99.0),
+    )
+    logger = logging.getLogger("contextd.indexer.resolution")
+    records: list[logging.LogRecord] = []
+    handler = logging.Handler()
+    handler.emit = records.append  # type: ignore[method-assign]
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    try:
+        r = resolver.resolve("Service", "economy simulator", "c")
+    finally:
+        logger.removeHandler(handler)
+    assert r.action == "minted"
+    assert any("ambiguous-fuzzy" in rec.getMessage() for rec in records)
+
+
+def test_fuzzy_never_matches_across_dissimilar_names() -> None:
+    resolver, _ = _resolver(rows=[{"name": "spatial hash grid", "name_norm": "spatial hash grid"}])
+    r = resolver.resolve("Pattern", "temporal amortisation", "c")
+    assert r.action == "minted"
+
+
 # --- _apply_inferred_edge integration ----------------------------------------
 
 

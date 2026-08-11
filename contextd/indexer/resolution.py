@@ -31,6 +31,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
+from rapidfuzz import fuzz, process
+
 from contextd.storage._keys import primary_key_for
 from contextd.storage.base import GraphStore
 
@@ -114,13 +116,61 @@ class EntityCascadeResolver:
             return Resolution(action="matched", pk_value=hit, rule="exact-norm", norm=norm)
         if known:  # present but None → known-ambiguous normalized name
             _log.info("resolve: %s %.80r ambiguous by exact-norm; minting as-is", label, name)
-        # Rungs (c) fuzzy and (d) embedding slot in here in later commits.
+        fuzzy = self._fuzzy_match(label, name, norm, mapping)
+        if fuzzy is not None:
+            return fuzzy
+        # Rung (d) embedding slots in here in a later commit.
         with self._lock:
             if not known:
                 # Record the mint so intra-batch duplicates collapse; an
                 # ambiguous marker is never overwritten.
                 mapping[norm] = name
         return Resolution(action="minted", pk_value=name, rule="minted", norm=norm)
+
+    def _fuzzy_match(
+        self, label: str, name: str, norm: str, mapping: dict[str, str | None]
+    ) -> Resolution | None:
+        """Rung (c): rapidfuzz WRatio against the known normalized names.
+
+        Length-gated (short names are collision-prone — the stand-in for
+        Graphiti's Shannon-entropy gate). WRatio over token_set_ratio for its
+        length-mismatch handling (``runeledger.register_x`` vs
+        ``register_x``). Scores in [80, threshold) log as ``ambiguous-fuzzy``
+        and fall through to mint — the audit corpus for a future LLM
+        adjudication rung.
+        """
+        s = self._settings
+        if len(norm) < s.fuzzy_min_length:
+            return None
+        with self._lock:
+            candidates = {k: v for k, v in mapping.items() if v is not None}
+        if not candidates:
+            return None
+        best = process.extractOne(
+            norm, list(candidates.keys()), scorer=fuzz.WRatio, score_cutoff=80.0
+        )
+        if best is None:
+            return None
+        matched_norm, score, _ = best
+        pk = candidates[matched_norm]
+        if score >= s.fuzzy_threshold:
+            _log.info(
+                "resolve: %s %.80r matched existing %.80r by fuzzy (score %.1f)",
+                label,
+                name,
+                pk,
+                score,
+            )
+            return Resolution(action="matched", pk_value=pk, rule=f"fuzzy:{score:.1f}", norm=norm)
+        _log.info(
+            "resolve: %s %.80r ambiguous-fuzzy vs %.80r (score %.1f below %.1f); minting",
+            label,
+            name,
+            pk,
+            score,
+            s.fuzzy_threshold,
+        )
+        return None
 
     def _mapping(self, label: str, corpus: str) -> dict[str, str | None]:
         key = (corpus, label)

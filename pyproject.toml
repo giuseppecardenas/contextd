@@ -28,6 +28,8 @@ dependencies = [
     "structlog>=24.1",
     "watchdog>=4.0",
     "markdown-it-py>=3.0",
+    # Fuzzy rung of the entity-resolution cascade (indexer/resolution.py).
+    "rapidfuzz>=3.6",
     # Capped below 2.0: that major renames Tool.inputSchema to input_schema
     # (keeping inputSchema only as a serialisation alias, so constructing a Tool
     # still works but reading the attribute does not) and reshapes tool
