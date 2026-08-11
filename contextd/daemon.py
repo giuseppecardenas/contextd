@@ -11,7 +11,6 @@ Thread model:
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import logging
 import logging.handlers
 import os
@@ -30,7 +29,7 @@ from contextd.indexer.checkpoint import Checkpoint, CheckpointStore
 from contextd.indexer.debouncer import DebouncedQueue
 from contextd.indexer.git_lock import branch_is_allowed, is_git_busy
 from contextd.indexer.hasher import FileHasher
-from contextd.indexer.heading_parser import HeadingParser
+from contextd.indexer.heading_parser import HeadingParser, section_hash
 from contextd.indexer.pipeline import (
     _DEFAULT_EXCLUDE_DIRS,
     IncrementalResult,
@@ -190,10 +189,7 @@ def _process_sweep_unit(
             max_level=entry.corpus_cfg.corpus.heading_max_level,
         )
         current_sections = parser.parse(text)
-        current_hashes: dict[str, str] = {
-            sec.anchor: hashlib.md5((sec.title + "\n\n" + sec.body).encode()).hexdigest()
-            for sec in current_sections
-        }
+        current_hashes: dict[str, str] = {sec.anchor: section_hash(sec) for sec in current_sections}
 
         stored_anchors = {rec.anchor for rec in unit.sections}
         current_anchors = set(current_hashes.keys())

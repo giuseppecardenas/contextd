@@ -211,8 +211,6 @@ def test_run_incremental_file_returns_skipped_when_no_sections_changed(
     tmp_path: Path,
 ) -> None:
     """When all Section.hash values match current content, action=='skipped'."""
-    import hashlib
-
     from contextd.indexer.pipeline import run_incremental_file
 
     md = tmp_path / "doc.md"
@@ -220,16 +218,12 @@ def test_run_incremental_file_returns_skipped_when_no_sections_changed(
     corpus = _make_corpus(tmp_path, granularity="section")
 
     file_path_str = canonical_path(md)
-    from contextd.indexer.heading_parser import HeadingParser
+    from contextd.indexer.heading_parser import HeadingParser, section_hash
 
     parser = HeadingParser(min_level=2, max_level=4)
     sections = parser.parse(md.read_text(encoding="utf-8"))
     stored_rows = [
-        {
-            "id": f"{file_path_str}#{sec.anchor}",
-            "hash": hashlib.md5((sec.title + "\n\n" + sec.body).encode()).hexdigest(),
-        }
-        for sec in sections
+        {"id": f"{file_path_str}#{sec.anchor}", "hash": section_hash(sec)} for sec in sections
     ]
 
     store = MagicMock()
@@ -252,7 +246,6 @@ def test_run_incremental_file_returns_skipped_when_no_sections_changed(
 
 def test_run_incremental_file_clears_only_changed_sections(tmp_path: Path) -> None:
     """Only sections with a stale hash get cleared; unchanged sections are kept."""
-    import hashlib
     from unittest.mock import patch
 
     from contextd.indexer.pipeline import run_incremental_file
@@ -262,14 +255,14 @@ def test_run_incremental_file_clears_only_changed_sections(tmp_path: Path) -> No
     corpus = _make_corpus(tmp_path, granularity="section")
 
     file_path_str = canonical_path(md)
-    from contextd.indexer.heading_parser import HeadingParser
+    from contextd.indexer.heading_parser import HeadingParser, section_hash
 
     parser = HeadingParser(min_level=2, max_level=4)
     sections = parser.parse(md.read_text(encoding="utf-8"))
     alpha = sections[0]
 
     # Alpha has correct hash; Beta has stale hash
-    alpha_hash = hashlib.md5((alpha.title + "\n\n" + alpha.body).encode()).hexdigest()
+    alpha_hash = section_hash(alpha)
     stored_rows = [
         {"id": f"{file_path_str}#alpha", "hash": alpha_hash},
         {"id": f"{file_path_str}#beta", "hash": "stale_hash_value"},

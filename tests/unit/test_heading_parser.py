@@ -253,6 +253,10 @@ def test_preamble_anchor_participates_in_dedup() -> None:
 
 
 def _section_hash(sec: ParsedSection) -> str:
+    # Deliberately a literal copy of heading_parser.section_hash, NOT an
+    # import: this block freezes the on-graph hash contract, so it must fail
+    # if the production formula ever changes. Importing the helper would make
+    # these tests tautological.
     return hashlib.md5((sec.title + "\n\n" + sec.body).encode()).hexdigest()
 
 

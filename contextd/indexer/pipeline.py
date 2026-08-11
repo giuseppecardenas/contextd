@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import fnmatch
-import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,6 +12,7 @@ from contextd._paths import canonical_path
 from contextd.corpus_config import CorpusConfig
 from contextd.indexer import phases
 from contextd.indexer.hasher import FileHasher
+from contextd.indexer.heading_parser import section_hash
 from contextd.inference.relate import RelationshipInferrer
 from contextd.inference.summarise import Summariser
 from contextd.providers.base import EmbeddingProvider
@@ -293,12 +293,7 @@ def run_incremental_file(
         parsed = phases._build_parser(corpus).parse(
             path.read_text(encoding="utf-8", errors="replace")
         )
-        current_hashes = {
-            f"{file_path_str}#{sec.anchor}": hashlib.md5(
-                (sec.title + "\n\n" + sec.body).encode()
-            ).hexdigest()
-            for sec in parsed
-        }
+        current_hashes = {f"{file_path_str}#{sec.anchor}": section_hash(sec) for sec in parsed}
 
         # Query graph for stored hashes
         rows = store.exec_read(

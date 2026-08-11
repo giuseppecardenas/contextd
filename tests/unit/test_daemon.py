@@ -787,7 +787,6 @@ def test_sweep_enqueues_file_when_section_hash_changed(tmp_path: Path) -> None:
 
 
 def test_sweep_skips_file_when_all_section_hashes_match(tmp_path: Path) -> None:
-    import hashlib
     import queue
 
     from contextd.daemon import SectionRecord, SweepWorkUnit, _process_sweep_unit
@@ -796,10 +795,10 @@ def test_sweep_skips_file_when_all_section_hashes_match(tmp_path: Path) -> None:
     md.write_text("## Alpha\n\nBody alpha.\n", encoding="utf-8")
     entry = _make_section_entry(tmp_path)
 
-    from contextd.indexer.heading_parser import HeadingParser
+    from contextd.indexer.heading_parser import HeadingParser, section_hash
 
     sec = HeadingParser(min_level=2, max_level=4).parse(md.read_text(encoding="utf-8"))[0]
-    matched_hash = hashlib.md5((sec.title + "\n\n" + sec.body).encode()).hexdigest()
+    matched_hash = section_hash(sec)
 
     unit = SweepWorkUnit(
         path=str(md),
@@ -836,7 +835,6 @@ def test_sweep_enqueues_file_when_section_added(tmp_path: Path) -> None:
 
 def test_sweep_enqueues_file_when_section_removed(tmp_path: Path) -> None:
     """Graph has a section anchor no longer in the file → enqueue for GC."""
-    import hashlib
     import queue
 
     from contextd.daemon import SectionRecord, SweepWorkUnit, _process_sweep_unit
@@ -845,10 +843,10 @@ def test_sweep_enqueues_file_when_section_removed(tmp_path: Path) -> None:
     md.write_text("## Alpha\n\nBody alpha.\n", encoding="utf-8")  # no "beta"
     entry = _make_section_entry(tmp_path)
 
-    from contextd.indexer.heading_parser import HeadingParser
+    from contextd.indexer.heading_parser import HeadingParser, section_hash
 
     sec = HeadingParser(min_level=2, max_level=4).parse(md.read_text(encoding="utf-8"))[0]
-    alpha_hash = hashlib.md5((sec.title + "\n\n" + sec.body).encode()).hexdigest()
+    alpha_hash = section_hash(sec)
 
     # Graph still has both alpha and a now-removed beta
     unit = SweepWorkUnit(

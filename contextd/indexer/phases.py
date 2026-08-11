@@ -32,7 +32,6 @@ mis-routing by future callers.
 from __future__ import annotations
 
 import datetime as dt
-import hashlib
 import logging
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -43,7 +42,7 @@ from typing import Any, TypeVar
 from contextd._paths import canonical_path
 from contextd.corpus_config import CorpusConfig
 from contextd.indexer.hasher import FileHasher
-from contextd.indexer.heading_parser import HeadingParser, ParsedSection
+from contextd.indexer.heading_parser import HeadingParser, ParsedSection, section_hash
 from contextd.inference.relate import InferredRelationship, RelationshipInferrer
 from contextd.inference.summarise import Summariser
 from contextd.providers.base import EmbeddingProvider
@@ -386,7 +385,7 @@ def phase_enumerate_sections(
                     "file_id": file_path,
                     "ordinal": sec.ordinal,
                     "embedding": embedding_map[(file_path, section_id)],
-                    "hash": hashlib.md5((sec.title + "\n\n" + sec.body).encode()).hexdigest(),
+                    "hash": section_hash(sec),
                     "updated": now,
                 },
             )

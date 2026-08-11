@@ -8,6 +8,7 @@ node upserts + CONTAINS / PARENT_OF / NEXT_SIBLING edges.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 
@@ -23,6 +24,16 @@ class ParsedSection:
     body: str
     ordinal: int
     parent_anchor: str | None
+
+
+def section_hash(section: ParsedSection) -> str:
+    """The on-graph Section content hash: md5 over title + blank line + body.
+
+    This exact formula is persisted as ``Section.hash`` and compared on every
+    incremental pass and daemon sweep — changing it invalidates every stored
+    section hash and forces a full re-index of section-granular corpora.
+    """
+    return hashlib.md5((section.title + "\n\n" + section.body).encode("utf-8")).hexdigest()
 
 
 _NON_ALNUM = re.compile(r"[^\w\s-]")

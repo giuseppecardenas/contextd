@@ -134,8 +134,6 @@ def test_phase_enumerate_stamps_updated_on_file(tmp_path: Path) -> None:
 
 
 def test_phase_enumerate_sections_stores_section_hash(tmp_path: Path) -> None:
-    import hashlib
-
     from contextd.indexer.phases import phase_enumerate_sections
 
     md_file = tmp_path / "doc.md"
@@ -163,11 +161,10 @@ def test_phase_enumerate_sections_stores_section_hash(tmp_path: Path) -> None:
         h = upsert["hash"]
         assert isinstance(h, str) and len(h) == 32  # MD5 hex digest
 
-    # Re-parse to cross-check each hash against the title+body formula
-    from contextd.indexer.heading_parser import HeadingParser
+    # Re-parse to cross-check each hash against the canonical formula
+    from contextd.indexer.heading_parser import HeadingParser, section_hash
 
     parser = HeadingParser(min_level=2, max_level=4)
     sections = parser.parse(md_file.read_text(encoding="utf-8"))
     for sec, upsert in zip(sections, section_upserts, strict=True):
-        expected = hashlib.md5((sec.title + "\n\n" + sec.body).encode()).hexdigest()
-        assert upsert["hash"] == expected
+        assert upsert["hash"] == section_hash(sec)
