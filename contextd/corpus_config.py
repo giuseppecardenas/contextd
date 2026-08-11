@@ -7,11 +7,12 @@ ontology aliases, include/exclude globs, and per-corpus MCP tools.
 
 from __future__ import annotations
 
+import re
 import tomllib
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 Granularity = Literal["file", "section"]
 
@@ -65,6 +66,37 @@ class SummarizationSection(BaseModel):
     """
 
 
+class LexicalPattern(BaseModel):
+    """One per-corpus deterministic reference pattern (``[[lexical.patterns]]``).
+
+    ``target_type`` may be an ontology alias (e.g. ``FRRow``); it resolves to
+    canon at extraction time. ``formats`` limits the pattern to file suffixes
+    (without the dot); empty means all formats. ``capture`` selects the regex
+    group used as the target name (0 = whole match).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    regex: str
+    edge_type: str
+    target_type: str
+    formats: list[str] = Field(default_factory=list)
+    capture: int = 0
+
+    @field_validator("regex")
+    @classmethod
+    def _compiles(cls, v: str) -> str:
+        try:
+            re.compile(v)
+        except re.error as exc:
+            raise ValueError(f"invalid regex {v!r}: {exc}") from exc
+        return v
+
+
+class LexicalSection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    patterns: list[LexicalPattern] = Field(default_factory=list)
+
+
 class ResolutionSection(BaseModel):
     """Per-corpus knobs for the entity-resolution cascade.
 
@@ -100,6 +132,7 @@ class CorpusConfig(BaseModel):
     mcp: McpSection = Field(default_factory=McpSection)
     summarization: SummarizationSection = Field(default_factory=SummarizationSection)
     resolution: ResolutionSection = Field(default_factory=ResolutionSection)
+    lexical: LexicalSection = Field(default_factory=LexicalSection)
 
     @classmethod
     def load(cls, path: Path) -> CorpusConfig:

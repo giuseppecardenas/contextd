@@ -273,6 +273,7 @@ def _build_pipeline_deps(
     """
     from contextd.indexer.candidates import GraphCandidateRetriever
     from contextd.indexer.hasher import FileHasher
+    from contextd.indexer.lexical import LexicalRegistry
     from contextd.indexer.phases import RelateDeps
     from contextd.indexer.resolution import EntityCascadeResolver, ResolutionSettings
     from contextd.inference.prompts import PromptRenderer
@@ -338,6 +339,7 @@ def _build_pipeline_deps(
             retriever=GraphCandidateRetriever(ontology),
             resolver=EntityCascadeResolver(store, settings, embed=embedding_provider.embed),
             settings=settings,
+            lexical=LexicalRegistry(ontology, corpus_cfg.lexical.patterns),
         ),
         hasher=FileHasher(state_path=contextd_home() / "state" / f"{corpus_name}-index-state.json"),
         embedder=embedding_provider,

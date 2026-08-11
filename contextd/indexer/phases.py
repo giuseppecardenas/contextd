@@ -44,6 +44,7 @@ from contextd._paths import canonical_path
 from contextd.corpus_config import CorpusConfig
 from contextd.indexer.hasher import FileHasher
 from contextd.indexer.heading_parser import ParsedSection, _github_anchor, section_hash
+from contextd.indexer.lexical import LexicalReference, LexicalRegistry
 from contextd.indexer.resolution import EntityCascadeResolver, Resolution, ResolutionSettings
 from contextd.indexer.units import ParseCache, extractor_for
 from contextd.inference.context import CandidateRetriever, UnitIdentity
@@ -87,6 +88,76 @@ class RelateDeps:
     retriever: CandidateRetriever
     resolver: EntityCascadeResolver | None = None
     settings: ResolutionSettings | None = None
+    lexical: LexicalRegistry | None = None
+
+
+def _extract_lexical(
+    relate: RelateDeps, body: str, identity: UnitIdentity
+) -> list[LexicalReference]:
+    """Run deterministic lexical extraction; failures degrade to zero refs."""
+    if relate.lexical is None:
+        return []
+    try:
+        return relate.lexical.extract(body, identity=identity)
+    except Exception as exc:
+        _log.warning("lexical extraction failed for %s: %s", identity.src_id, exc)
+        return []
+
+
+def _write_unit_edges(
+    store: GraphStore,
+    relate: RelateDeps,
+    src_id: str,
+    src_label: str,
+    lex_refs: list[LexicalReference],
+    relations: list[InferredRelationship],
+    corpus: str,
+) -> int:
+    """Write a unit's lexical then LLM edges; return the dropped count.
+
+    Lexical references are deterministic detections at confidence 1.0 and are
+    written first through the same validation gates as model output; an LLM
+    row whose resolved triple duplicates a lexical edge is skipped, because
+    MERGE + ``SET r +=`` last-write-wins would let the model's 0.9 clobber
+    the deterministic 1.0.
+    """
+    written: set[tuple[str, str, str]] = set()
+    skipped = 0
+    for ref in lex_refs:
+        lex_rel = InferredRelationship(
+            edge_type=ref.edge_type,
+            target_type=ref.target_type,
+            target_name=ref.target_name,
+            confidence=1.0,
+            reason=f"lexical:{ref.rule}",
+        )
+        if not _apply_inferred_edge(
+            store,
+            src_id,
+            src_label,
+            lex_rel,
+            corpus,
+            resolver=relate.resolver,
+            settings=relate.settings,
+            method="lexical",
+            written_triples=written,
+        ):
+            skipped += 1
+    for rel in relations:
+        # File/Section targets resolve to an existing node or are dropped
+        # (never stubbed); other labels go through the resolution cascade.
+        if not _apply_inferred_edge(
+            store,
+            src_id,
+            src_label,
+            rel,
+            corpus,
+            resolver=relate.resolver,
+            settings=relate.settings,
+            skip_triples=written,
+        ):
+            skipped += 1
+    return skipped
 
 
 def _rel_path(path: Path, root: Path) -> str:
@@ -289,16 +360,14 @@ def phase_relate(
             src_label="File",
             src_id=file_path,
         )
+        body = f.read_text(encoding="utf-8", errors="replace")
+        lex_refs = _extract_lexical(relate, body, identity)
         try:
             # Candidates are retrieved per unit, inside the worker — the whole
             # point of the retriever seam (a phase-global sample cannot offer
             # unit-relevant targets).
             candidates = relate.retriever.for_unit(store, identity=identity)
-            relations = relate.inferrer.infer(
-                f.read_text(encoding="utf-8", errors="replace"),
-                identity=identity,
-                candidates=candidates,
-            )
+            relations = relate.inferrer.infer(body, identity=identity, candidates=candidates)
         except Exception as exc:
             # Logged for the same reason as the summarise failure above, plus one
             # of its own: the inferred_at marker below is what makes resume
@@ -317,21 +386,9 @@ def phase_relate(
         # docstring) — a label-less MATCH is ambiguous when endpoints
         # have non-"path" PKs.
         store.delete_edges(file_path, origin="inferred", src_label="File")
-        local_skipped = 0
-        for rel in relations:
-            # File/Section targets resolve to an existing node or are dropped
-            # (never stubbed); other labels upsert a tagged stub. See
-            # _apply_inferred_edge.
-            if not _apply_inferred_edge(
-                store,
-                file_path,
-                "File",
-                rel,
-                corpus,
-                resolver=relate.resolver,
-                settings=relate.settings,
-            ):
-                local_skipped += 1
+        local_skipped = _write_unit_edges(
+            store, relate, file_path, "File", lex_refs, relations, corpus
+        )
         # Mark processed so an interrupted run can resume without re-inferring.
         # Marker set only after the upsert loop completes; exception paths
         # return (0, 1) above and leave the marker unset.
@@ -742,6 +799,7 @@ def phase_relate_sections(
             anchor=sec.anchor,
             parent_titles=parsed.parent_chain(sec.anchor),
         )
+        lex_refs = _extract_lexical(relate, sec.body, identity)
         try:
             # Per-unit candidate retrieval — see phase_relate.
             candidates = relate.retriever.for_unit(store, identity=identity)
@@ -757,21 +815,9 @@ def phase_relate_sections(
             return (0, 1)
         # Wipe-and-replace inferred edges for this section (spec §5.5).
         store.delete_edges(r["id"], origin="inferred", src_label="Section")
-        local_skipped = 0
-        for rel in relations:
-            # File/Section targets resolve to an existing node or are dropped
-            # (never stubbed); other labels upsert a tagged stub. See
-            # _apply_inferred_edge.
-            if not _apply_inferred_edge(
-                store,
-                r["id"],
-                "Section",
-                rel,
-                corpus_name,
-                resolver=relate.resolver,
-                settings=relate.settings,
-            ):
-                local_skipped += 1
+        local_skipped = _write_unit_edges(
+            store, relate, r["id"], "Section", lex_refs, relations, corpus_name
+        )
         # Mark processed so resume can skip. Only set after the upsert loop
         # completes; exception paths above return (0, 1) unmarked.
         store.exec_write(
@@ -986,6 +1032,9 @@ def _apply_inferred_edge(
     *,
     resolver: EntityCascadeResolver | None = None,
     settings: ResolutionSettings | None = None,
+    method: str = "llm",
+    written_triples: set[tuple[str, str, str]] | None = None,
+    skip_triples: set[tuple[str, str, str]] | None = None,
 ) -> bool:
     """Write one inferred edge from ``src_id`` to ``rel``'s target.
 
@@ -1051,6 +1100,7 @@ def _apply_inferred_edge(
             rel.target_name,
         )
         return False
+    resolution: Resolution | None = None
     if rel.target_type in _ENUMERATION_OWNED_LABELS:
         target_value = _resolve_existing_node(store, rel.target_type, rel.target_name, corpus)
         if target_value is None:
@@ -1077,12 +1127,22 @@ def _apply_inferred_edge(
         # divergent model-supplied value — this also protects ``Risk``, whose
         # PK is the content field ``description``.
         if resolver is not None:
-            resolution: Resolution | None = resolver.resolve(
-                rel.target_type, rel.target_name, corpus
-            )
-        else:
-            resolution = None
+            resolution = resolver.resolve(rel.target_type, rel.target_name, corpus)
         target_value = resolution.pk_value if resolution is not None else rel.target_name
+    triple = (rel.edge_type, rel.target_type, target_value)
+    if skip_triples is not None and triple in skip_triples:
+        # A lexical (deterministic, confidence 1.0) edge already covers this
+        # triple; letting the LLM row through would clobber it via MERGE +
+        # SET r += last-write-wins. Lexical wins.
+        _log.info(
+            "relate skip: %s -[%s]-> %s(%.80s) duplicates a lexical edge",
+            src_id,
+            rel.edge_type,
+            rel.target_type,
+            target_value,
+        )
+        return False
+    if rel.target_type not in _ENUMERATION_OWNED_LABELS:
         props: dict[str, Any] = {pk: target_value, "corpus": corpus}
         if resolution is not None and resolution.action == "minted":
             props["name_norm"] = resolution.norm
@@ -1097,10 +1157,12 @@ def _apply_inferred_edge(
         target_value,
         rel.edge_type,
         origin="inferred",
-        properties={"confidence": rel.confidence, "reason": rel.reason},
+        properties={"confidence": rel.confidence, "reason": rel.reason, "method": method},
         src_label=src_label,
         dst_label=rel.target_type,
     )
+    if written_triples is not None:
+        written_triples.add(triple)
     return True
 
 
