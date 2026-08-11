@@ -43,12 +43,8 @@ from typing import Any, TypeVar
 from contextd._paths import canonical_path
 from contextd.corpus_config import CorpusConfig
 from contextd.indexer.hasher import FileHasher
-from contextd.indexer.heading_parser import (
-    HeadingParser,
-    ParsedSection,
-    _github_anchor,
-    section_hash,
-)
+from contextd.indexer.heading_parser import ParsedSection, _github_anchor, section_hash
+from contextd.indexer.units import ParseCache, extractor_for
 from contextd.inference.relate import InferredRelationship, RelationshipInferrer
 from contextd.inference.summarise import Summariser
 from contextd.ontology.schema import ENUMERATION_OWNED_LABELS, NON_ENTITY_LABELS, Ontology
@@ -314,6 +310,8 @@ def phase_enumerate_sections(
     embedder: EmbeddingProvider,
     hasher: FileHasher,
     batch_size: int = 128,
+    *,
+    parse_cache: ParseCache | None = None,
 ) -> PhaseResult:
     """Section-granular enumeration — emits Section nodes + structural edges.
 
@@ -328,19 +326,17 @@ def phase_enumerate_sections(
     MD5 of the file. Previously a "__pending__" sentinel blocked
     incremental re-index in section mode.
     """
-    parser = HeadingParser(
-        min_level=corpus_cfg.corpus.heading_min_level,
-        max_level=corpus_cfg.corpus.heading_max_level,
-    )
+    cache = parse_cache if parse_cache is not None else ParseCache(corpus_cfg)
 
-    # Defence-in-depth (M10.9): non-.md files yield zero sections and would
-    # leave File.summary NULL.  The caller (run_bootstrap) partitions files
-    # before calling this function; this guard catches future mis-routing.
+    # Defence-in-depth (M10.9): files without a unit extractor yield zero
+    # sections and would leave File.summary NULL.  The caller (run_bootstrap)
+    # partitions files before calling this function; this guard catches
+    # future mis-routing.
     md_files: list[Path] = []
     for f in files:
-        if f.suffix != ".md":
+        if extractor_for(corpus_cfg, f.suffix) is None:
             _log.warning(
-                "phase_enumerate_sections: skipping non-markdown file %s "
+                "phase_enumerate_sections: skipping non-unit-parseable file %s "
                 "(route through phase_enumerate instead)",
                 f,
             )
@@ -350,7 +346,7 @@ def phase_enumerate_sections(
 
     # Collect all sections for all files first so we can batch-embed in one pass.
     parsed_by_file: list[tuple[Path, list[ParsedSection]]] = [
-        (f, parser.parse(f.read_text(encoding="utf-8", errors="replace"))) for f in files
+        (f, cache.get(f).sections) for f in files
     ]
     all_sections: list[tuple[Path, ParsedSection]] = [
         (f, sec) for f, secs in parsed_by_file for sec in secs
@@ -447,6 +443,8 @@ def phase_gc_sections(
     files: list[Path],
     corpus_cfg: CorpusConfig,
     store: GraphStore,
+    *,
+    parse_cache: ParseCache | None = None,
 ) -> PhaseResult:
     """Delete Section nodes whose anchor is no longer produced by the parser.
 
@@ -470,13 +468,12 @@ def phase_gc_sections(
     scale (≤ a few hundred stale sections per re-index) makes the N-query
     overhead negligible.
     """
-    parser = _build_parser(corpus_cfg)
-    parse_cache: dict[str, list[ParsedSection]] = {}
+    cache = parse_cache if parse_cache is not None else ParseCache(corpus_cfg)
     current_ids: set[str] = set()
     for f in files:
-        file_path = canonical_path(f)
-        for sec in _parse_cached(parser, f, parse_cache):
-            current_ids.add(f"{file_path}#{sec.anchor}")
+        parsed = cache.get(f)
+        for sec in parsed.sections:
+            current_ids.add(f"{parsed.canonical}#{sec.anchor}")
 
     existing = store.exec_read(
         "MATCH (s:Section {corpus: $c}) RETURN s.id AS id",
@@ -495,6 +492,8 @@ def gc_sections_for_file(
     path: Path,
     corpus_cfg: CorpusConfig,
     store: GraphStore,
+    *,
+    parse_cache: ParseCache | None = None,
 ) -> int:
     """GC stale Section nodes for a single file after incremental re-index.
 
@@ -505,14 +504,12 @@ def gc_sections_for_file(
     Called from run_incremental_file after phase_enumerate_sections so that
     renamed headings are cleaned up without waiting for the next full bootstrap.
     """
-    if path.suffix != ".md":
+    if extractor_for(corpus_cfg, path.suffix) is None:
         return 0
-    parser = _build_parser(corpus_cfg)
-    file_path = canonical_path(path)
-    current_ids: set[str] = {
-        f"{file_path}#{sec.anchor}"
-        for sec in parser.parse(path.read_text(encoding="utf-8", errors="replace"))
-    }
+    cache = parse_cache if parse_cache is not None else ParseCache(corpus_cfg)
+    parsed = cache.get(path)
+    file_path = parsed.canonical
+    current_ids: set[str] = {f"{file_path}#{sec.anchor}" for sec in parsed.sections}
     existing = store.exec_read(
         "MATCH (s:Section {corpus: $corpus, path: $path}) RETURN s.id AS id",
         {"corpus": corpus_cfg.corpus.name, "path": file_path},
@@ -546,17 +543,18 @@ def phase_summarise_sections(
     store: GraphStore,
     *,
     concurrency: int = 1,
+    parse_cache: ParseCache | None = None,
 ) -> PhaseResult:
     """Summarise each Section node via LLM (spec §5.11.3).
 
-    Reads the section body by re-parsing the source file and locating the
-    section by anchor. On any exception (provider error, parse failure) the
-    section is skipped and counted in skipped. Parse output is cached per
-    file via ``_parse_cached`` so each file is parsed once per phase.
+    Reads the section body from the shared :class:`ParseCache` (one parse per
+    file per pipeline invocation) and locates the section by anchor. On any
+    exception (provider error, parse failure) the section is skipped and
+    counted in skipped.
 
     Under ``concurrency > 1`` the parse cache is pre-populated serially
-    before workers are dispatched; dict reads from multiple threads are
-    safe, dict writes are not.
+    before workers are dispatched; cache reads from multiple threads are
+    safe, cache writes are not.
     """
     # Idempotent resume: skip Section nodes that already have a summary.
     rows = store.exec_read(
@@ -569,16 +567,13 @@ def phase_summarise_sections(
         "RETURN s.id AS id, s.path AS path",
         {"c": corpus_cfg.corpus.name},
     )
-    parser = _build_parser(corpus_cfg)
-    parse_cache: dict[str, list[ParsedSection]] = {}
+    cache = parse_cache if parse_cache is not None else ParseCache(corpus_cfg)
     for p in {Path(r["path"]) for r in rows}:
-        _parse_cached(parser, p, parse_cache)
+        cache.get(p)
 
     def _worker(r: dict[str, str]) -> tuple[int, int]:
-        path = Path(r["path"])
-        sections = _parse_cached(parser, path, parse_cache)
         anchor = r["id"].split("#", 1)[1]
-        sec = next((s for s in sections if s.anchor == anchor), None)
+        sec = cache.get(Path(r["path"])).by_anchor(anchor)
         if not sec:
             _log.debug("summarise: section %s no longer present on disk; skipping", r["id"])
             return (0, 1)
@@ -617,14 +612,15 @@ def phase_relate_sections(
     entity_sampler: Callable[[GraphStore], list[str]],
     *,
     concurrency: int = 1,
+    parse_cache: ParseCache | None = None,
 ) -> PhaseResult:
     """Infer typed edges from each Section node (spec §5.11.3).
 
     Wipe-and-replace inferred edges per section then upsert new ones.
     ``delete_edges`` and ``upsert_edge`` both supply ``src_label="Section"``
-    and ``dst_label=rel.target_type`` as required by ``GraphStore``. Parse
-    output is cached per file via ``_parse_cached`` so each file is parsed
-    once per phase.
+    and ``dst_label=rel.target_type`` as required by ``GraphStore``. Section
+    bodies come from the shared :class:`ParseCache` (one parse per file per
+    pipeline invocation).
 
     Under ``concurrency > 1`` the parse cache is pre-populated serially
     before workers are dispatched (see ``phase_summarise_sections``).
@@ -640,18 +636,15 @@ def phase_relate_sections(
         "RETURN s.id AS id, s.path AS path",
         {"c": corpus_cfg.corpus.name},
     )
-    parser = _build_parser(corpus_cfg)
-    parse_cache: dict[str, list[ParsedSection]] = {}
+    cache = parse_cache if parse_cache is not None else ParseCache(corpus_cfg)
     for p in {Path(r["path"]) for r in rows}:
-        _parse_cached(parser, p, parse_cache)
+        cache.get(p)
     known = entity_sampler(store)
     corpus_name = corpus_cfg.corpus.name
 
     def _worker(r: dict[str, str]) -> tuple[int, int]:
-        path = Path(r["path"])
-        sections = _parse_cached(parser, path, parse_cache)
         anchor = r["id"].split("#", 1)[1]
-        sec = next((s for s in sections if s.anchor == anchor), None)
+        sec = cache.get(Path(r["path"])).by_anchor(anchor)
         if not sec:
             _log.debug("relate: section %s no longer present on disk; skipping", r["id"])
             return (0, 1)
@@ -985,33 +978,6 @@ def _apply_inferred_edge(
         dst_label=rel.target_type,
     )
     return True
-
-
-def _build_parser(corpus_cfg: CorpusConfig) -> HeadingParser:
-    """Construct a HeadingParser from corpus config bounds."""
-    return HeadingParser(
-        min_level=corpus_cfg.corpus.heading_min_level,
-        max_level=corpus_cfg.corpus.heading_max_level,
-    )
-
-
-def _parse_cached(
-    parser: HeadingParser, path: Path, cache: dict[str, list[ParsedSection]]
-) -> list[ParsedSection]:
-    """Parse ``path`` once per phase, caching by absolute path string.
-
-    Was: each of the three section phases re-parsed every file per
-    section row. For a file with N sections, phase_summarise_sections
-    and phase_relate_sections each did N parses. Now each phase does
-    one parse per file, N-times cheaper.
-    """
-    key = str(path)
-    cached = cache.get(key)
-    if cached is not None:
-        return cached
-    sections = parser.parse(path.read_text(encoding="utf-8", errors="replace"))
-    cache[key] = sections
-    return sections
 
 
 def _concat_first_sentences(summaries: list[str], *, max_chars: int) -> str:

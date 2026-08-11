@@ -29,7 +29,7 @@ from contextd.indexer.checkpoint import Checkpoint, CheckpointStore
 from contextd.indexer.debouncer import DebouncedQueue
 from contextd.indexer.git_lock import branch_is_allowed, is_git_busy
 from contextd.indexer.hasher import FileHasher
-from contextd.indexer.heading_parser import HeadingParser, section_hash
+from contextd.indexer.heading_parser import section_hash
 from contextd.indexer.pipeline import (
     _DEFAULT_EXCLUDE_DIRS,
     IncrementalResult,
@@ -37,6 +37,7 @@ from contextd.indexer.pipeline import (
     enumerate_corpus_files,
     run_incremental_file,
 )
+from contextd.indexer.units import extractor_for
 from contextd.indexer.upsert_buffer import PendingUpsertBuffer
 from contextd.indexer.watcher import CorpusWatcher
 
@@ -184,11 +185,13 @@ def _process_sweep_unit(
             relay.put(path)
             return
 
-        parser = HeadingParser(
-            min_level=entry.corpus_cfg.corpus.heading_min_level,
-            max_level=entry.corpus_cfg.corpus.heading_max_level,
-        )
-        current_sections = parser.parse(text)
+        extractor = extractor_for(entry.corpus_cfg, Path(unit.path).suffix)
+        if extractor is None:
+            # Section records exist for a file no unit parser covers — treat
+            # as changed so the incremental path can reconcile.
+            relay.put(path)
+            return
+        current_sections = extractor.parse(text)
         current_hashes: dict[str, str] = {sec.anchor: section_hash(sec) for sec in current_sections}
 
         stored_anchors = {rec.anchor for rec in unit.sections}

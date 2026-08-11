@@ -13,6 +13,7 @@ from contextd.corpus_config import CorpusConfig
 from contextd.indexer import phases
 from contextd.indexer.hasher import FileHasher
 from contextd.indexer.heading_parser import section_hash
+from contextd.indexer.units import ParseCache
 from contextd.inference.relate import RelationshipInferrer
 from contextd.inference.summarise import Summariser
 from contextd.providers.base import EmbeddingProvider
@@ -295,10 +296,9 @@ def run_incremental_file(
         file_path_str = canonical_path(path)
         corpus_name = corpus.corpus.name
 
-        # Parse current sections and compute per-section hashes
-        parsed = phases._build_parser(corpus).parse(
-            path.read_text(encoding="utf-8", errors="replace")
-        )
+        # One shared parse per file across the diff below and every phase call.
+        parse_cache = ParseCache(corpus)
+        parsed = parse_cache.get(path).sections
         current_hashes = {f"{file_path_str}#{sec.anchor}": section_hash(sec) for sec in parsed}
 
         # Query graph for stored hashes
@@ -320,13 +320,24 @@ def run_incremental_file(
 
         # Re-enumerate writes current hash+embedding for ALL sections;
         # IS-NULL guards protect unchanged sections in summarise/relate
-        phases.phase_enumerate_sections([path], corpus, store, embedder, hasher)
-        phases.gc_sections_for_file(path, corpus, store)
+        phases.phase_enumerate_sections(
+            [path], corpus, store, embedder, hasher, parse_cache=parse_cache
+        )
+        phases.gc_sections_for_file(path, corpus, store, parse_cache=parse_cache)
         phases.phase_summarise_sections(
-            corpus, summariser, store, concurrency=inference_concurrency
+            corpus,
+            summariser,
+            store,
+            concurrency=inference_concurrency,
+            parse_cache=parse_cache,
         )
         phases.phase_relate_sections(
-            corpus, inferrer, store, entity_sampler, concurrency=inference_concurrency
+            corpus,
+            inferrer,
+            store,
+            entity_sampler,
+            concurrency=inference_concurrency,
+            parse_cache=parse_cache,
         )
         phases.derive_file_level_for_path(path, corpus, store)
     else:
@@ -372,21 +383,36 @@ def run_bootstrap(
         md_files, other_files = _partition_markdown(files)
 
         # --- Section pipeline for .md files ---
+        # One shared parse per file across every section phase this run.
+        parse_cache = ParseCache(corpus)
         # Embedder passed to phase_enumerate_sections so that Section.embedding
         # is included at CREATE time.
-        results.append(phases.phase_enumerate_sections(md_files, corpus, store, embedder, hasher))
+        results.append(
+            phases.phase_enumerate_sections(
+                md_files, corpus, store, embedder, hasher, parse_cache=parse_cache
+            )
+        )
         # SD #74: drop stale Section nodes (only .md files produce sections).
-        results.append(phases.phase_gc_sections(md_files, corpus, store))
+        results.append(phases.phase_gc_sections(md_files, corpus, store, parse_cache=parse_cache))
         # Accounting phase: Section embeddings written at CREATE time.
         results.append(phases.phase_embed_sections(corpus, store))
         results.append(
             phases.phase_summarise_sections(
-                corpus, summariser, store, concurrency=inference_concurrency
+                corpus,
+                summariser,
+                store,
+                concurrency=inference_concurrency,
+                parse_cache=parse_cache,
             )
         )
         results.append(
             phases.phase_relate_sections(
-                corpus, inferrer, store, entity_sampler, concurrency=inference_concurrency
+                corpus,
+                inferrer,
+                store,
+                entity_sampler,
+                concurrency=inference_concurrency,
+                parse_cache=parse_cache,
             )
         )
         results.append(phases.phase_derive_file_level(corpus, store))
