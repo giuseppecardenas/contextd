@@ -50,15 +50,18 @@ def test_anchor_matches_github_convention() -> None:
     assert sections[0].anchor == "6149-pricing-tiers"
 
 
-def test_body_range_includes_content_until_next_equal_or_shallower() -> None:
+def test_body_is_exclusive_of_child_sections() -> None:
     md = "## A\n\nbody a\n\n### A.1\n\nbody a.1\n\n## B\n\nbody b"
     parser = HeadingParser(min_level=2, max_level=4)
     sections = parser.parse(md)
-    # A's body spans everything up to B (inclusive of A.1's content).
+    # A's body is exclusive: its own prose only, ending at the next promoted
+    # heading of any level. A.1's content lives solely in A.1.
     a = sections[0]
     assert "body a" in a.body
-    assert "body a.1" in a.body
+    assert "body a.1" not in a.body
     assert "body b" not in a.body
+    a1 = sections[1]
+    assert "body a.1" in a1.body
 
 
 def test_parent_ordinals() -> None:
@@ -313,18 +316,19 @@ def test_empty_section_body_hash_is_consistent() -> None:
     assert _section_hash(empty2) == h
 
 
-def test_parent_body_includes_nested_subsection_content() -> None:
+def test_parent_body_excludes_children_and_child_edit_keeps_parent_hash() -> None:
     md = "## Parent\n\nParent intro.\n\n### Child\n\nChild content.\n\n## Sibling\n\nSibling text."
     parser = HeadingParser(min_level=2, max_level=4)
     sections = parser.parse(md)
     parent = sections[0]
     assert "Parent intro." in parent.body
-    assert "Child content." in parent.body
+    assert "Child content." not in parent.body
     assert "Sibling text." not in parent.body
 
-    # Changing child content changes parent's hash (parent body includes child)
+    # Disjoint-hash guarantee: editing child content must NOT change the
+    # parent's hash, so incremental re-index touches only the edited section.
     md2 = (
         "## Parent\n\nParent intro.\n\n### Child\n\nChild MODIFIED.\n\n## Sibling\n\nSibling text."
     )
     parent2 = parser.parse(md2)[0]
-    assert _section_hash(parent) != _section_hash(parent2)
+    assert _section_hash(parent) == _section_hash(parent2)

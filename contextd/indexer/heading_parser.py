@@ -161,13 +161,15 @@ class HeadingParser:
             parent_anchor = parent.anchor if parent else None
             ordinal = sibling_ordinals.get(parent_anchor, 0)
             sibling_ordinals[parent_anchor] = ordinal + 1
-            # Compute body extent: lines from this heading until next heading
-            # of equal or shallower level (or end of file).
-            next_line_bound = len(lines)
-            for k in range(idx + 1, len(heads)):
-                if heads[k][0] <= level:
-                    next_line_bound = heads[k][2]
-                    break
+            # Compute body extent: lines from this heading until the next
+            # promoted heading of ANY level (or end of file). Bodies are
+            # exclusive — a parent's body carries only its own prose; child
+            # section text lives solely in the child's body, so no text is
+            # embedded/summarised/related more than once and a child edit
+            # never dirties the parent's hash. Non-promoted deeper headings
+            # (e.g. H5 under max_level=4) still fold into the nearest
+            # promoted ancestor because they never enter `heads`.
+            next_line_bound = heads[idx + 1][2] if idx + 1 < len(heads) else len(lines)
             body = "".join(lines[line:next_line_bound])
 
             # Compute unique anchor — deduplicate GitHub-style.
