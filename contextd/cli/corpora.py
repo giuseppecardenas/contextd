@@ -274,6 +274,7 @@ def _build_pipeline_deps(
     from contextd.indexer.candidates import GraphCandidateRetriever
     from contextd.indexer.hasher import FileHasher
     from contextd.indexer.phases import RelateDeps
+    from contextd.indexer.resolution import EntityCascadeResolver, ResolutionSettings
     from contextd.inference.prompts import PromptRenderer
     from contextd.inference.relate import RelationshipInferrer
     from contextd.inference.summarise import Summariser
@@ -318,6 +319,16 @@ def _build_pipeline_deps(
                 f"summarization.prompt_override file is not valid UTF-8: {resolved_prompt} ({exc})"
             ) from exc
         prompt_path = resolved_prompt
+    store = build_graph_store(cfg)
+    res = corpus_cfg.resolution
+    settings = ResolutionSettings(
+        case_insensitive_labels=frozenset(res.case_insensitive_labels),
+        fuzzy_threshold=res.fuzzy_threshold,
+        fuzzy_min_length=res.fuzzy_min_length,
+        embedding_threshold=res.embedding_threshold,
+        embedding_enabled=res.embedding_enabled,
+        confidence_floor=res.confidence_floor,
+    )
     return PipelineDeps(
         summariser=Summariser(
             inference_provider, renderer, max_words=max_words, prompt_path=prompt_path
@@ -325,10 +336,12 @@ def _build_pipeline_deps(
         relate=RelateDeps(
             inferrer=RelationshipInferrer(inference_provider, renderer, ontology),
             retriever=GraphCandidateRetriever(ontology),
+            resolver=EntityCascadeResolver(store, settings),
+            settings=settings,
         ),
         hasher=FileHasher(state_path=contextd_home() / "state" / f"{corpus_name}-index-state.json"),
         embedder=embedding_provider,
-        store=build_graph_store(cfg),
+        store=store,
     )
 
 

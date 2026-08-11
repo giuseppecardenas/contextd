@@ -65,6 +65,33 @@ class SummarizationSection(BaseModel):
     """
 
 
+class ResolutionSection(BaseModel):
+    """Per-corpus knobs for the entity-resolution cascade.
+
+    ``case_insensitive_labels`` names the entity kinds whose instances are
+    prose concepts (case variance is noise); every other kind stays
+    case-sensitive, because code symbols and IDs may differ only by case.
+    All fields default to the shipped cascade settings.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    case_insensitive_labels: list[str] = Field(
+        default_factory=lambda: [
+            "Pattern",
+            "Technology",
+            "Client",
+            "Risk",
+            "Service",
+            "Integration",
+        ]
+    )
+    fuzzy_threshold: float = 90.0
+    fuzzy_min_length: int = 6
+    embedding_threshold: float = 0.92
+    embedding_enabled: bool = True
+    confidence_floor: float = 0.5
+
+
 class CorpusConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     corpus: CorpusSection
@@ -72,6 +99,7 @@ class CorpusConfig(BaseModel):
     ontology: OntologySection = Field(default_factory=OntologySection)
     mcp: McpSection = Field(default_factory=McpSection)
     summarization: SummarizationSection = Field(default_factory=SummarizationSection)
+    resolution: ResolutionSection = Field(default_factory=ResolutionSection)
 
     @classmethod
     def load(cls, path: Path) -> CorpusConfig:

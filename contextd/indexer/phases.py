@@ -44,6 +44,7 @@ from contextd._paths import canonical_path
 from contextd.corpus_config import CorpusConfig
 from contextd.indexer.hasher import FileHasher
 from contextd.indexer.heading_parser import ParsedSection, _github_anchor, section_hash
+from contextd.indexer.resolution import EntityCascadeResolver, Resolution, ResolutionSettings
 from contextd.indexer.units import ParseCache, extractor_for
 from contextd.inference.context import CandidateRetriever, UnitIdentity
 from contextd.inference.relate import InferredRelationship, RelationshipInferrer
@@ -75,14 +76,17 @@ class PhaseResult:
 class RelateDeps:
     """Dependencies of the relate phases beyond the store.
 
-    Grows as the resolution pipeline lands (resolver, lexical registry,
-    settings); starting shape is the inferrer plus the per-unit candidate
-    retriever. Constructed once in ``_build_pipeline_deps`` and threaded
-    through ``run_bootstrap`` / ``run_incremental_file`` / the daemon.
+    Grows as the resolution pipeline lands (lexical registry next); the
+    optional fields default to ``None`` so direct construction in tests
+    stays light — production wiring (``_build_pipeline_deps``) supplies
+    everything. Constructed once and threaded through ``run_bootstrap`` /
+    ``run_incremental_file`` / the daemon.
     """
 
     inferrer: RelationshipInferrer
     retriever: CandidateRetriever
+    resolver: EntityCascadeResolver | None = None
+    settings: ResolutionSettings | None = None
 
 
 def _rel_path(path: Path, root: Path) -> str:
@@ -318,7 +322,15 @@ def phase_relate(
             # File/Section targets resolve to an existing node or are dropped
             # (never stubbed); other labels upsert a tagged stub. See
             # _apply_inferred_edge.
-            if not _apply_inferred_edge(store, file_path, "File", rel, corpus):
+            if not _apply_inferred_edge(
+                store,
+                file_path,
+                "File",
+                rel,
+                corpus,
+                resolver=relate.resolver,
+                settings=relate.settings,
+            ):
                 local_skipped += 1
         # Mark processed so an interrupted run can resume without re-inferring.
         # Marker set only after the upsert loop completes; exception paths
@@ -750,7 +762,15 @@ def phase_relate_sections(
             # File/Section targets resolve to an existing node or are dropped
             # (never stubbed); other labels upsert a tagged stub. See
             # _apply_inferred_edge.
-            if not _apply_inferred_edge(store, r["id"], "Section", rel, corpus_name):
+            if not _apply_inferred_edge(
+                store,
+                r["id"],
+                "Section",
+                rel,
+                corpus_name,
+                resolver=relate.resolver,
+                settings=relate.settings,
+            ):
                 local_skipped += 1
         # Mark processed so resume can skip. Only set after the upsert loop
         # completes; exception paths above return (0, 1) unmarked.
@@ -837,10 +857,11 @@ def _infer_key(target_type: str) -> str:
 # constant so the relate phase, the parse gate, and prune-entities agree.
 _ENUMERATION_OWNED_LABELS = ENUMERATION_OWNED_LABELS
 
-# Edges below this confidence are dropped at write time. The relate prompt
+# Fallback floor when no ResolutionSettings are supplied (direct phase calls
+# in tests); production wiring passes per-corpus settings. The relate prompt
 # documents "below 0.5 skip", but prompt rules are advisory — this is the
-# enforced floor. Becomes per-corpus configurable with ResolutionSettings.
-_CONFIDENCE_FLOOR = 0.5
+# enforced floor.
+_DEFAULT_RESOLUTION_SETTINGS = ResolutionSettings()
 
 
 _DOTTED_NUMBER = re.compile(r"\d+(\.\d+)*")
@@ -957,7 +978,14 @@ def _resolve_existing_node(store: GraphStore, label: str, raw_name: str, corpus:
 
 
 def _apply_inferred_edge(
-    store: GraphStore, src_id: str, src_label: str, rel: InferredRelationship, corpus: str
+    store: GraphStore,
+    src_id: str,
+    src_label: str,
+    rel: InferredRelationship,
+    corpus: str,
+    *,
+    resolver: EntityCascadeResolver | None = None,
+    settings: ResolutionSettings | None = None,
 ) -> bool:
     """Write one inferred edge from ``src_id`` to ``rel``'s target.
 
@@ -974,11 +1002,12 @@ def _apply_inferred_edge(
     Every drop path emits an INFO log naming the reason, so discarded edges
     are countable from the log rather than invisible.
     """
-    if rel.confidence < _CONFIDENCE_FLOOR:
+    floor = (settings or _DEFAULT_RESOLUTION_SETTINGS).confidence_floor
+    if rel.confidence < floor:
         _log.info(
             "relate drop: confidence %.2f below floor %.2f: %s -[%s]-> %s(%.80s)",
             rel.confidence,
-            _CONFIDENCE_FLOOR,
+            floor,
             src_id,
             rel.edge_type,
             rel.target_type,
@@ -1041,17 +1070,28 @@ def _apply_inferred_edge(
             )
             return False
     else:
-        # Stub-able entity: seed identity + corpus, then layer on the model's
-        # extracted content. The primary key is excluded from the content merge
-        # so ``target_name`` (which IS the PK value) is never overwritten by a
+        # Mintable entity: run the resolution cascade first — an existing node
+        # with the same normalized identity absorbs the edge instead of a new
+        # stub fragmenting the graph. The primary key is excluded from the
+        # content merge so the resolved PK value is never overwritten by a
         # divergent model-supplied value — this also protects ``Risk``, whose
         # PK is the content field ``description``.
-        props: dict[str, Any] = {pk: rel.target_name, "corpus": corpus}
+        if resolver is not None:
+            resolution: Resolution | None = resolver.resolve(
+                rel.target_type, rel.target_name, corpus
+            )
+        else:
+            resolution = None
+        target_value = resolution.pk_value if resolution is not None else rel.target_name
+        props: dict[str, Any] = {pk: target_value, "corpus": corpus}
+        if resolution is not None and resolution.action == "minted":
+            props["name_norm"] = resolution.norm
+            if resolution.vector is not None:
+                props["embedding"] = resolution.vector
         for key, value in rel.target_properties.items():
             if key != pk:
                 props[key] = value
         store.upsert_node(rel.target_type, props)
-        target_value = rel.target_name
     store.upsert_edge(
         src_id,
         target_value,
