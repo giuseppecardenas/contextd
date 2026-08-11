@@ -339,7 +339,7 @@ def run_incremental_file(
             concurrency=inference_concurrency,
             parse_cache=parse_cache,
         )
-        phases.derive_file_level_for_path(path, corpus, store)
+        phases.derive_file_level_for_path(path, corpus, summariser, embedder, store)
     else:
         phases.phase_enumerate([path], corpus.corpus.name, hasher, store, embedder)
         phases.phase_summarise(
@@ -424,7 +424,7 @@ def run_bootstrap(
                 parse_cache=parse_cache,
             )
         )
-        results.append(phases.phase_derive_file_level(corpus, store))
+        results.append(phases.phase_derive_file_level(corpus, summariser, embedder, store))
 
         # --- File-granular pipeline for non-.md files ---
         if other_files:

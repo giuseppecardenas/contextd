@@ -77,30 +77,61 @@ def testgc_sections_for_file_noop_on_non_md(tmp_path: Path) -> None:
     store.exec_write.assert_not_called()
 
 
-def testderive_file_level_for_path_sets_file_summary(tmp_path: Path) -> None:
+def _rollup_summariser() -> MagicMock:
+    s = MagicMock()
+    s.roll_up.return_value = "rolled summary"
+    return s
+
+
+def _rollup_embedder() -> MagicMock:
+    e = MagicMock()
+    e.embed.return_value = [[0.1] * 4]
+    return e
+
+
+def _file_row(summaries: list[str]) -> dict[str, object]:
+    return {
+        "path": "unused",
+        "summary": None,
+        "summary_input_hash": None,
+        "summaries": summaries,
+    }
+
+
+def testderive_file_level_for_path_rolls_up_summary_and_embedding(tmp_path: Path) -> None:
     store = MagicMock()
-    store.exec_read.return_value = [{"summaries": ["Alpha does X.", "Beta does Y."]}]
+    store.exec_read.return_value = [_file_row(["Alpha does X.", "Beta does Y."])]
 
     corpus_cfg = CorpusConfig.model_validate({"corpus": {"name": "test", "root": str(tmp_path)}})
     path = tmp_path / "doc.md"
-    derive_file_level_for_path(path, corpus_cfg, store)
+    summariser = _rollup_summariser()
+    derive_file_level_for_path(path, corpus_cfg, summariser, _rollup_embedder(), store)
 
+    assert summariser.roll_up.call_args.kwargs["child_summaries"] == [
+        "Alpha does X.",
+        "Beta does Y.",
+    ]
     store.exec_write.assert_called_once()
-    write_call = store.exec_write.call_args
-    assert "SET f.summary" in write_call[0][0]
+    cypher, params = store.exec_write.call_args.args
+    assert "SET f.summary" in cypher
+    # C12: File.embedding is finally written in section mode.
+    assert "f.embedding = $vec" in cypher
+    assert params["summary"] == "rolled summary"
 
 
 def testderive_file_level_for_path_scoped_to_target_file(tmp_path: Path) -> None:
     store = MagicMock()
-    store.exec_read.return_value = [{"summaries": ["Summary."]}]
+    store.exec_read.return_value = [_file_row(["Summary."])]
 
     corpus_cfg = CorpusConfig.model_validate({"corpus": {"name": "test", "root": str(tmp_path)}})
     path = tmp_path / "specific.md"
-    derive_file_level_for_path(path, corpus_cfg, store)
+    derive_file_level_for_path(path, corpus_cfg, _rollup_summariser(), _rollup_embedder(), store)
 
-    read_call = store.exec_read.call_args
+    read_call = store.exec_read.call_args_list[0]
     params = read_call[0][1]
     assert params["path"] == canonical_path(path)
+    # Only top-level sections feed the file roll-up.
+    assert "NOT ( (:Section)-[:PARENT_OF]->(s) )" in read_call[0][0]
 
 
 def testderive_file_level_for_path_handles_no_sections(tmp_path: Path) -> None:
@@ -108,8 +139,32 @@ def testderive_file_level_for_path_handles_no_sections(tmp_path: Path) -> None:
     store.exec_read.return_value = []  # no sections
 
     corpus_cfg = CorpusConfig.model_validate({"corpus": {"name": "test", "root": str(tmp_path)}})
-    derive_file_level_for_path(tmp_path / "empty.md", corpus_cfg, store)
+    derive_file_level_for_path(
+        tmp_path / "empty.md", corpus_cfg, _rollup_summariser(), _rollup_embedder(), store
+    )
 
+    store.exec_write.assert_not_called()
+
+
+def testderive_file_level_input_hash_gate_prevents_rebilling(tmp_path: Path) -> None:
+    from contextd.indexer.phases import _rollup_input_hash
+
+    gate = _rollup_input_hash("", ["Summary."])
+    store = MagicMock()
+    store.exec_read.return_value = [
+        {
+            "path": "unused",
+            "summary": "existing",
+            "summary_input_hash": gate,
+            "summaries": ["Summary."],
+        }
+    ]
+    corpus_cfg = CorpusConfig.model_validate({"corpus": {"name": "test", "root": str(tmp_path)}})
+    summariser = _rollup_summariser()
+    derive_file_level_for_path(
+        tmp_path / "doc.md", corpus_cfg, summariser, _rollup_embedder(), store
+    )
+    summariser.roll_up.assert_not_called()
     store.exec_write.assert_not_called()
 
 

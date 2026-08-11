@@ -1011,57 +1011,127 @@ def phase_relate_sections(
     return PhaseResult(name="relate_sections", processed=processed, skipped=skipped)
 
 
+def _derive_one_file(
+    file_path: str,
+    corpus_cfg: CorpusConfig,
+    summariser: Summariser,
+    embedder: EmbeddingProvider,
+    store: GraphStore,
+    row: dict[str, Any],
+) -> tuple[int, int]:
+    """Roll up one file's summary + embedding from its top-level sections.
+
+    Input = top-level section summaries only (preamble + sections without a
+    PARENT_OF parent): deeper content is already synthesised into parent
+    roll-ups, so the file call stays small. Gated by the same
+    ``summary_input_hash`` mechanism as the section roll-up, checked BEFORE
+    the LLM call so re-runs over unchanged files cost nothing.
+    """
+    summaries = [s for s in row["summaries"] if s]
+    if not summaries:
+        return (0, 1)
+    input_hash = _rollup_input_hash("", summaries)
+    if row.get("summary_input_hash") == input_hash and row.get("summary"):
+        return (0, 0)
+    root = Path(corpus_cfg.corpus.root)
+    identity = UnitIdentity(
+        corpus=corpus_cfg.corpus.name,
+        file_path=file_path,
+        rel_path=_rel_path(Path(file_path), root),
+        suffix=Path(file_path).suffix,
+        src_label="File",
+        src_id=file_path,
+    )
+    try:
+        summary = summariser.roll_up(child_summaries=summaries, own_prose="", context=identity)
+    except Exception as exc:
+        _log.warning(
+            "file roll-up failed for %s: %s: %s; File left without a summary",
+            file_path,
+            type(exc).__name__,
+            exc,
+        )
+        return (0, 1)
+    vec: list[float] | None
+    try:
+        [vec] = embedder.embed([summary])
+    except Exception as exc:
+        _log.warning("file roll-up embed failed for %s: %s", file_path, exc)
+        vec = None
+    if vec is not None:
+        store.exec_write(
+            "MATCH (f:File {path: $path}) SET f.summary = $summary, "
+            "f.summary_generated_at = datetime(), f.summary_input_hash = $h, "
+            "f.embedding = $vec",
+            {"path": file_path, "summary": summary, "h": input_hash, "vec": vec},
+        )
+    else:
+        store.exec_write(
+            "MATCH (f:File {path: $path}) SET f.summary = $summary, "
+            "f.summary_generated_at = datetime(), f.summary_input_hash = $h",
+            {"path": file_path, "summary": summary, "h": input_hash},
+        )
+    return (1, 0)
+
+
+# Top-level sections of a file: preamble + any section without a PARENT_OF
+# parent. Their summaries (roll-ups for parents) are the file synthesis input.
+_TOP_LEVEL_SUMMARIES_QUERY = (
+    "MATCH (f:File {path: $path})-[:CONTAINS]->(s:Section) "
+    "WHERE NOT ( (:Section)-[:PARENT_OF]->(s) ) "
+    "WITH f, s ORDER BY s.ordinal "
+    "RETURN f.path AS path, f.summary AS summary, "
+    "f.summary_input_hash AS summary_input_hash, collect(s.summary) AS summaries"
+)
+
+
 def phase_derive_file_level(
     corpus_cfg: CorpusConfig,
+    summariser: Summariser,
+    embedder: EmbeddingProvider,
     store: GraphStore,
 ) -> PhaseResult:
-    """Derive File.summary from child section summaries (spec §5.11.3).
+    """Derive File.summary + File.embedding via LLM roll-up (spec §5.11.3).
 
-    File.embedding is NOT derived in section mode — centroid computation
-    is not attempted; File.embedding remains NULL in section-mode corpora.
-    Callers that need a file-level embedding in section mode should
-    compute a centroid at query time over the Section embeddings.
+    Replaces the first-sentence concatenation (which truncated decimals like
+    "1.5x" mid-number) with one ``roll_up`` call per file over its top-level
+    section summaries, and finally writes ``File.embedding`` in section mode —
+    the skip dated from a Kuzu-era constraint (SD #71) that Neo4j does not
+    have, and left every section-mode File invisible to vector search.
     """
-    rows = store.exec_read(
-        "MATCH (f:File {corpus: $c})-[:CONTAINS]->(s:Section) "
-        "RETURN f.path AS path, collect(s.summary) AS summaries",
+    files = store.exec_read(
+        "MATCH (f:File {corpus: $c})-[:CONTAINS]->(:Section) RETURN DISTINCT f.path AS path",
         {"c": corpus_cfg.corpus.name},
     )
-    for r in rows:
-        summaries = [s for s in r["summaries"] if s]
-        summary = _concat_first_sentences(summaries, max_chars=500)
-        store.exec_write(
-            "MATCH (f:File {path: $path}) SET f.summary = $summary",
-            {"path": r["path"], "summary": summary},
-        )
-    return PhaseResult(name="derive_file_level", processed=len(rows), skipped=0)
+    processed = skipped = 0
+    for fr in files:
+        rows = store.exec_read(_TOP_LEVEL_SUMMARIES_QUERY, {"path": fr["path"]})
+        if not rows:
+            skipped += 1
+            continue
+        p, s = _derive_one_file(fr["path"], corpus_cfg, summariser, embedder, store, rows[0])
+        processed += p
+        skipped += s
+    return PhaseResult(name="derive_file_level", processed=processed, skipped=skipped)
 
 
 def derive_file_level_for_path(
     path: Path,
     corpus_cfg: CorpusConfig,
+    summariser: Summariser,
+    embedder: EmbeddingProvider,
     store: GraphStore,
 ) -> None:
-    """Derive File.summary from Section summaries for a single file.
+    """File-scoped variant of :func:`phase_derive_file_level` for incremental.
 
-    Queries only the sections of *path* and sets File.summary via
-    _concat_first_sentences. O(1) w.r.t. corpus size — called from
-    run_incremental_file instead of the full-corpus phase_derive_file_level.
+    The input-hash gate means an unchanged file costs zero LLM calls even
+    though this runs on every incremental pass.
     """
     file_path = canonical_path(path)
-    rows = store.exec_read(
-        "MATCH (f:File {path: $path})-[:CONTAINS]->(s:Section) "
-        "RETURN collect(s.summary) AS summaries",
-        {"path": file_path},
-    )
+    rows = store.exec_read(_TOP_LEVEL_SUMMARIES_QUERY, {"path": file_path})
     if not rows:
         return
-    summaries = [s for s in rows[0]["summaries"] if s]
-    summary = _concat_first_sentences(summaries, max_chars=500)
-    store.exec_write(
-        "MATCH (f:File {path: $path}) SET f.summary = $summary",
-        {"path": file_path, "summary": summary},
-    )
+    _derive_one_file(file_path, corpus_cfg, summariser, embedder, store, rows[0])
 
 
 def _infer_key(target_type: str) -> str:
@@ -1345,16 +1415,3 @@ def _apply_inferred_edge(
     if written_triples is not None:
         written_triples.add(triple)
     return True
-
-
-def _concat_first_sentences(summaries: list[str], *, max_chars: int) -> str:
-    """Concatenate the first sentence of each summary up to max_chars total."""
-    out: list[str] = []
-    total = 0
-    for s in summaries:
-        sentence = s.split(".", 1)[0] + "."
-        if total + len(sentence) + 1 > max_chars:
-            break
-        out.append(sentence)
-        total += len(sentence) + 1
-    return " ".join(out)
