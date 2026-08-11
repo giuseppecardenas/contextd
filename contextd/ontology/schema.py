@@ -21,14 +21,20 @@ from dataclasses import dataclass, field, replace
 from importlib import resources
 from types import MappingProxyType
 
-# Node labels that are never AI-inferred entity targets: File/Section are
-# created from on-disk content by the indexer, and Corpus/Meta are indexer
-# bookkeeping. Every OTHER declared node type is a "stub-able" entity that the
-# relate phase may create on demand as an inference target. Shared by the
-# relate phase (which targets receive inferred content) and the
-# ``prune-entities`` CLI command (which orphaned nodes are prunable) so the two
-# agree on the structural/entity split.
-NON_ENTITY_LABELS: frozenset[str] = frozenset({"File", "Section", "Corpus", "Meta"})
+# File and Section nodes mirror real on-disk content and are created ONLY by
+# the indexer's enumerate phases. Inference may reference them (edges resolve
+# to the existing node or are dropped) but must never mint them.
+ENUMERATION_OWNED_LABELS: frozenset[str] = frozenset({"File", "Section"})
+
+# Node labels that are never AI-inferred entity targets: the enumeration-owned
+# pair above, plus Corpus/Meta which are indexer bookkeeping (inference had
+# been observed minting dozens of junk "Corpus" nodes and nameless "Meta"
+# nodes before these were withheld). Every OTHER declared node type is a
+# "mintable" entity that the relate phase may create on demand as an inference
+# target — see Ontology.mintable_labels(). Shared by the relate phase and the
+# ``prune-entities`` CLI command so the two agree on the structural/entity
+# split.
+NON_ENTITY_LABELS: frozenset[str] = ENUMERATION_OWNED_LABELS | frozenset({"Corpus", "Meta"})
 
 # Edge types that describe on-disk document structure and are therefore written
 # only by the indexer's section-granular enumeration phase with
@@ -85,6 +91,24 @@ class Ontology:
             if target not in self.edge_types:
                 raise OntologyError(f"Edge alias '{alias}' targets unknown edge type '{target}'")
         return replace(self, edge_aliases=MappingProxyType(dict(edge_aliases)))
+
+    def mintable_labels(self) -> frozenset[str]:
+        """Node labels inference may create on demand as entity targets.
+
+        Declared node types minus :data:`NON_ENTITY_LABELS`: File/Section are
+        enumeration-owned (referenced, never minted) and Corpus/Meta are
+        system bookkeeping (neither referenced nor minted by inference).
+        """
+        return frozenset(self.node_types) - NON_ENTITY_LABELS
+
+    def inference_target_labels(self) -> frozenset[str]:
+        """Node labels the model may name as a relationship target.
+
+        The mintable entity labels plus the enumeration-owned File/Section
+        (legal as *reference* targets — resolved to existing nodes, never
+        minted). Corpus and Meta are excluded entirely.
+        """
+        return self.mintable_labels() | ENUMERATION_OWNED_LABELS
 
     def resolve_alias(self, name: str) -> str:
         return self.aliases.get(name, name)

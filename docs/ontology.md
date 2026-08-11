@@ -29,6 +29,18 @@ Primary keys are enforced via uniqueness constraints in both backend migrations.
 
 `Section` nodes are only populated in section-granular corpora (`[corpus] granularity = "section"`).
 
+### Label classes
+
+Node labels fall into three classes with respect to AI inference (`Ontology.mintable_labels()` / `inference_target_labels()` in `contextd/ontology/schema.py`):
+
+| Class | Labels | Inference may target? | Inference may create? |
+|---|---|---|---|
+| Enumeration-owned | `File`, `Section` | yes — resolved to an existing node or dropped | never |
+| System | `Corpus`, `Meta` | never | never |
+| Mintable entities | everything else | yes | yes — created on demand as stubs |
+
+The relate prompt advertises only the mintable + enumeration-owned labels (plus any per-corpus alias names); `Corpus`/`Meta` rows are rejected at parse time and again at write time.
+
 `Risk.description` is the primary key by design: the inferrer emits `Risk` nodes identified solely by their description text, and MERGE semantics collapse identical-description upserts into one node. Two audit-gap entries with identical phrasing will merge — considered correct for the Acme use case; if co-existing same-phrased Risks are needed in future, a content-hash-derived `id` field with a companion migration is the remedy.
 
 ---
@@ -84,7 +96,7 @@ Aliases let a corpus use domain vocabulary in its Cypher queries and inferred re
 
 ### Node-label aliases
 
-Declared inline in the corpus TOML under `[ontology.aliases]`. Each alias maps a domain name to a canonical node type. The alias is resolved transparently at inference time — the underlying storage always uses the canonical label.
+Declared inline in the corpus TOML under `[ontology.aliases]`. Each alias maps a domain name to a canonical node type. Alias names are advertised in the relate prompt's allowed-target list (steering the model toward domain vocabulary) and resolved to their canonical label at parse time — the underlying storage always uses the canonical label.
 
 ```toml
 [ontology.aliases]

@@ -222,12 +222,19 @@ class RelationshipInferrer:
             the reason.
         """
         emittable_edge_types = _emittable_edge_types(self._onto)
+        # Advertise the mintable entity labels + File/Section (reference
+        # targets) + per-corpus alias names — NOT the full declared set:
+        # Corpus/Meta are system labels the model kept minting junk under.
+        # Aliases are advertised so a domain corpus can steer the model toward
+        # its own vocabulary; they resolve to canonical labels at parse time.
+        target_labels = self._onto.inference_target_labels()
+        advertised_node_types = target_labels | set(self._onto.aliases)
         prompt = self._renderer.render(
             "relate",
             content=content,
             known_entities="\n".join(known_entities[:100]),
             allowed_edge_types=", ".join(sorted(emittable_edge_types)),
-            allowed_node_types=", ".join(sorted(self._onto.node_types)),
+            allowed_node_types=", ".join(sorted(advertised_node_types)),
             target_property_schema=self._target_property_schema(),
         )
         response = self._provider.generate(
@@ -257,10 +264,23 @@ class RelationshipInferrer:
                     target_name,
                 )
                 continue
-            if not isinstance(target_type, str) or target_type not in self._onto.node_types:
+            if not isinstance(target_type, str):
                 _log.info(
-                    "relate drop: unknown target type %r; target %.80r",
+                    "relate drop: non-string target type %r; target %.80r",
                     target_type,
+                    target_name,
+                )
+                continue
+            # First production use of node-label aliases: a per-corpus alias
+            # (e.g. Registry -> Pattern) advertised in the prompt resolves to
+            # its canonical label here, so downstream only sees canon.
+            resolved_target_type = self._onto.resolve_alias(target_type)
+            if resolved_target_type not in target_labels:
+                _log.info(
+                    "relate drop: target type %r (resolved %r) not an inference target; "
+                    "target %.80r",
+                    target_type,
+                    resolved_target_type,
                     target_name,
                 )
                 continue
@@ -274,12 +294,12 @@ class RelationshipInferrer:
             valid.append(
                 InferredRelationship(
                     edge_type=resolved_edge_type,
-                    target_type=target_type,
+                    target_type=resolved_target_type,
                     target_name=target_name,
                     confidence=_coerce_confidence(row.get("confidence", 0.0)),
                     reason=_coerce_reason(row.get("reason", "")),
                     target_properties=self._extract_target_properties(
-                        target_type, row.get("properties")
+                        resolved_target_type, row.get("properties")
                     ),
                 )
             )

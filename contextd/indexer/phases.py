@@ -51,6 +51,7 @@ from contextd.indexer.heading_parser import (
 )
 from contextd.inference.relate import InferredRelationship, RelationshipInferrer
 from contextd.inference.summarise import Summariser
+from contextd.ontology.schema import ENUMERATION_OWNED_LABELS, NON_ENTITY_LABELS
 from contextd.providers.base import EmbeddingProvider
 from contextd.storage._keys import primary_key_for
 from contextd.storage.base import GraphStore
@@ -749,8 +750,9 @@ def _infer_key(target_type: str) -> str:
 # no path/summary/embedding) is a phantom "old" record that pollutes
 # section/file queries and is exactly what the wipe-and-replace edge logic
 # leaves orphaned on the next re-inference. References to them are resolved to
-# the existing node instead — or dropped.
-_ENUMERATION_OWNED_LABELS = frozenset({"File", "Section"})
+# the existing node instead — or dropped. Aliased from the shared ontology
+# constant so the relate phase, the parse gate, and prune-entities agree.
+_ENUMERATION_OWNED_LABELS = ENUMERATION_OWNED_LABELS
 
 # Edges below this confidence are dropped at write time. The relate prompt
 # documents "below 0.5 skip", but prompt rules are advisory — this is the
@@ -897,6 +899,18 @@ def _apply_inferred_edge(
             src_id,
             rel.edge_type,
             rel.target_type,
+            rel.target_name,
+        )
+        return False
+    if rel.target_type in NON_ENTITY_LABELS and rel.target_type not in _ENUMERATION_OWNED_LABELS:
+        # Backstop for the parse-gate rule: Corpus/Meta are system labels and
+        # must never be minted as inference targets, whichever path (LLM or
+        # lexical) produced the relationship.
+        _log.info(
+            "relate drop: system label %r is not an inference target: %s -[%s]-> %.80s",
+            rel.target_type,
+            src_id,
+            rel.edge_type,
             rel.target_name,
         )
         return False

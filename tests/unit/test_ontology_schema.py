@@ -43,6 +43,33 @@ def test_alias_resolution(tmp_path: Path) -> None:
     assert onto.resolve_alias("File") == "File"  # non-alias passes through
 
 
+def test_mintable_labels_excludes_system_and_enumeration_owned() -> None:
+    onto = Ontology.load_base()
+    mintable = onto.mintable_labels()
+    assert mintable == frozenset(
+        {
+            "Artifact",
+            "Ticket",
+            "Pattern",
+            "Technology",
+            "Client",
+            "Repo",
+            "Service",
+            "Integration",
+            "Risk",
+            "WorkSession",
+        }
+    )
+
+
+def test_inference_target_labels_adds_file_and_section_only() -> None:
+    onto = Ontology.load_base()
+    targets = onto.inference_target_labels()
+    assert targets == onto.mintable_labels() | {"File", "Section"}
+    assert "Corpus" not in targets
+    assert "Meta" not in targets
+
+
 def test_with_aliases_rejects_unknown_target() -> None:
     """An alias whose target isn't a real node type must fail loudly —
     otherwise a typo in a per-corpus config would silently resolve to a

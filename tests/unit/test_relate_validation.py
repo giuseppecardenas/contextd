@@ -94,7 +94,9 @@ def test_reason_truncated() -> None:
         (_row(type=42), "non-string edge type"),
         (_row(type="CONTAINS"), "not emittable"),
         (_row(type="LOOKS_LIKE"), "not emittable"),
-        (_row(target_type="Wormhole"), "unknown target type"),
+        (_row(target_type="Wormhole"), "not an inference target"),
+        (_row(target_type="Corpus"), "not an inference target"),
+        (_row(target_type="Meta"), "not an inference target"),
         (_row(target_name=""), "empty or non-string target name"),
     ],
 )
@@ -142,6 +144,49 @@ def test_self_loop_dropped(caplog: pytest.LogCaptureFixture) -> None:
     assert written is False
     assert "self-loop" in caplog.text
     store.upsert_edge.assert_not_called()
+
+
+def test_alias_target_type_resolves_to_canonical_label() -> None:
+    provider = MagicMock()
+    provider.generate.return_value = json.dumps({"relationships": [_row(target_type="Registry")]})
+    renderer = MagicMock()
+    renderer.render.return_value = "prompt"
+    ontology = Ontology.load_base().with_aliases({"Registry": "Pattern"})
+    inferrer = RelationshipInferrer(provider=provider, renderer=renderer, ontology=ontology)
+
+    rels = inferrer.infer("content", known_entities=[])
+
+    assert len(rels) == 1
+    assert rels[0].target_type == "Pattern"
+
+
+def test_prompt_advertises_aliases_and_withholds_system_labels() -> None:
+    provider = MagicMock()
+    provider.generate.return_value = json.dumps({"relationships": []})
+    renderer = MagicMock()
+    renderer.render.return_value = "prompt"
+    ontology = Ontology.load_base().with_aliases({"Registry": "Pattern"})
+    RelationshipInferrer(provider=provider, renderer=renderer, ontology=ontology).infer(
+        "content", known_entities=[]
+    )
+
+    advertised = renderer.render.call_args.kwargs["allowed_node_types"]
+    assert "Registry" in advertised
+    assert "Pattern" in advertised
+    assert "File" in advertised and "Section" in advertised
+    assert "Corpus" not in advertised
+    assert "Meta" not in advertised
+
+
+def test_apply_rejects_system_label_backstop(caplog: pytest.LogCaptureFixture) -> None:
+    store = MagicMock()
+    with caplog.at_level(logging.INFO, logger="contextd.indexer.phases"):
+        written = _apply_inferred_edge(
+            store, "src.md", "File", _rel(target_type="Corpus", target_name="junk"), "c"
+        )
+    assert written is False
+    assert "not an inference target" in caplog.text
+    store.upsert_node.assert_not_called()
 
 
 def test_unknown_target_label_logged(caplog: pytest.LogCaptureFixture) -> None:
