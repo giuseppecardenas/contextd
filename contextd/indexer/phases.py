@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import re
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -42,7 +43,12 @@ from typing import Any, TypeVar
 from contextd._paths import canonical_path
 from contextd.corpus_config import CorpusConfig
 from contextd.indexer.hasher import FileHasher
-from contextd.indexer.heading_parser import HeadingParser, ParsedSection, section_hash
+from contextd.indexer.heading_parser import (
+    HeadingParser,
+    ParsedSection,
+    _github_anchor,
+    section_hash,
+)
 from contextd.inference.relate import InferredRelationship, RelationshipInferrer
 from contextd.inference.summarise import Summariser
 from contextd.providers.base import EmbeddingProvider
@@ -752,6 +758,77 @@ _ENUMERATION_OWNED_LABELS = frozenset({"File", "Section"})
 _CONFIDENCE_FLOOR = 0.5
 
 
+_DOTTED_NUMBER = re.compile(r"\d+(\.\d+)*")
+
+
+def _unique_section_id(
+    store: GraphStore, corpus: str, predicate: str, params: dict[str, Any], rule: str
+) -> str | None:
+    """Run a Section lookup and return its id iff exactly one row matches.
+
+    Non-unique matches return ``None`` — mirroring the File basename rule,
+    ambiguity means unresolved rather than mis-linked. A unique hit is logged
+    with the rule that produced it, feeding the resolution audit trail.
+    """
+    rows = store.exec_read(
+        f"MATCH (n:Section {{corpus: $c}}) WHERE n.path IS NOT NULL AND {predicate} "
+        "RETURN n.id AS v LIMIT 2",
+        {"c": corpus, **params},
+    )
+    if len(rows) == 1:
+        _log.info("relate resolve: Section matched by %s: %.120s", rule, rows[0]["v"])
+        return str(rows[0]["v"])
+    return None
+
+
+def _resolve_section_fallback(store: GraphStore, needle: str, corpus: str) -> str | None:
+    """Resolve a Section citation that is not an exact ``path#anchor`` id.
+
+    The model cites sections as ``§12.2.5``, ``Trade Route Decay``, or
+    ``some/file.md#anchor`` — never as the absolute canonical id it has no way
+    to know. Fallback ladder, each rung unique-only:
+
+      1. ``#``-fragment anchor match (a relative-path citation carries the
+         right anchor even when the path half doesn't resolve),
+      2. slugified-title anchor match,
+      3. case-insensitive exact title match,
+      4. dotted-number title prefix (``12.2.5`` → ``§12.2.5 Trade routes``).
+    """
+    cleaned = needle.lstrip("§").strip()
+    if not cleaned:
+        return None
+    if "#" in cleaned:
+        fragment = cleaned.rsplit("#", 1)[1]
+        if fragment:
+            hit = _unique_section_id(
+                store, corpus, "n.anchor = $a", {"a": fragment}, "anchor fragment"
+            )
+            if hit is not None:
+                return hit
+    hit = _unique_section_id(
+        store, corpus, "n.anchor = $a", {"a": _github_anchor(cleaned)}, "slugified anchor"
+    )
+    if hit is not None:
+        return hit
+    hit = _unique_section_id(
+        store, corpus, "toLower(n.title) = toLower($t)", {"t": cleaned}, "title"
+    )
+    if hit is not None:
+        return hit
+    if _DOTTED_NUMBER.fullmatch(cleaned):
+        # Space-suffixed prefixes so needle 12.2.5 cannot match "12.2.50 ...";
+        # bare-equality arms cover a heading that is only the number.
+        return _unique_section_id(
+            store,
+            corpus,
+            "(n.title STARTS WITH ($t + ' ') OR n.title STARTS WITH ('§' + $t + ' ') "
+            "OR n.title = $t OR n.title = ('§' + $t))",
+            {"t": cleaned},
+            "numbered-title prefix",
+        )
+    return None
+
+
 def _resolve_existing_node(store: GraphStore, label: str, raw_name: str, corpus: str) -> str | None:
     """Resolve an inferred-edge target to an EXISTING node's primary-key value.
 
@@ -760,9 +837,12 @@ def _resolve_existing_node(store: GraphStore, label: str, raw_name: str, corpus:
 
       * exact primary-key match (path separators normalised to ``/`` so an
         LLM citing ``docs\\x.md`` matches the canonical ``docs/x.md``), then
-      * for ``File`` only, a *unique* basename match on the ``name`` property
+      * for ``File``, a *unique* basename match on the ``name`` property
         (the LLM commonly cites a file by bare name, e.g. ``03-economy.md``);
-        a non-unique basename is left unresolved rather than mis-linked.
+        a non-unique basename is left unresolved rather than mis-linked, then
+      * for ``Section``, the :func:`_resolve_section_fallback` ladder
+        (anchor fragment / slugified anchor / title / numbered-title prefix),
+        each rung unique-only.
 
     Returns the matched PK value, or ``None`` when nothing real matches — the
     caller then drops the edge rather than creating a phantom stub.
@@ -786,6 +866,8 @@ def _resolve_existing_node(store: GraphStore, label: str, raw_name: str, corpus:
         )
         if len(by_name) == 1:
             return str(by_name[0]["v"])
+    if label == "Section":
+        return _resolve_section_fallback(store, needle, corpus)
     return None
 
 
