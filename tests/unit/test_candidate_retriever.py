@@ -128,6 +128,31 @@ def test_missing_embedding_degrades_gracefully() -> None:
     store.vector_search.assert_not_called()
 
 
+def test_fulltext_query_escapes_lucene_specials() -> None:
+    from contextd.indexer.candidates import _lucene_escape
+
+    assert _lucene_escape("Save/Load Format") == "Save\\/Load Format"
+    assert _lucene_escape("§6.14 Pricing: tiers (v2)") == "§6.14 Pricing\\: tiers \\(v2\\)"
+
+    store = MagicMock()
+
+    def _exec_read(query: str, params: dict[str, Any] | None) -> list[dict[str, Any]]:
+        if "n.embedding AS embedding" in query:
+            return [{"embedding": [0.5] * 4}]
+        return []
+
+    store.exec_read.side_effect = _exec_read
+    store.vector_search.return_value = []
+    store.full_text_search.return_value = []
+    GraphCandidateRetriever(Ontology.load_base()).for_unit(
+        store, identity=_identity(title="Save/Load Format")
+    )
+    ft_queries = [c.kwargs["query"] for c in store.full_text_search.call_args_list]
+    assert ft_queries
+    assert all("/" not in q or "\\/" in q for q in ft_queries)
+    assert any(q == "Save\\/Load Format" for q in ft_queries)
+
+
 def test_source_failures_never_raise() -> None:
     store = MagicMock()
     store.exec_read.side_effect = RuntimeError("db down")

@@ -25,6 +25,7 @@ context, never blocks the LLM call.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 
@@ -40,6 +41,17 @@ from contextd.storage._keys import primary_key_for
 from contextd.storage.base import GraphStore
 
 _log = logging.getLogger(__name__)
+
+# Lucene query-syntax metacharacters. Section titles are fed to
+# db.index.fulltext.queryNodes verbatim as the full-text leg's query; a title
+# like "Save/Load Format" starts a Lucene regex at the "/" and crashes the
+# parser (TokenMgrError), silently killing the leg for every such title.
+# Titles are prose, never intentional query syntax — escape everything.
+_LUCENE_SPECIALS = re.compile(r'[+\-&|!(){}\[\]^"~*?:\\/]')
+
+
+def _lucene_escape(text: str) -> str:
+    return _LUCENE_SPECIALS.sub(lambda m: "\\" + m.group(0), text)
 
 
 class GraphCandidateRetriever:
@@ -188,7 +200,7 @@ class GraphCandidateRetriever:
                 ]
             except Exception as exc:
                 _log.warning("candidates: vector leg failed for %s: %s", label, exc)
-        query_text = identity.title or identity.rel_path.rsplit("/", 1)[-1]
+        query_text = _lucene_escape(identity.title or identity.rel_path.rsplit("/", 1)[-1])
         if query_text:
             try:
                 fulltext_rows = [
