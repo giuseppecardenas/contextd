@@ -637,10 +637,13 @@ backend = "neo4j"           # Neo4j Community (the only backend)
 
 [providers]
 # Inference provider per call-site. Each independently picks "gemini"
-# (cloud) or "openai_compat" (any local OpenAI-compatible HTTP server:
-# Ollama, LM Studio, vLLM, llama.cpp, LocalAI). The embedding provider
-# picks "voyage" (cloud) or "openai_compat" (local /embeddings endpoint);
-# set all four to "openai_compat" to run the pipeline fully offline.
+# (cloud) or "openai_compat:<profile>", where <profile> names a
+# [providers.openai_compat.<profile>] table (any OpenAI-compatible HTTP
+# endpoint: Ollama local or Cloud, LM Studio, vLLM, llama.cpp, LocalAI,
+# DeepSeek). Profiles coexist and can be mixed per call-site. The
+# embedding provider picks "voyage" (cloud) or "openai_compat" (local
+# /embeddings endpoint); set every call-site to "openai_compat:local"
+# plus embedding = "openai_compat" to run the pipeline fully offline.
 summary     = "gemini"
 inference   = "gemini"
 translation = "gemini"
@@ -711,18 +714,18 @@ max_words = 150                          # override global summary_max_words
 
 The `include` and `exclude` patterns use glob syntax with `**` for recursive matching. Files under `.git`, `.venv`, `__pycache__`, and `node_modules` are always excluded regardless of patterns.
 
-### Using a local model
+### Using an OpenAI-compatible provider
 
-Each of `summary`, `inference`, and `translation` can independently target a local OpenAI-compatible HTTP server (Ollama, LM Studio, vLLM, llama.cpp's server, LocalAI) instead of Gemini, and embeddings can likewise be served locally. A common split is to push the high-volume summary + relate traffic to a local model and keep translation (Cypher generation for `contextd ask`) on Gemini for higher quality:
+Each of `summary`, `inference`, and `translation` can independently target any OpenAI-compatible chat endpoint instead of Gemini — a local server (Ollama, LM Studio, vLLM, llama.cpp's server, LocalAI) or a cloud one (Ollama Cloud, DeepSeek), and embeddings can likewise be served locally. Endpoints are configured as named profiles under `[providers.openai_compat.<name>]`; any number may coexist, and call-sites reference them as `"openai_compat:<name>"`. A common split is to push the high-volume summary + relate traffic to a local model and keep translation (Cypher generation for `contextd ask`) on Gemini for higher quality:
 
 ```toml
 [providers]
-summary     = "openai_compat"
-inference   = "openai_compat"
+summary     = "openai_compat:local"
+inference   = "openai_compat:local"
 translation = "gemini"
 embedding   = "voyage"
 
-[providers.openai_compat]
+[providers.openai_compat.local]
 base_url        = "http://localhost:11434/v1"   # Ollama default
 # api_key_env   = "OPENAI_API_KEY"               # only for servers that require a token
 model_summary   = "qwen2.5:7b-instruct"
@@ -731,6 +734,25 @@ model_translation = "qwen2.5:14b-instruct"
 max_retries     = 5
 request_timeout_seconds = 120.0
 json_mode       = true   # sends response_format JSON for summary+inference call-sites
+```
+
+A cloud profile looks the same — only the URL, key, and models change. Ollama Cloud serving GLM 5.2 on all three call-sites:
+
+```toml
+[providers]
+summary     = "openai_compat:ollama_cloud"
+inference   = "openai_compat:ollama_cloud"
+translation = "openai_compat:ollama_cloud"
+embedding   = "voyage"
+
+[providers.openai_compat.ollama_cloud]
+base_url        = "https://ollama.com/v1"
+api_key_env     = "OLLAMA_API_KEY"      # create at https://ollama.com/settings/keys
+model_summary   = "glm-5.2"
+model_inference = "glm-5.2"
+model_translation = "glm-5.2"
+temperature     = 0.2
+request_timeout_seconds = 300.0         # large reasoning model; generous timeout
 ```
 
 Quality floor: the `inference` call-site (relationship edges) emits strict typed-edge JSON and benefits from larger models (14B+). Smaller models are fine for `summary` only. See the [accuracy caveat](#accuracy-caveat) below for a detailed breakdown and recommended hybrid config.
@@ -784,12 +806,12 @@ curl -s http://127.0.0.1:8081/health
 ```toml
 # ~/.contextd/config.toml
 [providers]
-summary     = "openai_compat"
-inference   = "openai_compat"
-translation = "openai_compat"
+summary     = "openai_compat:local"
+inference   = "openai_compat:local"
+translation = "openai_compat:local"
 embedding   = "openai_compat"
 
-[providers.openai_compat]
+[providers.openai_compat.local]
 base_url        = "http://127.0.0.1:8080/v1"
 model_summary   = "qwen2.5-1.5b-instruct"
 model_inference = "qwen2.5-1.5b-instruct"
@@ -830,15 +852,17 @@ A practical split that preserves privacy for the bulk of the work while keeping 
 
 ```toml
 [providers]
-summary     = "openai_compat"   # high-volume, local model handles it well
-inference   = "gemini"          # quality-critical typed-edge JSON
-translation = "gemini"          # NL→Cypher needs a large model
-embedding   = "openai_compat"   # bge-m3 is on par with cloud embeddings
+summary     = "openai_compat:local"  # high-volume, local model handles it well
+inference   = "gemini"               # quality-critical typed-edge JSON
+translation = "gemini"               # NL→Cypher needs a large model
+embedding   = "openai_compat"        # bge-m3 is on par with cloud embeddings
 ```
 
 The vector index is fixed at **1024 dimensions**, so the embedding model must emit 1024-dim vectors. The provider validates each returned vector's length against `dimensions` and raises a clear error rather than writing a mismatched vector into the index, so a wrong model choice fails fast instead of corrupting search.
 
 **Migrating an existing config.** The pre-v0.2 single-line `inference = "gemini"` under `[providers]` is replaced by three lines (`summary`, `inference`, `translation`). Pydantic will reject the old shape with `extra fields not permitted` — rename and the rest of the file stays unchanged.
+
+The pre-profiles single `[providers.openai_compat]` table is replaced by named profiles: rename it to `[providers.openai_compat.local]` (or any name) and change each call-site set to `"openai_compat"` to `"openai_compat:local"`. The config loader rejects the old shape with these instructions.
 
 ---
 
@@ -875,7 +899,7 @@ Contextd is a single-user local tool. Its security posture reflects that:
 | Symptom | Cause | Fix |
 |---|---|---|
 | `contextd up` fails with "Docker not found" | Docker engine not running or not installed | Start Docker Desktop or install Docker Engine; verify with `docker ps` |
-| `contextd index` hangs or is very slow | Gemini API rate limit (15 RPM on free tier) | Reduce `inference_concurrency`; or point `summary`/`inference` at a [local model](#using-a-local-model) to avoid quota limits |
+| `contextd index` hangs or is very slow | Gemini API rate limit (15 RPM on free tier) | Reduce `inference_concurrency`; or point `summary`/`inference` at an [OpenAI-compatible profile](#using-an-openai-compatible-provider) to avoid quota limits |
 | `contextd ask` returns empty results | Corpus not bootstrapped, or query doesn't match indexed content | Run `contextd index <corpus> --bootstrap` first; try simpler queries |
 | `contextd status` shows "daemon not running" after reboot | Daemon was a shell child process, not a service | Install the [systemd unit](#running-under-systemd-optional) for persistence across reboots |
 | Daemon crashes on git commit | Git temp files (e.g., `index.lock`) entering the watcher pipeline | Update to latest; fixed in `2b6d33d` — the daemon now excludes `.git/` events and handles vanished temp files |

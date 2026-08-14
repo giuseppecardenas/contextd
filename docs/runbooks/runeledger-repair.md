@@ -63,7 +63,7 @@ capture = 0
 Also set in `~/.contextd/config.toml`:
 
 ```toml
-[providers.openai_compat]
+[providers.openai_compat.local]   # whichever profile the call-sites reference
 temperature = 0.2            # JSON extraction; translation keeps default
 
 [inference]

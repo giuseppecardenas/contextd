@@ -3,9 +3,9 @@
 **contextd** is a locally-hosted GraphRAG knowledge layer and MCP server. It
 indexes markdown, code, and structured-data corpora into a Neo4j graph + vector
 store, generates per-file summaries and AI-inferred typed relationships
-(Gemini, or any OpenAI-compatible provider such as DeepSeek; embeddings via
-Voyage), and serves the result to AI assistants over the Model Context
-Protocol.
+(Gemini, or any OpenAI-compatible provider profile such as Ollama Cloud or
+DeepSeek; embeddings via Voyage), and serves the result to AI assistants over
+the Model Context Protocol.
 
 ## Prerequisites
 
@@ -16,10 +16,12 @@ Protocol.
 - Environment variables: `GEMINI_API_KEY` (inference/summaries) and
   `VOYAGE_API_KEY` (embeddings). Provider choice is per call-site (`summary`,
   `inference`, `translation`, `embedding`), so these can be mixed or replaced.
-  A call-site set to `openai_compat` reads its key from the variable named by
-  `[providers.openai_compat] api_key_env` instead — e.g. `DEEPSEEK_API_KEY`
-  with `base_url = "https://api.deepseek.com/v1"`. Keys are read from the
-  environment at startup and never written to disk.
+  A call-site set to `openai_compat:<profile>` reads its key from the variable
+  named by `[providers.openai_compat.<profile>] api_key_env` instead — e.g.
+  `OLLAMA_API_KEY` with `base_url = "https://ollama.com/v1"` (Ollama Cloud),
+  or `DEEPSEEK_API_KEY` with `base_url = "https://api.deepseek.com/v1"`.
+  Any number of profiles can coexist, mixed per call-site. Keys are read from
+  the environment at startup and never written to disk.
 - All persistent state lives under `~/.contextd/` (config, corpora registry,
   logs, checkpoints).
 
