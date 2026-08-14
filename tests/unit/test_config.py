@@ -69,21 +69,116 @@ def test_providers_config_per_call_site_defaults_to_gemini() -> None:
     assert pcfg.translation == "gemini"
 
 
-def test_providers_config_summary_can_be_openai_compat(tmp_path: Path) -> None:
+def test_providers_config_summary_can_be_openai_compat_profile(tmp_path: Path) -> None:
     user_cfg = tmp_path / "config.toml"
     user_cfg.write_text(
         """
 [providers]
-summary = "openai_compat"
+summary = "openai_compat:local"
 inference = "gemini"
 translation = "gemini"
 """,
         encoding="utf-8",
     )
     cfg = Config.load(user_cfg)
-    assert cfg.providers.summary == "openai_compat"
+    assert cfg.providers.summary == "openai_compat:local"
     assert cfg.providers.inference == "gemini"
     assert cfg.providers.translation == "gemini"
+
+
+def test_bare_openai_compat_call_site_rejected_with_migration_hint(tmp_path: Path) -> None:
+    user_cfg = tmp_path / "config.toml"
+    user_cfg.write_text(
+        """
+[providers]
+summary = "openai_compat"
+""",
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError, match=r"openai_compat:<profile>"):
+        Config.load(user_cfg)
+
+
+def test_unknown_profile_reference_rejected(tmp_path: Path) -> None:
+    user_cfg = tmp_path / "config.toml"
+    user_cfg.write_text(
+        """
+[providers]
+summary = "openai_compat:missing"
+""",
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError, match=r"'missing'.*Defined profiles: local"):
+        Config.load(user_cfg)
+
+
+def test_legacy_openai_compat_table_rejected_with_migration_hint(tmp_path: Path) -> None:
+    # A pre-profiles [providers.openai_compat] deep-merged over the packaged
+    # default leaves scalar keys beside the profile tables.
+    user_cfg = tmp_path / "config.toml"
+    user_cfg.write_text(
+        """
+[providers.openai_compat]
+base_url = "https://api.deepseek.com/v1"
+api_key_env = "DEEPSEEK_API_KEY"
+""",
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError, match=r"non-profile keys.*openai_compat.local"):
+        Config.load(user_cfg)
+
+
+def test_multiple_openai_compat_profiles_parse(tmp_path: Path) -> None:
+    user_cfg = tmp_path / "config.toml"
+    user_cfg.write_text(
+        """
+[providers]
+summary = "openai_compat:ollama_cloud"
+translation = "openai_compat:deepseek"
+
+[providers.openai_compat.deepseek]
+base_url = "https://api.deepseek.com/v1"
+api_key_env = "DEEPSEEK_API_KEY"
+
+[providers.openai_compat.ollama_cloud]
+base_url = "https://ollama.com/v1"
+api_key_env = "OLLAMA_API_KEY"
+model_summary = "glm-5.2"
+""",
+        encoding="utf-8",
+    )
+    cfg = Config.load(user_cfg)
+    profiles = cfg.providers.openai_compat
+    assert set(profiles) == {"local", "deepseek", "ollama_cloud"}
+    assert profiles["deepseek"].base_url == "https://api.deepseek.com/v1"
+    assert profiles["ollama_cloud"].model_summary == "glm-5.2"
+    # Omitted fields fall back to OpenAICompatConfig defaults.
+    assert profiles["ollama_cloud"].json_mode is True
+
+
+def test_default_config_ships_local_profile() -> None:
+    cfg = Config.load_default()
+    assert cfg.providers.openai_compat["local"].base_url == "http://localhost:11434/v1"
+
+
+def test_providers_config_accepts_model_instances_programmatically() -> None:
+    from contextd.config import OpenAICompatConfig, ProvidersConfig
+
+    pcfg = ProvidersConfig(summary="openai_compat:x", openai_compat={"x": OpenAICompatConfig()})
+    assert pcfg.summary == "openai_compat:x"
+
+
+def test_empty_profile_name_rejected(tmp_path: Path) -> None:
+    user_cfg = tmp_path / "config.toml"
+    user_cfg.write_text(
+        """
+[providers]
+summary = "openai_compat:"
+""",
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError, match="invalid openai_compat profile name"):
+        Config.load(user_cfg)
 
 
 def test_providers_config_rejects_unknown_provider_name(tmp_path: Path) -> None:

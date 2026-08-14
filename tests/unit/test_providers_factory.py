@@ -50,7 +50,7 @@ def test_factory_picks_openai_compat_for_summary_when_configured(
     user_cfg.write_text(
         """
 [providers]
-summary = "openai_compat"
+summary = "openai_compat:local"
 inference = "gemini"
 translation = "gemini"
 """,
@@ -83,17 +83,17 @@ def test_factory_raises_when_openai_compat_api_key_env_missing(
     user_cfg.write_text(
         """
 [providers]
-summary = "openai_compat"
-inference = "openai_compat"
-translation = "openai_compat"
+summary = "openai_compat:local"
+inference = "openai_compat:local"
+translation = "openai_compat:local"
 
-[providers.openai_compat]
+[providers.openai_compat.local]
 api_key_env = "FAKE_OPENAI_KEY"
 """,
         encoding="utf-8",
     )
     cfg = Config.load(user_cfg)
-    with pytest.raises(ProviderFactoryError, match="FAKE_OPENAI_KEY"):
+    with pytest.raises(ProviderFactoryError, match=r"openai_compat\.local.*FAKE_OPENAI_KEY"):
         build_inference_provider(cfg)
 
 
@@ -106,9 +106,9 @@ def test_factory_skips_gemini_construction_when_no_call_site_uses_it(
     user_cfg.write_text(
         """
 [providers]
-summary = "openai_compat"
-inference = "openai_compat"
-translation = "openai_compat"
+summary = "openai_compat:local"
+inference = "openai_compat:local"
+translation = "openai_compat:local"
 """,
         encoding="utf-8",
     )
@@ -116,6 +116,36 @@ translation = "openai_compat"
     provider = build_inference_provider(cfg)
     assert isinstance(provider, RoutingInferenceProvider)
     assert isinstance(provider._slots["summary"], OpenAICompatProvider)
+
+
+def test_factory_shares_instance_within_profile_but_not_across_profiles(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pytest.TempPathFactory
+) -> None:
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    user_cfg = tmp_path / "config.toml"  # type: ignore[operator]
+    user_cfg.write_text(
+        """
+[providers]
+summary = "openai_compat:local"
+inference = "openai_compat:local"
+translation = "openai_compat:second"
+
+[providers.openai_compat.second]
+base_url = "http://localhost:8080/v1"
+""",
+        encoding="utf-8",
+    )
+    cfg = Config.load(user_cfg)
+    provider = build_inference_provider(cfg)
+    summary = provider._slots["summary"]
+    inference = provider._slots["inference"]
+    translation = provider._slots["translation"]
+    assert summary is inference
+    assert summary is not translation
+    assert isinstance(translation, OpenAICompatProvider)
+    # The full profile ref flows through as the usage-record label.
+    assert summary._provider_label == "openai_compat:local"
+    assert translation._provider_label == "openai_compat:second"
 
 
 def test_build_voyage_from_config(monkeypatch: pytest.MonkeyPatch) -> None:

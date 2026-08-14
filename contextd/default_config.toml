@@ -1,10 +1,13 @@
 [providers]
 # Inference provider per call-site. Each independently picks "gemini" or
-# "openai_compat" (any local OpenAI-compatible HTTP server: Ollama, LM
-# Studio, vLLM, llama.cpp's server, LocalAI). The embedding provider picks
-# "voyage" (cloud) or "openai_compat" (local /embeddings endpoint). Setting
-# every call-site plus embedding to "openai_compat" runs the whole indexing
-# pipeline offline with no cloud API calls.
+# "openai_compat:<profile>", where <profile> names a
+# [providers.openai_compat.<profile>] table below (any OpenAI-compatible
+# HTTP endpoint: Ollama local or Cloud, LM Studio, vLLM, llama.cpp's server,
+# LocalAI, DeepSeek, ...). Profiles may coexist and be mixed per call-site.
+# The embedding provider picks "voyage" (cloud) or "openai_compat" (local
+# /embeddings endpoint). Setting every call-site to "openai_compat:local"
+# plus embedding = "openai_compat" runs the whole indexing pipeline offline
+# with no cloud API calls.
 summary = "gemini"
 inference = "gemini"
 translation = "gemini"
@@ -18,7 +21,7 @@ max_retries = 5
 safety_block = "BLOCK_NONE"
 daily_budget = "unlimited"
 
-[providers.openai_compat]
+[providers.openai_compat.local]
 base_url = "http://localhost:11434/v1"
 # Set api_key_env = "OPENAI_API_KEY" (or any env var) for servers that
 # require a bearer token. Leave unset for keyless local servers.
@@ -30,6 +33,26 @@ request_timeout_seconds = 120.0
 json_mode = true
 # temperature = 0.2  # recommended for JSON extraction; unset = server default
 #                    # (applies to summary/inference; translation keeps default)
+
+# Additional profiles may coexist; reference one per call-site as
+# "openai_compat:<profile>", e.g. translation = "openai_compat:deepseek".
+#
+# [providers.openai_compat.deepseek]
+# base_url = "https://api.deepseek.com/v1"
+# api_key_env = "DEEPSEEK_API_KEY"
+# model_summary = "deepseek-chat"
+# model_inference = "deepseek-chat"
+# model_translation = "deepseek-chat"
+# temperature = 0.2
+#
+# [providers.openai_compat.ollama_cloud]
+# base_url = "https://ollama.com/v1"
+# api_key_env = "OLLAMA_API_KEY"
+# model_summary = "glm-5.2"        # verify the exact id via GET https://ollama.com/v1/models
+# model_inference = "glm-5.2"
+# model_translation = "glm-5.2"
+# temperature = 0.2
+# request_timeout_seconds = 300.0  # large reasoning model; generous timeout
 
 [providers.voyage]
 model = "voyage-4-large"

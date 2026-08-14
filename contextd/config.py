@@ -7,12 +7,13 @@ omits, so minimal user configs work correctly.
 
 from __future__ import annotations
 
+import re
 import tomllib
 from importlib import resources
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
 BackendName = Literal["neo4j"]
 SafetyBlock = Literal[
@@ -44,8 +45,44 @@ class VoyageConfig(BaseModel):
     max_batch_size: int = 128
 
 
-InferenceProviderName = Literal["gemini", "openai_compat"]
 EmbeddingProviderName = Literal["voyage", "openai_compat"]
+
+_OPENAI_COMPAT_PREFIX = "openai_compat:"
+_PROFILE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+
+_MIGRATION_HINT = (
+    "openai_compat backends are now named profiles: define a "
+    "[providers.openai_compat.<profile>] table and reference it as "
+    '"openai_compat:<profile>" (e.g. summary = "openai_compat:local"). '
+    "To migrate a pre-profiles config, rename [providers.openai_compat] to "
+    "[providers.openai_compat.local] and change each call-site set to "
+    '"openai_compat" to "openai_compat:local".'
+)
+
+
+def openai_compat_profile(ref: str) -> str | None:
+    """Return the profile name for an ``openai_compat:<profile>`` ref, else None."""
+    if ref.startswith(_OPENAI_COMPAT_PREFIX):
+        return ref[len(_OPENAI_COMPAT_PREFIX) :]
+    return None
+
+
+def _validate_inference_ref(ref: str) -> str:
+    if ref == "gemini":
+        return ref
+    if ref == "openai_compat":
+        raise ValueError(f'"openai_compat" without a profile is no longer valid. {_MIGRATION_HINT}')
+    profile = openai_compat_profile(ref)
+    if profile is not None:
+        if not _PROFILE_NAME_RE.match(profile):
+            raise ValueError(f"invalid openai_compat profile name {profile!r} in {ref!r}")
+        return ref
+    raise ValueError(
+        f"unknown inference provider {ref!r}: expected 'gemini' or 'openai_compat:<profile>'"
+    )
+
+
+InferenceProviderRef = Annotated[str, AfterValidator(_validate_inference_ref)]
 
 
 class OpenAICompatEmbeddingConfig(BaseModel):
@@ -53,9 +90,9 @@ class OpenAICompatEmbeddingConfig(BaseModel):
 
     Targets the OpenAI ``/embeddings`` endpoint shape exposed by llama.cpp's
     server, Ollama (``/v1/`` mode), LM Studio, vLLM, and LocalAI. Selecting
-    ``providers.embedding = "openai_compat"`` together with an
-    ``providers.openai_compat`` inference backend lets the entire indexing
-    pipeline run offline with no cloud API calls.
+    ``providers.embedding = "openai_compat"`` together with
+    ``providers.openai_compat.<profile>`` inference profiles lets the entire
+    indexing pipeline run offline with no cloud API calls.
 
     ``dimensions`` MUST match the vector-index dimension declared in the
     baseline migrations (1024). The default model ``mxbai-embed-large`` emits
@@ -95,16 +132,53 @@ class OpenAICompatConfig(BaseModel):
 
 class ProvidersConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    summary: InferenceProviderName = "gemini"
-    inference: InferenceProviderName = "gemini"
-    translation: InferenceProviderName = "gemini"
+    summary: InferenceProviderRef = "gemini"
+    inference: InferenceProviderRef = "gemini"
+    translation: InferenceProviderRef = "gemini"
     embedding: EmbeddingProviderName = "voyage"
     gemini: GeminiConfig = Field(default_factory=GeminiConfig)
-    openai_compat: OpenAICompatConfig = Field(default_factory=OpenAICompatConfig)
+    openai_compat: dict[str, OpenAICompatConfig] = Field(default_factory=dict)
     openai_compat_embedding: OpenAICompatEmbeddingConfig = Field(
         default_factory=OpenAICompatEmbeddingConfig
     )
     voyage: VoyageConfig = Field(default_factory=VoyageConfig)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_legacy_openai_compat_shape(cls, data: object) -> object:
+        # A pre-profiles [providers.openai_compat] deep-merged over the packaged
+        # default leaves scalar keys (base_url, model_summary, ...) beside the
+        # profile tables; surface a migration hint instead of pydantic's opaque
+        # per-key "not a valid dictionary" error.
+        if isinstance(data, dict):
+            oc = data.get("openai_compat")
+            if isinstance(oc, dict):
+                bad = sorted(
+                    k for k, v in oc.items() if not isinstance(v, dict | OpenAICompatConfig)
+                )
+                if bad:
+                    raise ValueError(
+                        f"[providers.openai_compat] contains non-profile keys {bad}. "
+                        f"{_MIGRATION_HINT}"
+                    )
+        return data
+
+    @model_validator(mode="after")
+    def _check_profile_refs(self) -> ProvidersConfig:
+        for site, ref in (
+            ("summary", self.summary),
+            ("inference", self.inference),
+            ("translation", self.translation),
+        ):
+            profile = openai_compat_profile(ref)
+            if profile is not None and profile not in self.openai_compat:
+                defined = ", ".join(sorted(self.openai_compat)) or "(none defined)"
+                raise ValueError(
+                    f"providers.{site} = {ref!r} references profile {profile!r}, but no "
+                    f"[providers.openai_compat.{profile}] table exists. "
+                    f"Defined profiles: {defined}"
+                )
+        return self
 
 
 class Neo4jConfig(BaseModel):

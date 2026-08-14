@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from contextd.config import Config, InferenceProviderName
+from contextd.config import Config, openai_compat_profile
 from contextd.providers.base import EmbeddingProvider, InferenceProvider
 from contextd.providers.gemini import GeminiProvider
 from contextd.providers.openai_compat import OpenAICompatProvider
@@ -26,12 +26,13 @@ def build_inference_provider(cfg: Config) -> InferenceProvider:
     clients are shared.
     """
     pcfg = cfg.providers
-    cache: dict[InferenceProviderName, InferenceProvider] = {}
+    cache: dict[str, InferenceProvider] = {}
 
-    def _get(name: InferenceProviderName) -> InferenceProvider:
-        if name in cache:
-            return cache[name]
-        if name == "gemini":
+    def _get(ref: str) -> InferenceProvider:
+        if ref in cache:
+            return cache[ref]
+        profile = openai_compat_profile(ref)
+        if ref == "gemini":
             key = os.environ.get("GEMINI_API_KEY")
             if not key:
                 raise ProviderFactoryError(
@@ -39,21 +40,26 @@ def build_inference_provider(cfg: Config) -> InferenceProvider:
                     "Get a key at https://aistudio.google.com/app/apikey"
                 )
             inst: InferenceProvider = GeminiProvider(pcfg.gemini, api_key=key)
-        elif name == "openai_compat":
+        elif profile is not None:
+            ocfg = pcfg.openai_compat.get(profile)
+            if ocfg is None:  # defensive; ProvidersConfig validation normally catches this
+                raise ProviderFactoryError(
+                    f"No [providers.openai_compat.{profile}] profile is configured"
+                )
             api_key: str | None = None
-            if pcfg.openai_compat.api_key_env:
-                api_key = os.environ.get(pcfg.openai_compat.api_key_env)
+            if ocfg.api_key_env:
+                api_key = os.environ.get(ocfg.api_key_env)
                 if not api_key:
                     raise ProviderFactoryError(
-                        f"providers.openai_compat.api_key_env = "
-                        f"{pcfg.openai_compat.api_key_env!r} but that env var is "
-                        "unset. Either export it or remove api_key_env to run "
-                        "against a keyless local server."
+                        f"providers.openai_compat.{profile}.api_key_env = "
+                        f"{ocfg.api_key_env!r} but that env var is unset. Either "
+                        "export it or remove api_key_env to run against a keyless "
+                        "local server."
                     )
-            inst = OpenAICompatProvider(pcfg.openai_compat, api_key=api_key)
+            inst = OpenAICompatProvider(ocfg, api_key=api_key, provider_label=ref)
         else:
-            raise ProviderFactoryError(f"Unknown inference provider: {name!r}")
-        cache[name] = inst
+            raise ProviderFactoryError(f"Unknown inference provider: {ref!r}")
+        cache[ref] = inst
         return inst
 
     return RoutingInferenceProvider(
