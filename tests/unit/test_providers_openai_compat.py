@@ -202,6 +202,15 @@ def test_generate_records_usage_from_response(cfg: OpenAICompatConfig) -> None:
     assert usage.call_site == "summary"
 
 
+def test_provider_label_flows_into_usage_record(cfg: OpenAICompatConfig) -> None:
+    client = _mock_client()
+    provider = OpenAICompatProvider(cfg, client=client, provider_label="openai_compat:ollama")
+    provider.generate(PromptRequest(system="s", prompt="p", call_site="summary"))
+    usage = provider.last_usage()
+    assert usage is not None
+    assert usage.provider == "openai_compat:ollama"
+
+
 def test_generate_records_zero_usage_when_response_omits_it(cfg: OpenAICompatConfig) -> None:
     client = _mock_client(body={"choices": [{"message": {"content": "out"}}]})
     provider = OpenAICompatProvider(cfg, client=client)

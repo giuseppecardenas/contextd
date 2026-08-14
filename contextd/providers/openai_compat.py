@@ -46,9 +46,11 @@ class OpenAICompatProvider(InferenceProvider):
         client: httpx.Client | None = None,
         backoff_initial: float = 1.0,
         backoff_max: float = 60.0,
+        provider_label: str = "openai_compat",
     ) -> None:
         self._cfg = config
         self._api_key = api_key
+        self._provider_label = provider_label
         self._client = client or httpx.Client(timeout=config.request_timeout_seconds)
         self._last_usage: UsageRecord | None = None
         self._backoff_initial = backoff_initial
@@ -143,7 +145,7 @@ class OpenAICompatProvider(InferenceProvider):
         is still visible to whatever reads ``last_usage``.
         """
         self._last_usage = UsageRecord(
-            provider="openai_compat",
+            provider=self._provider_label,
             model=model,
             call_site=request.call_site,
             input_tokens=input_tokens,
