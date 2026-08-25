@@ -306,6 +306,36 @@ contextd status
 
 Each indexing session logs per-provider input/output token counts to `~/.contextd/state/session-log/`. The `costs` command aggregates these into a per-provider summary. The `status` command queries the daemon's IPC endpoint (Unix socket on Linux/macOS, localhost TCP on Windows) for live runtime info (pid, uptime, watched corpora) and falls back to a PID-file check if the endpoint is unreachable.
 
+### Benchmarking retrieval
+
+Chunk-size and strategy choices should be measured, not guessed. Put a
+labelled query set at `<corpus root>/.contextd/bench.toml` — each entry names
+a query and the files (optionally section anchor and 0-based `[start, end)`
+line range) a good retriever should surface:
+
+```toml
+[[queries]]
+q = "what do the notes say about sourdough hydration"
+expect = [{ path = "note-3.md", anchor = "hydration", lines = [12, 30] }, { path = "note-7.md" }]
+```
+
+Then run every query through the `search` tool, once per configuration, and
+read the metrics side by side:
+
+```bash
+# One row per --profiles value: fine alone, coarse alone, both fused
+contextd bench notes --profiles fine --profiles coarse --profiles fine,coarse --k 5
+
+# Save the run, change [chunking] in the corpus TOML, re-index, and diff
+contextd bench notes --json before.json
+contextd bench notes --json after.json
+contextd bench --compare before.json after.json
+```
+
+The table reports recall@k, precision@k, MRR, line-range IoU (when the spec
+gives `lines`) and mean latency. See `docs/cli.md` for the full option list;
+`examples/minimal-notes/.contextd/bench.toml` is a working spec.
+
 ---
 
 ## CLI reference
@@ -325,6 +355,7 @@ Each indexing session logs per-provider input/output token counts to `~/.context
 | `contextd ask "QUESTION"` | NL→Cypher query translation and execution | `--corpus NAME` |
 | `contextd logs` | Tail the structured JSON log | `--follow` |
 | `contextd costs` | Aggregated provider token spend | `--since YYYY-MM-DD` |
+| `contextd bench CORPUS` | Score retrieval (recall@k, precision@k, MRR, line IoU, latency) against a labelled query set | `--queries PATH`, `--profiles a,b` (repeatable), `--return-unit {chunk,section,file,auto}`, `--k N`, `--json PATH`, `--compare A.json B.json` |
 
 Three console scripts are installed:
 

@@ -1,0 +1,34 @@
+# Corpus template for the minimal-notes example.
+#
+# Register with:
+#   contextd add-corpus examples/minimal-notes --name notes \
+#       --from examples/minimal-notes/.contextd/corpus.toml
+# `--from` rewrites `root` to the absolute path you pass, so "." is fine here.
+
+[corpus]
+name = "notes"
+root = "."
+include = ["**/*.md"]
+granularity = "section"
+# The notes use a single `# Note N` heading each; H1 must qualify as a
+# section or every file collapses into a preamble.
+heading_min_level = 1
+
+[chunking]
+# The two default profiles, spelled out so the bench can name them:
+#   contextd bench notes --profiles fine --profiles coarse --profiles fine,coarse
+
+[[chunking.profiles]]
+# Small, precise chunks: best for pin-point questions and line-level IoU.
+name = "fine"
+strategy = "structural"
+max_tokens = 256
+min_tokens = 48
+
+[[chunking.profiles]]
+# Larger overlapping chunks: more context per hit, better for broad questions.
+name = "coarse"
+strategy = "structural"
+max_tokens = 1024
+min_tokens = 200
+overlap = 0.1
