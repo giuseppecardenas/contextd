@@ -245,3 +245,79 @@ contextd costs --since 2026-04-01
 # gemini: input=12540 output=3820
 # voyage: input=88400 output=0
 ```
+
+---
+
+## `contextd bench`
+
+**Synopsis:** `contextd bench CORPUS [--queries PATH] [--profiles a,b]... [--return-unit UNIT] [--k N] [--json PATH]`
+**Synopsis:** `contextd bench --compare A.json B.json`
+
+| Argument / Flag | Default | Description |
+|---|---|---|
+| `CORPUS` | required (unless `--compare`) | Name of a registered corpus |
+| `--queries` | `<corpus root>/.contextd/bench.toml` | Bench spec file (TOML; YAML only if `pyyaml` happens to be installed) |
+| `--profiles` | every profile in the graph | Comma-separated chunk profiles to query. Repeat the option to bench several configurations in one run — each value becomes one table row |
+| `--return-unit` | `[search] return_unit` from `config.toml` | `chunk`, `section`, `file`, or `auto` (small-to-big collapse target) |
+| `--k` | `5` | Top-k depth for recall/precision/IoU; a query's own `k` overrides it |
+| `--json` | none | Save every configuration's report (`{"reports": [...]}`) to this file |
+| `--compare` | none | Diff two saved reports (signed per-metric delta, `B - A`) and exit without touching the backend |
+
+Runs every query in the spec through the `search` MCP tool — with the same
+`[search]` knobs the server uses (`mode`, `rrf_k`, `fetch_k`, weights,
+`auto_merge_threshold`) — and scores the returned rows against the spec's
+expectations:
+
+| Metric | Meaning |
+|---|---|
+| recall@k | fraction of expected targets satisfied by the top-k rows |
+| precision@k | fraction of the top-k rows that satisfy some expectation |
+| MRR | 1 / rank of the first satisfying row, averaged over queries |
+| line IoU | Chroma-style token IoU at line granularity, over the line sets of hits and expectations that carry `lines` (`—` when neither side does) |
+| latency ms | mean wall-clock per `search` call |
+
+A row satisfies an expectation when the paths match (either side may be
+absolute) and, where the expectation narrows further, the section anchor
+matches or the line ranges overlap. Neighbour context (`[search] window`) is
+forced to 0 — it never changes a score and would only pad the latency.
+
+The embedding provider is built the way `contextd ask` builds its providers;
+if that fails (no key, unreachable endpoint) the run warns and continues
+full-text only, so the report's `config.embedder` records which retrieval
+path was measured.
+
+**Spec format** (`bench.toml`):
+
+```toml
+[[queries]]
+q = "what do the notes say about sourdough hydration"
+expect = [
+    { path = "note-3.md", anchor = "hydration", lines = [12, 30] },
+    { path = "note-7.md" },
+]
+k = 5   # optional per-query override of --k
+
+[[queries]]
+q = "cooking"
+expect = [{ path = "note-3.md" }, { path = "note-7.md" }]
+```
+
+`path` is required and compared as a suffix, so corpus-relative paths work.
+`anchor` is the Section's GitHub-style heading slug (the part after `#` in a
+Section id); `lines` is `[start, end)`, 0-based and end-exclusive like
+`ChunkSpan`. Unknown keys, empty `expect` lists, and malformed ranges are
+rejected with the file name in the error.
+
+```bash
+# One row per --profiles value
+contextd bench notes --profiles fine --profiles coarse --profiles fine,coarse
+
+# Measure chunk-level hits at depth 10 and keep the report
+contextd bench notes --return-unit chunk --k 10 --json runs/chunk-k10.json
+
+# Diff two saved runs
+contextd bench --compare runs/before.json runs/after.json
+```
+
+`examples/minimal-notes/.contextd/bench.toml` is a working spec for the
+example corpus (register it with `--from examples/minimal-notes/.contextd/corpus.toml`).

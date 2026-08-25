@@ -11,6 +11,7 @@ Split layout (SD #80):
 - ``cli/infra.py``    — ``up``, ``down``, ``status``
 - ``cli/corpora.py``  — ``add-corpus``, ``list-corpora``, ``index``
 - ``cli/query.py``    — ``ask``, ``logs``, ``costs``
+- ``cli/bench.py``    — ``bench``
 - ``cli/_shared.py``  — ``PipelineDeps``, ``_load_cfg``, ``console`` (private helpers)
 
 All commands route through the global config (``~/.contextd/config.toml``).
@@ -123,7 +124,7 @@ def main() -> None:
 # Trigger command registration by importing the sub-modules. These
 # imports MUST land after ``cli`` is defined so the decorators can
 # attach to it.
-from contextd.cli import corpora, infra, query  # noqa: E402,F401,I001
+from contextd.cli import bench, corpora, infra, query  # noqa: E402,F401,I001
 
 
 if __name__ == "__main__":
