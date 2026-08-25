@@ -46,6 +46,8 @@ dependencies = [
     # rather than at import time.
     "tokenizers>=0.15",
     "psutil>=5.9",
+    # Topic clustering (contextd/topics/cluster.py): PCA + GMM in numpy alone.
+    "numpy>=1.26",
 ]
 
 [project.optional-dependencies]
