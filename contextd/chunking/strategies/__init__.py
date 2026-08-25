@@ -23,7 +23,7 @@ from contextd.corpus_config import ChunkProfile
 
 if TYPE_CHECKING:
     from contextd.inference.prompts import PromptRenderer
-    from contextd.providers.base import EmbeddingProvider, InferenceProvider
+    from contextd.providers.base import EmbeddingProvider, InferenceProvider, TokenEmbedder
 
 
 class ChunkingConfigError(ValueError):
@@ -37,7 +37,9 @@ class StrategyDeps:
     embedder: EmbeddingProvider | None = None
     inference: InferenceProvider | None = None
     renderer: PromptRenderer | None = None
-    token_embedder: object | None = None  # TokenEmbedder; typed loosely until WS9 lands
+    token_embedder: TokenEmbedder | None = None
+    """Only the ``late`` strategy needs this; ``make_late`` also accepts
+    ``embedder`` when it happens to be a ``TokenEmbedder``."""
 
 
 _Factory = Callable[[ChunkProfile, Tokenizer, StrategyDeps], ChunkStrategy]
@@ -89,6 +91,12 @@ def _code(p: ChunkProfile, tok: Tokenizer, d: StrategyDeps) -> ChunkStrategy:
     return make_code(p, tok, d)
 
 
+def _late(p: ChunkProfile, tok: Tokenizer, d: StrategyDeps) -> ChunkStrategy:
+    from contextd.chunking.strategies.late import make_late
+
+    return make_late(p, tok, d)
+
+
 STRATEGY_REGISTRY: dict[str, _Factory] = {
     "structural": _structural,
     "window": _window,
@@ -97,6 +105,7 @@ STRATEGY_REGISTRY: dict[str, _Factory] = {
     "semantic": _semantic,
     "propositions": _propositions,
     "code": _code,
+    "late": _late,
 }
 
 

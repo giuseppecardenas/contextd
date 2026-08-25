@@ -189,3 +189,69 @@ api_key_env = "FAKE_EMBED_KEY"
     cfg = Config.load(user_cfg)
     with pytest.raises(ProviderFactoryError, match="FAKE_EMBED_KEY"):
         build_embedding_provider(cfg)
+
+
+def test_build_local_hf_embedding_is_lazy_and_keyless(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pytest.TempPathFactory
+) -> None:
+    """local_hf needs no API key and does not import the extra at construction."""
+    import sys
+
+    monkeypatch.delenv("VOYAGE_API_KEY", raising=False)
+    monkeypatch.setitem(sys.modules, "sentence_transformers", None)
+    user_cfg = tmp_path / "config.toml"  # type: ignore[operator]
+    user_cfg.write_text(
+        """
+[providers]
+embedding = "local_hf"
+
+[providers.local_hf]
+model = "org/some-model"
+device = "cuda"
+""",
+        encoding="utf-8",
+    )
+    cfg = Config.load(user_cfg)
+    from contextd.providers.base import TokenEmbedder
+    from contextd.providers.local_hf import LocalHFEmbedder
+
+    provider = build_embedding_provider(cfg)
+    assert isinstance(provider, LocalHFEmbedder)
+    assert isinstance(provider, TokenEmbedder)
+    assert provider.dimensions == 1024
+    assert provider.max_context_tokens == 8192
+    with pytest.raises(RuntimeError, match=r"contextd\[late\]"):
+        provider.embed(["x"])
+
+
+def test_build_local_hf_passes_its_config_section(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pytest.TempPathFactory
+) -> None:
+    import contextd.providers.factory as factory_mod
+
+    captured: dict[str, object] = {}
+
+    class FakeLocalHF:
+        def __init__(self, config: object) -> None:
+            captured["config"] = config
+
+    monkeypatch.setattr(factory_mod, "LocalHFEmbedder", FakeLocalHF)
+    user_cfg = tmp_path / "config.toml"  # type: ignore[operator]
+    user_cfg.write_text(
+        """
+[providers]
+embedding = "local_hf"
+
+[providers.local_hf]
+model = "org/some-model"
+dimensions = 1024
+max_context_tokens = 512
+""",
+        encoding="utf-8",
+    )
+    cfg = Config.load(user_cfg)
+    provider = build_embedding_provider(cfg)
+    assert isinstance(provider, FakeLocalHF)
+    assert captured["config"] is cfg.providers.local_hf
+    assert cfg.providers.local_hf.model == "org/some-model"
+    assert cfg.providers.local_hf.max_context_tokens == 512

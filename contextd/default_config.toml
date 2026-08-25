@@ -73,6 +73,23 @@ max_batch_size = 64
 max_retries = 5
 request_timeout_seconds = 120.0
 
+# [providers.local_hf]
+# Used only when providers.embedding = "local_hf" (optional extra:
+# pip install 'contextd[late]'). Runs a sentence-transformers model in
+# process; it is the only embedder the `late` chunking strategy accepts
+# (one forward pass per parent text, per-chunk vectors pooled from token
+# vectors). dimensions MUST match the vector-index width (1024): the default
+# BAAI/bge-m3 emits 1024-dim vectors over an 8192-token context, while e.g.
+# nomic-ai/modernbert-embed-base (768-dim) requires editing the migration DDL.
+# max_context_tokens must not exceed the model's positional limit; longer
+# texts are embedded in overlapping windows.
+# model = "BAAI/bge-m3"
+# dimensions = 1024
+# device = "cpu"            # or "cuda" / "mps"
+# max_context_tokens = 8192
+# normalize = true
+# batch_size = 8
+
 [storage]
 backend = "neo4j"
 

@@ -45,7 +45,7 @@ class VoyageConfig(BaseModel):
     max_batch_size: int = 128
 
 
-EmbeddingProviderName = Literal["voyage", "openai_compat"]
+EmbeddingProviderName = Literal["voyage", "openai_compat", "local_hf"]
 
 _OPENAI_COMPAT_PREFIX = "openai_compat:"
 _PROFILE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
@@ -113,6 +113,32 @@ class OpenAICompatEmbeddingConfig(BaseModel):
     request_timeout_seconds: float = Field(default=120.0, gt=0)
 
 
+class LocalHFConfig(BaseModel):
+    """Config for in-process embeddings via ``sentence-transformers``
+    (``providers.embedding = "local_hf"``, optional extra ``contextd[late]``).
+
+    This is the only provider that implements ``TokenEmbedder`` and therefore
+    the only one the ``late`` chunking strategy accepts: one forward pass per
+    parent text, per-chunk vectors mean-pooled from the token vectors.
+
+    ``dimensions`` MUST match the vector-index width in the baseline
+    migrations (1024) and is validated against the model's output at first
+    use. The default ``BAAI/bge-m3`` emits 1024-dim vectors over an 8192-token
+    context; ``nomic-ai/modernbert-embed-base`` (768-dim) or other widths
+    require editing the migration DDL. ``max_context_tokens`` caps one forward
+    pass and must not exceed the model's positional limit; longer texts are
+    embedded in overlapping windows.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    model: str = "BAAI/bge-m3"
+    dimensions: int = Field(default=1024, gt=0)
+    device: str = "cpu"
+    max_context_tokens: int = Field(default=8192, ge=16)
+    normalize: bool = True
+    batch_size: int = Field(default=8, ge=1)
+
+
 class OpenAICompatConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     base_url: str = "http://localhost:11434/v1"
@@ -142,6 +168,7 @@ class ProvidersConfig(BaseModel):
         default_factory=OpenAICompatEmbeddingConfig
     )
     voyage: VoyageConfig = Field(default_factory=VoyageConfig)
+    local_hf: LocalHFConfig = Field(default_factory=LocalHFConfig)
 
     @model_validator(mode="before")
     @classmethod
