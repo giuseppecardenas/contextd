@@ -146,7 +146,7 @@ def test_phase_chunks_skips_parents_with_current_fingerprint(tmp_path: Path) -> 
     path = canonical_path(md)
     cfg = _corpus(tmp_path)
     deps = _deps(cfg)
-    current = unit_fingerprint(deps.config_fp, "h-alpha")
+    current = unit_fingerprint(deps.config_fp, "h-alpha:4")  # hash + start line
     store = _store_with(_section_rows(path, {"alpha": current, "beta": "stale"}), [])
 
     result = phase_chunk_units(cfg, deps, store)
@@ -312,3 +312,24 @@ def test_build_chunking_deps_disabled_and_validation(tmp_path: Path) -> None:
 
     with pytest.raises(ChunkingConfigError, match="embedding provider"):
         build_chunking_deps(fake_cfg, cfg2, embedder=None, inference=None, renderer=None)
+
+
+def test_shifted_start_line_rechunks_even_when_section_hash_is_unchanged(tmp_path: Path) -> None:
+    """An edit above a section moves its lines without touching its hash; the
+    chunk fingerprint must still change so evidence line ranges stay right."""
+    md = tmp_path / "doc.md"
+    md.write_text("## A\n\nbody a\n\n## B\n\nbody b\n", encoding="utf-8")
+    path = canonical_path(md)
+    cfg = _corpus(tmp_path)
+    deps = _deps(cfg)
+    # Fingerprint B was stamped with when it started on line 4.
+    stamped = unit_fingerprint(deps.config_fp, "h-b:4")
+    store = _store_with(_section_rows(path, {"b": stamped}), [])
+    assert phase_chunk_units(cfg, deps, store).skipped == 1  # unchanged position → skip
+
+    md.write_text("## A\n\nbody a\nextra line\n\n## B\n\nbody b\n", encoding="utf-8")
+    store = _store_with(_section_rows(path, {"b": stamped}), [])
+    result = phase_chunk_units(cfg, deps, store)
+    assert result.processed == 1
+    fp_write = store.exec_write.call_args_list[-1]
+    assert fp_write.args[1]["fp"] == unit_fingerprint(deps.config_fp, "h-b:5")

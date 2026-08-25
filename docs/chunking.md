@@ -74,7 +74,7 @@ The prefix is prepended to the chunk text for embedding and full-text indexing (
 
 ## Fingerprints and re-chunking
 
-Chunks are a pure function of (chunking config, tokenizer, parent content). Each Section/File stores `chunk_fingerprint = sha256(config fingerprint : parent hash)`; a parent whose stored value equals the current one is skipped. That one comparison gives resume-after-crash, incremental re-index, the daemon sweep, and "config changed" identical semantics. Per parent the phase deletes old chunks, batch-upserts the new rows, writes the structural edges and stamps the fingerprint last, so a crash leaves the parent un-stamped and it is redone.
+Chunks are a pure function of (chunking config, tokenizer, parent content, parent position). Each Section/File stores `chunk_fingerprint = sha256(config fingerprint : parent hash[:start line])` — the start line is included for sections so an edit that shifts later sections down the file re-chunks them and their evidence line ranges stay correct; a parent whose stored value equals the current one is skipped. That one comparison gives resume-after-crash, incremental re-index, the daemon sweep, and "config changed" identical semantics. Per parent the phase deletes old chunks, batch-upserts the new rows, writes the structural edges and stamps the fingerprint last, so a crash leaves the parent un-stamped and it is redone.
 
 The corpus-level fingerprint is stored on the `Corpus` node; the daemon re-chunks a corpus at startup when it differs from the running config. `contextd index <corpus> --refresh chunks` drops every chunk and marker (embedding cost only); `--estimate-only` dry-runs the chunkers and reports chunk and embedding-token counts per profile.
 
@@ -86,7 +86,9 @@ The corpus-level fingerprint is stored on the `Corpus` node; the daemon re-chunk
 - `"section"` / `"file"` — always the enclosing unit;
 - `"auto"` (default) — the parent when at least `auto_merge_threshold` (0.5) of its chunks in the best-covered profile were retrieved, else the chunk (the LlamaIndex / Haystack auto-merging rule).
 
-Every row carries `evidence` (`chunk_id`, `start_line`, `end_line`, `text`, `context_before`, `context_after`). `expand_chunk` returns a chunk with its neighbours and the parent summary. The `[search]` block sets `chunk_profiles`, `return_unit`, `auto_merge_threshold`, `window`, `max_evidence_chars` and `over_fetch_factor`. See [mcp.md](mcp.md).
+Every row carries `evidence` (`chunk_id`, `start_line`, `end_line`, `text`, `context_before`, `context_after`).
+
+Auto-merge counts every chunk a ranker *returned*, and the vector leg always returns its `fetch_k` nearest neighbours whatever their similarity. On a corpus with fewer chunks than `fetch_k` that means most of a parent's chunks are "retrieved" for any query and `auto` collapses eagerly; on real corpora the effect fades because `fetch_k` is a small fraction of the chunk count. If you see over-collapsing, lower `[search] fetch_k`, raise `auto_merge_threshold`, or ask for `return_unit = "chunk"`. `expand_chunk` returns a chunk with its neighbours and the parent summary. The `[search]` block sets `chunk_profiles`, `return_unit`, `auto_merge_threshold`, `window`, `max_evidence_chars` and `over_fetch_factor`. See [mcp.md](mcp.md).
 
 ## Topics (`[topics]`)
 

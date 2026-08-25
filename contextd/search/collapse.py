@@ -15,6 +15,13 @@ best chunk attached as ``evidence``) or the best chunk itself:
 The parent's score is the mean of its member chunks' fused scores, the
 LlamaIndex ``AutoMergingRetriever`` convention. Rows carry ``unit`` so a
 caller can tell the shapes apart.
+
+Known limitation: "retrieved" means "returned by a ranker", and the vector
+leg returns its ``fetch_k`` nearest neighbours regardless of similarity, so
+on a corpus with fewer chunks than ``fetch_k`` nearly every chunk counts as
+retrieved and ``auto`` collapses eagerly. It is the same behaviour as the
+LlamaIndex/Haystack retrievers it mirrors; on realistic corpora ``fetch_k``
+is a small fraction of the chunk count and the ratio is meaningful.
 """
 
 from __future__ import annotations

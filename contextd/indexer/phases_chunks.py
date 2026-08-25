@@ -162,6 +162,29 @@ def _request_for(
     return req, (), rel
 
 
+def _content_key(parent: _Parent, cache: ParseCache) -> str | None:
+    """What the unit fingerprint binds besides the config: the parent's content
+    hash *and*, for sections, its start line.
+
+    ``Section.hash`` covers title + body only, so an edit that adds or removes
+    lines in an earlier section leaves every later section's hash unchanged
+    while shifting its position in the file — and with it the ``start_line`` /
+    ``end_line`` evidence of every chunk beneath it. Binding the start line
+    makes those sections re-chunk (embedding cost only) instead of serving
+    stale line ranges until the next ``--refresh chunks``.
+    """
+    if parent.label != "Section":
+        return parent.content_hash
+    try:
+        parsed = cache.get(Path(parent.path))
+    except OSError:
+        return None
+    sec = parsed.by_anchor(parent.anchor or "")
+    if sec is None:
+        return None
+    return f"{parent.content_hash}:{sec.start_line}"
+
+
 def _rows_for(
     parent: _Parent, profile_name: str, strategy: str, chunks: list[Chunk], corpus: str, now: Any
 ) -> list[dict[str, Any]]:
@@ -228,7 +251,11 @@ def _process_parent(
     cache: ParseCache,
     now: Any,
 ) -> tuple[int, int]:
-    fingerprint = unit_fingerprint(deps.config_fp, parent.content_hash)
+    content_key = _content_key(parent, cache)
+    if content_key is None:
+        _log.debug("chunk: parent %s has no source on disk; skipping", parent.id)
+        return (0, 1)
+    fingerprint = unit_fingerprint(deps.config_fp, content_key)
     if parent.stored_fp == fingerprint:
         return (0, 1)
     corpus = corpus_cfg.corpus.name
