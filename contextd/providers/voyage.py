@@ -3,7 +3,8 @@
 Voyage was acquired by Anthropic in 2024; it is the natural companion
 to the Gemini inference stack in Contextd's v1 configuration. The
 default ``voyage-4-large`` model produces 1024-dim vectors with a
-32k-token context per input (``chunk_tokens`` default matches). The
+32k-token context per input (any longer input is truncated server-side;
+retrieval chunks stay far below it). The
 older ``voyage-3`` / ``voyage-3-large`` / ``voyage-code-3`` models
 (all 8k-token context, 1024-dim) remain registered for users who
 override via ``[providers.voyage] model``.
