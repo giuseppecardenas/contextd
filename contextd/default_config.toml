@@ -114,6 +114,14 @@ rrf_k = 60             # RRF damping constant; larger flattens top-rank weightin
 fetch_k = 50           # per-ranker candidate depth before fusion (raised to >= limit)
 vector_weight = 1.0    # bias toward semantic matches
 fulltext_weight = 1.0  # bias toward lexical matches
+# Chunk-level retrieval. `search` queries Chunk nodes (per-corpus [chunking]
+# profiles) and collapses hits to the best enclosing unit.
+# chunk_profiles = ["fine", "coarse"]   # unset → every profile present in the graph
+return_unit = "auto"        # "chunk" | "section" | "file" | "auto" (section if any, else file)
+auto_merge_threshold = 0.5  # fraction of a parent's chunks that must hit to return the parent
+window = 1                  # neighbouring chunks attached as context on each side of a hit
+max_evidence_chars = 1200   # evidence text truncation per row
+over_fetch_factor = 4       # k multiplier for post-filtered vector/full-text queries
 
 [logging]
 level = "info"

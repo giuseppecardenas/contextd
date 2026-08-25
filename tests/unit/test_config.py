@@ -361,3 +361,46 @@ fetch_k = 100
     assert cfg.search.fetch_k == 100
     # Unspecified weights fall back to defaults.
     assert cfg.search.vector_weight == 1.0
+
+
+def test_search_config_chunk_defaults() -> None:
+    from contextd.config import SearchConfig
+
+    cfg = SearchConfig()
+    assert cfg.chunk_profiles is None
+    assert cfg.return_unit == "auto"
+    assert cfg.auto_merge_threshold == 0.5
+    assert cfg.window == 1
+    assert cfg.max_evidence_chars == 1200
+    assert cfg.over_fetch_factor == 4
+
+
+def test_search_config_chunk_overrides(tmp_path: Path) -> None:
+    from contextd.config import Config
+
+    (tmp_path / "config.toml").write_text(
+        """
+[search]
+chunk_profiles = ["fine"]
+return_unit = "chunk"
+auto_merge_threshold = 0.75
+window = 0
+""",
+        encoding="utf-8",
+    )
+    cfg = Config.load(tmp_path / "config.toml")
+    assert cfg.search.chunk_profiles == ["fine"]
+    assert cfg.search.return_unit == "chunk"
+    assert cfg.search.auto_merge_threshold == 0.75
+    assert cfg.search.window == 0
+
+
+def test_search_config_rejects_bad_return_unit() -> None:
+    import pytest
+
+    from contextd.config import SearchConfig
+
+    with pytest.raises(ValueError):
+        SearchConfig(return_unit="paragraph")  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        SearchConfig(auto_merge_threshold=0.0)

@@ -243,6 +243,7 @@ class LoggingConfig(BaseModel):
 
 
 SearchMode = Literal["hybrid", "fulltext", "vector"]
+ReturnUnit = Literal["chunk", "section", "file", "auto"]
 
 
 class SearchConfig(BaseModel):
@@ -265,6 +266,21 @@ class SearchConfig(BaseModel):
     fetch_k: int = Field(default=50, ge=1)
     vector_weight: float = Field(default=1.0, ge=0.0)
     fulltext_weight: float = Field(default=1.0, ge=0.0)
+    chunk_profiles: list[str] | None = None
+    """Chunk profiles the ``search`` tool queries by default; ``None`` → every
+    profile that exists in the graph."""
+    return_unit: ReturnUnit = "auto"
+    """Unit the ``search`` tool collapses chunk hits to. ``auto`` → the
+    enclosing Section when one exists, else the File."""
+    auto_merge_threshold: float = Field(default=0.5, gt=0.0, le=1.0)
+    """Fraction of a parent's chunks that must hit before the parent replaces
+    its chunks in the result list (LlamaIndex / Haystack convention: 0.5)."""
+    window: int = Field(default=1, ge=0)
+    """Neighbouring chunks (each side) attached as context to a chunk hit."""
+    max_evidence_chars: int = Field(default=1200, ge=100)
+    over_fetch_factor: int = Field(default=4, ge=1, le=20)
+    """Multiplier on ``k`` when a filtered vector/full-text search must
+    post-filter results (the backend procedures cannot pre-filter)."""
 
     @model_validator(mode="after")
     def _weights_not_both_zero(self) -> SearchConfig:

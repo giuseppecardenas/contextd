@@ -695,8 +695,22 @@ heading_max_level = 4           # section mode: deepest heading to promote (defa
 
 [embedding]
 model = "voyage-4-large"        # override global embedding model
-chunk_tokens = 32000            # max tokens per chunk (default 32000)
-chunk_overlap = 200             # overlap between chunks (default 200)
+
+[chunking]                      # retrieval chunks beneath each Section/File (see Chunking)
+prefix = "breadcrumb"           # "none" | "breadcrumb" | "section_summary" | "llm"
+augment_fulltext = ["key_points"]
+
+[[chunking.profiles]]
+name = "fine"                   # ≈256-token chunks for precision
+strategy = "structural"         # structural | window | recursive | sentence_window | semantic | late | propositions | code
+max_tokens = 256
+min_tokens = 48
+
+[[chunking.profiles]]
+name = "coarse"                 # ≈1024-token chunks for context
+max_tokens = 1024
+min_tokens = 200
+overlap = 0.1
 
 [ontology]
 base = "default"                # base ontology name
