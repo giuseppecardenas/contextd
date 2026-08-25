@@ -90,6 +90,14 @@ class LineIndex:
         offset = max(0, min(offset, self._length))
         return bisect.bisect_right(self._starts, offset) - 1
 
+    def offset_of_line(self, line: int) -> int:
+        """Character offset where ``line`` starts; ``len(text)`` past the end."""
+        if line < 0:
+            return 0
+        if line >= len(self._starts):
+            return self._length
+        return self._starts[line]
+
     def span(self, start: int, end: int, *, base_line: int = 0) -> ChunkSpan:
         """Line span covering ``text[start:end]`` (end exclusive)."""
         if end <= start:

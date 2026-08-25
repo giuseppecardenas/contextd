@@ -24,6 +24,7 @@ Three implementations:
 from __future__ import annotations
 
 import logging
+import math
 import re
 from typing import Any, Protocol
 
@@ -64,8 +65,12 @@ class WordTokenizer:
     id = "words"
 
     def count(self, text: str) -> int:
+        # Ceil, not round: the packer sums piece counts to decide when a chunk
+        # is full, and ceil(a) + ceil(b) >= ceil(a + b) keeps that sum an
+        # upper bound on the whole chunk's count, so a packed chunk never
+        # recounts above max_tokens.
         words = len(_WORD.findall(text))
-        return int(words * _WORDS_TO_TOKENS + 0.5) if words else 0
+        return math.ceil(words * _WORDS_TO_TOKENS) if words else 0
 
     def offsets(self, text: str) -> list[tuple[int, int]]:
         # One "token" per word: the scale is applied by ``count`` only, so

@@ -17,7 +17,8 @@ def test_word_tokenizer_count_and_offsets() -> None:
     t = WordTokenizer()
     assert t.id == "words"
     assert t.count("") == 0
-    assert t.count("one two three four") == 5  # 4 words x 1.3, rounded
+    assert t.count("one two three four") == 6  # ceil(4 words x 1.3)
+    assert t.count("one") == 2  # ceil keeps piece sums an upper bound on the whole
     assert t.offsets("one  two\nthree") == [(0, 3), (5, 8), (9, 14)]
     assert t.offsets("") == []
 
