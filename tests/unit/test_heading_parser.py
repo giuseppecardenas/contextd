@@ -332,3 +332,18 @@ def test_parent_body_excludes_children_and_child_edit_keeps_parent_hash() -> Non
     )
     parent2 = parser.parse(md2)[0]
     assert _section_hash(parent) == _section_hash(parent2)
+
+
+def test_sections_carry_file_start_lines() -> None:
+    from contextd.indexer.heading_parser import HeadingParser
+
+    md = "# Title\n\nintro\n\n## A\n\nbody a\n\n### A1\n\nbody a1\n\n## B\n\nbody b\n"
+    sections = HeadingParser(min_level=2, max_level=4).parse(md)
+    by_anchor = {s.anchor: s for s in sections}
+    assert by_anchor["title"].start_line == 0  # preamble
+    assert by_anchor["a"].start_line == 4
+    assert by_anchor["a1"].start_line == 8
+    assert by_anchor["b"].start_line == 12
+    lines = md.splitlines(keepends=True)
+    for s in sections:
+        assert md.startswith(s.body, sum(len(ln) for ln in lines[: s.start_line]))

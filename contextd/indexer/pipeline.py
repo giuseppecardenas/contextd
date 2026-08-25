@@ -9,7 +9,8 @@ from typing import Literal
 
 from contextd._paths import canonical_path
 from contextd.corpus_config import CorpusConfig
-from contextd.indexer import phases
+from contextd.indexer import phases, phases_chunks
+from contextd.indexer.chunk_deps import ChunkingDeps
 from contextd.indexer.hasher import FileHasher
 from contextd.indexer.heading_parser import section_hash
 from contextd.indexer.phases import RelateDeps
@@ -18,7 +19,7 @@ from contextd.inference.summarise import Summariser
 from contextd.providers.base import EmbeddingProvider
 from contextd.storage.base import GraphStore
 
-RefreshScope = Literal["inferred", "summaries", "llm", "all"]
+RefreshScope = Literal["inferred", "summaries", "llm", "chunks", "topics", "all"]
 
 
 @dataclass
@@ -112,6 +113,10 @@ def _wipe_for_refresh(corpus: CorpusConfig, store: GraphStore, scope: RefreshSco
       - summaries: REMOVE summary + key_points + entities_mentioned +
                    summary_generated_at (+ legacy summary_confidence) on nodes.
       - llm:       union of inferred + summaries.
+      - chunks:    DETACH DELETE Chunk nodes + REMOVE chunk_fingerprint on
+                   Section/File so the chunk phase rebuilds every parent.
+                   No LLM cost unless the prefix/augment modes need one.
+      - topics:    DETACH DELETE Topic nodes + REMOVE topic_input_fingerprint.
       - all:       DETACH DELETE Section + File + Corpus for this corpus.
                    Cascades to all attached edges (structural, inferred, manual).
 
@@ -146,6 +151,16 @@ def _wipe_for_refresh(corpus: CorpusConfig, store: GraphStore, scope: RefreshSco
             "n.entities_mentioned, n.summary_generated_at, n.summary_input_hash, n.summary_confidence",
             {"c": c},
         )
+    if scope == "chunks":
+        store.delete_nodes("Chunk", where={"corpus": c})
+        store.exec_write("MATCH (n:Section {corpus: $c}) REMOVE n.chunk_fingerprint", {"c": c})
+        store.exec_write("MATCH (n:File {corpus: $c}) REMOVE n.chunk_fingerprint", {"c": c})
+    if scope == "topics":
+        store.delete_nodes("Topic", where={"corpus": c})
+        store.exec_write(
+            "MATCH (n:Corpus {name: $c}) REMOVE n.topic_input_fingerprint, n.topics_dirty",
+            {"c": c},
+        )
     if scope == "all":
         delete_corpus_nodes(store, c)
 
@@ -173,6 +188,10 @@ def delete_corpus_nodes(store: GraphStore, corpus_name: str) -> None:
     """
     from contextd.ontology.schema import Ontology
 
+    # Derived retrieval nodes first: chunks hang off Section/File and topics
+    # off the corpus; deleting the parents would merely orphan them.
+    store.exec_write("MATCH (n:Chunk {corpus: $c}) DETACH DELETE n", {"c": corpus_name})
+    store.exec_write("MATCH (n:Topic {corpus: $c}) DETACH DELETE n", {"c": corpus_name})
     store.exec_write("MATCH (n:Section {corpus: $c}) DETACH DELETE n", {"c": corpus_name})
     store.exec_write("MATCH (n:File {corpus: $c}) DETACH DELETE n", {"c": corpus_name})
     for label in sorted(Ontology.load_base().mintable_labels()):
@@ -247,20 +266,23 @@ def run_incremental_file(
     relate: RelateDeps,
     *,
     inference_concurrency: int = 1,
+    chunking: ChunkingDeps | None = None,
 ) -> IncrementalResult:
     """Re-index a single changed file or record its deletion.
 
     Deletion path: path absent → DETACH DELETE File (+ Sections for
-    section-granular .md) → return action='deleted'.
+    section-granular .md, + Chunks) → return action='deleted'.
 
     Update path: clear stale markers → run applicable phases → return
     action='indexed'. Phase functions with IS-NULL guards process only the
     cleared file; other corpus files already have their markers set and are
-    skipped cheaply.
+    skipped cheaply. When ``chunking`` is supplied the file's parents are
+    re-chunked last (fingerprint-gated, so unchanged sections cost nothing).
     """
     file_path = canonical_path(path)
 
     if not path.exists():
+        phases_chunks.delete_chunks_for_path(store, file_path)
         if corpus.corpus.granularity == "section" and path.suffix == ".md":
             store.exec_write(
                 "MATCH (f:File {path: $path})-[:CONTAINS]->(s:Section) DETACH DELETE s",
@@ -347,6 +369,10 @@ def run_incremental_file(
             parse_cache=parse_cache,
         )
         phases.derive_file_level_for_path(path, corpus, summariser, embedder, store)
+        if chunking is not None:
+            phases_chunks.chunk_units_for_path(
+                path, corpus, chunking, store, parse_cache=parse_cache
+            )
     else:
         phases.phase_enumerate([path], corpus.corpus.name, hasher, store, embedder)
         phases.phase_summarise(
@@ -359,6 +385,10 @@ def run_incremental_file(
             corpus_cfg=corpus,
             concurrency=inference_concurrency,
         )
+        if chunking is not None:
+            phases_chunks.chunk_units_for_path(path, corpus, chunking, store)
+    if chunking is not None and corpus.topics.enabled:
+        phases_chunks.mark_topics_dirty(store, corpus.corpus.name)
 
     return IncrementalResult(action="indexed", path=file_path)
 
@@ -373,11 +403,28 @@ def run_bootstrap(
     *,
     inference_concurrency: int = 1,
     refresh: RefreshScope | None = None,
+    chunking: ChunkingDeps | None = None,
+    chunk_workers: int = 4,
 ) -> BootstrapResult:
     if refresh is not None:
         _wipe_for_refresh(corpus, store, refresh)
     files = enumerate_corpus_files(corpus)
     results: list[phases.PhaseResult] = []
+
+    def _chunk_phases(parse_cache: ParseCache | None) -> None:
+        # Retrieval chunks run after summarise/roll-up so the section_summary
+        # and llm prefix modes have summaries to draw on, and before close so
+        # the counts land on the Corpus node (plan §4.2).
+        if chunking is None:
+            return
+        results.append(
+            phases_chunks.phase_chunk_units(
+                corpus, chunking, store, concurrency=chunk_workers, parse_cache=parse_cache
+            )
+        )
+        results.append(phases_chunks.phase_gc_chunks(corpus, store))
+
+    config_fp = chunking.config_fp if chunking is not None else None
     if corpus.corpus.granularity == "section":
         # Section-granular path (spec §5.11 + M10.9).
         #
@@ -459,7 +506,12 @@ def run_bootstrap(
             )
 
         results.append(phases.phase_merge_descriptions(corpus, relate, store))
-        results.append(phases.phase_close(corpus.corpus.name, store, results))
+        _chunk_phases(parse_cache)
+        results.append(
+            phases.phase_close(
+                corpus.corpus.name, store, results, chunk_config_fingerprint=config_fp
+            )
+        )
     else:
         # File-granular path (default, spec §5.9).
         # phase_enumerate accepts an embedder so that embedding vectors are
@@ -482,5 +534,10 @@ def run_bootstrap(
             )
         )
         results.append(phases.phase_merge_descriptions(corpus, relate, store))
-        results.append(phases.phase_close(corpus.corpus.name, store, results))
+        _chunk_phases(None)
+        results.append(
+            phases.phase_close(
+                corpus.corpus.name, store, results, chunk_config_fingerprint=config_fp
+            )
+        )
     return BootstrapResult(phases=results)

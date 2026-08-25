@@ -52,6 +52,7 @@ class CorpusDaemonEntry:
     embedder: Any
     summariser: Any
     relate: Any  # indexer.phases.RelateDeps; Any matches the sibling fields
+    chunking: Any = None  # indexer.chunk_deps.ChunkingDeps | None
     watcher: CorpusWatcher | None = field(default=None, init=False)
 
 
@@ -408,6 +409,7 @@ def _handle_batch(
                 corpus_entry.summariser,
                 corpus_entry.relate,
                 inference_concurrency=inference_concurrency,
+                chunking=corpus_entry.chunking,
             )
             if result.action == "deleted":
                 corpus_entry.hasher.forget(path)
@@ -440,6 +442,30 @@ def _handle_batch(
 
     if not error_event.is_set() and checkpoint_store is not None:
         checkpoint_store.clear(corpus_name)
+
+
+def _rechunk_if_config_drifted(entry: CorpusDaemonEntry, *, incremental_workers: int) -> None:
+    """Re-chunk a corpus whose stored chunking-config fingerprint is stale."""
+    from contextd.indexer.phases_chunks import config_drifted, rechunk_corpus
+
+    if entry.chunking is None:
+        return
+    name = entry.corpus_cfg.corpus.name
+    try:
+        if not config_drifted(entry.store, name, entry.chunking.config_fp):
+            return
+        _log.warning("corpus %s: chunking config changed, re-chunking", name)
+        result = rechunk_corpus(
+            entry.corpus_cfg, entry.chunking, entry.store, concurrency=incremental_workers
+        )
+        _log.info(
+            "corpus %s: re-chunk complete (processed=%d skipped=%d)",
+            name,
+            result.processed,
+            result.skipped,
+        )
+    except Exception as exc:
+        _log.error("corpus %s: re-chunk after config drift failed: %s", name, exc)
 
 
 def _write_pid(pid_path: Path, pid: int) -> None:
@@ -493,6 +519,12 @@ def run_daemon(
                 last_checked_at=_sweep_start,
                 next_sweep_at=_sweep_start + config.sweep_interval_seconds,
             )
+
+    # Phase 1c: chunking-config drift. A changed [chunking] block invalidates
+    # every parent's fingerprint; re-chunk now (fingerprint-gated, embedding
+    # cost only) rather than waiting for the sweep, which keys on content.
+    for entry in config.corpora:
+        _rechunk_if_config_drifted(entry, incremental_workers=config.incremental_workers)
 
     # Phase 2: crash-recovery — re-queue files that were in-flight on last shutdown
     if checkpoint_store is not None:
@@ -682,6 +714,7 @@ def main() -> None:
                 embedder=deps.embedder,
                 summariser=deps.summariser,
                 relate=deps.relate,
+                chunking=deps.chunking,
             )
         )
 

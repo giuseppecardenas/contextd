@@ -19,6 +19,7 @@ from contextd._paths import contextd_home
 
 if TYPE_CHECKING:
     from contextd.config import Config
+    from contextd.indexer.chunk_deps import ChunkingDeps
     from contextd.indexer.hasher import FileHasher
     from contextd.indexer.phases import RelateDeps
     from contextd.inference.summarise import Summariser
@@ -53,6 +54,8 @@ class PipelineDeps:
     hasher: FileHasher
     embedder: EmbeddingProvider
     store: GraphStore
+    chunking: ChunkingDeps | None = None
+    """Retrieval-chunk collaborators; ``None`` when the corpus disables chunking."""
 
 
 def _load_cfg() -> Config:

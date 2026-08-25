@@ -411,3 +411,137 @@ def test_run_incremental_file_section_corpus_non_md(tmp_path: Path) -> None:
 
     assert result.action == "indexed"
     assert embedder.embed.called
+
+
+def _chunking_deps(tmp_path: Path):
+    from contextd.chunking.fingerprint import config_fingerprint
+    from contextd.chunking.tokenizer import WordTokenizer
+    from contextd.indexer.chunk_deps import ChunkingDeps
+
+    corpus = _make_corpus(tmp_path)
+    tok = WordTokenizer()
+    return ChunkingDeps(
+        config=corpus.chunking,
+        tokenizer=tok,
+        embedder=MagicMock(),
+        config_fp=config_fingerprint(corpus.chunking, tok.id),
+    )
+
+
+def test_run_incremental_file_deletion_removes_chunks_first(tmp_path: Path) -> None:
+    from contextd.indexer.pipeline import run_incremental_file
+
+    store = MagicMock()
+    missing = tmp_path / "gone.md"
+    res = run_incremental_file(
+        missing,
+        _make_corpus(tmp_path),
+        store,
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+        _relate_deps(),
+    )
+    assert res.action == "deleted"
+    store.delete_nodes.assert_called_once_with("Chunk", where={"path": canonical_path(missing)})
+
+
+def test_run_incremental_file_chunks_after_phases_when_deps_given(tmp_path: Path) -> None:
+    from unittest.mock import patch
+
+    from contextd.indexer.pipeline import run_incremental_file
+
+    path = tmp_path / "a.md"
+    path.write_text("body\n", encoding="utf-8")
+    store = MagicMock()
+    store.exec_read.return_value = []  # no File node → full index; no parents → chunk no-op
+    hasher = MagicMock()
+    hasher.hash.return_value = "h"
+    with (
+        patch("contextd.indexer.pipeline.phases") as phases_mod,
+        patch("contextd.indexer.pipeline.phases_chunks") as chunks_mod,
+    ):
+        run_incremental_file(
+            path,
+            _make_corpus(tmp_path),
+            store,
+            hasher,
+            MagicMock(),
+            MagicMock(),
+            _relate_deps(),
+            chunking=_chunking_deps(tmp_path),
+        )
+        assert phases_mod.phase_relate.called
+        chunks_mod.chunk_units_for_path.assert_called_once()
+        assert chunks_mod.chunk_units_for_path.call_args.args[0] == path
+
+
+def test_run_incremental_file_no_chunking_without_deps(tmp_path: Path) -> None:
+    from unittest.mock import patch
+
+    from contextd.indexer.pipeline import run_incremental_file
+
+    path = tmp_path / "a.md"
+    path.write_text("body\n", encoding="utf-8")
+    store = MagicMock()
+    store.exec_read.return_value = []
+    hasher = MagicMock()
+    hasher.hash.return_value = "h"
+    with (
+        patch("contextd.indexer.pipeline.phases"),
+        patch("contextd.indexer.pipeline.phases_chunks") as chunks_mod,
+    ):
+        run_incremental_file(
+            path, _make_corpus(tmp_path), store, hasher, MagicMock(), MagicMock(), _relate_deps()
+        )
+        chunks_mod.chunk_units_for_path.assert_not_called()
+
+
+def test_refresh_chunks_scope_deletes_chunks_and_markers(tmp_path: Path) -> None:
+    from contextd.indexer.pipeline import _wipe_for_refresh
+
+    store = MagicMock()
+    _wipe_for_refresh(_make_corpus(tmp_path), store, "chunks")
+    store.delete_nodes.assert_called_once_with("Chunk", where={"corpus": "inc"})
+    writes = [c.args[0] for c in store.exec_write.call_args_list]
+    assert any("Section" in w and "chunk_fingerprint" in w for w in writes)
+    assert any("File" in w and "chunk_fingerprint" in w for w in writes)
+    assert not any("summary" in w for w in writes)
+
+
+def test_refresh_topics_scope(tmp_path: Path) -> None:
+    from contextd.indexer.pipeline import _wipe_for_refresh
+
+    store = MagicMock()
+    _wipe_for_refresh(_make_corpus(tmp_path), store, "topics")
+    store.delete_nodes.assert_called_once_with("Topic", where={"corpus": "inc"})
+
+
+def test_run_bootstrap_runs_chunk_phases_then_close(tmp_path: Path) -> None:
+    from unittest.mock import patch
+
+    from contextd.indexer.pipeline import run_bootstrap
+
+    (tmp_path / "a.md").write_text("body\n", encoding="utf-8")
+    store = MagicMock()
+    store.exec_read.return_value = [{"c": 0}]
+    deps = _chunking_deps(tmp_path)
+    with (
+        patch("contextd.indexer.pipeline.phases") as phases_mod,
+        patch("contextd.indexer.pipeline.phases_chunks") as chunks_mod,
+    ):
+        phases_mod.PhaseResult = object
+        run_bootstrap(
+            _make_corpus(tmp_path),
+            store,
+            MagicMock(),
+            MagicMock(),
+            _relate_deps(),
+            MagicMock(),
+            chunking=deps,
+            chunk_workers=2,
+        )
+        chunks_mod.phase_chunk_units.assert_called_once()
+        assert chunks_mod.phase_chunk_units.call_args.kwargs["concurrency"] == 2
+        chunks_mod.phase_gc_chunks.assert_called_once()
+        assert phases_mod.phase_close.call_args.kwargs["chunk_config_fingerprint"] == deps.config_fp

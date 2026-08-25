@@ -1028,3 +1028,41 @@ def test_handle_batch_does_not_clear_checkpoint_on_error(tmp_path: Path) -> None
         )
 
     ckpt_store.clear.assert_not_called()
+
+
+def test_rechunk_if_config_drifted(tmp_path: Path) -> None:
+    from unittest.mock import patch
+
+    from contextd.daemon import CorpusDaemonEntry, _rechunk_if_config_drifted
+
+    corpus_cfg = MagicMock()
+    corpus_cfg.corpus.name = "notes"
+    entry = CorpusDaemonEntry(
+        corpus_cfg=corpus_cfg,
+        store=MagicMock(),
+        hasher=MagicMock(),
+        embedder=MagicMock(),
+        summariser=MagicMock(),
+        relate=MagicMock(),
+        chunking=MagicMock(config_fp="new"),
+    )
+    with (
+        patch("contextd.indexer.phases_chunks.config_drifted", return_value=True) as drifted,
+        patch("contextd.indexer.phases_chunks.rechunk_corpus") as rechunk,
+    ):
+        rechunk.return_value = MagicMock(processed=3, skipped=1)
+        _rechunk_if_config_drifted(entry, incremental_workers=2)
+        drifted.assert_called_once_with(entry.store, "notes", "new")
+        rechunk.assert_called_once_with(corpus_cfg, entry.chunking, entry.store, concurrency=2)
+
+    with (
+        patch("contextd.indexer.phases_chunks.config_drifted", return_value=False),
+        patch("contextd.indexer.phases_chunks.rechunk_corpus") as rechunk,
+    ):
+        _rechunk_if_config_drifted(entry, incremental_workers=2)
+        rechunk.assert_not_called()
+
+    entry.chunking = None
+    with patch("contextd.indexer.phases_chunks.config_drifted") as drifted:
+        _rechunk_if_config_drifted(entry, incremental_workers=2)
+        drifted.assert_not_called()

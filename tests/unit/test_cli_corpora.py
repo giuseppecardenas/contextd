@@ -573,10 +573,13 @@ def test_remove_corpus_deletes_toml_state_and_graph(
 
     assert result.exit_code == 0, result.output
     assert "permanently deletes" in result.output
-    # Section + File + the 10 corpus-scoped entity labels + Corpus (13 writes).
+    # Chunk + Topic + Section + File + the 10 corpus-scoped entity labels +
+    # Corpus (15 writes). Derived retrieval nodes go first: deleting their
+    # parents would only orphan them.
     writes = [c.args[0] for c in mock_store.exec_write.call_args_list]
-    assert len(writes) == 13
+    assert len(writes) == 15
     assert all("DETACH DELETE" in w for w in writes)
+    assert ":Chunk" in writes[0] and ":Topic" in writes[1]
     assert any(":Pattern" in w for w in writes)
     assert any(":Corpus" in w for w in writes)
     # Registration TOML and both per-corpus state files are gone.

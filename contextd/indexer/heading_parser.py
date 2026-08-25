@@ -24,6 +24,14 @@ class ParsedSection:
     body: str
     ordinal: int
     parent_anchor: str | None
+    start_line: int = 0
+    """0-based line of the file where ``body`` begins (the heading line, or 0
+    for the preamble). Retrieval chunks add their in-body offsets to it so
+    ``Chunk.start_line`` / ``end_line`` are file coordinates."""
+    is_preamble: bool = False
+    """True for the synthetic section holding everything above the first
+    promoted heading; its ``title`` is the document title (typically the H1),
+    which chunk breadcrumbs prepend to every other section's path."""
 
 
 def section_hash(section: ParsedSection) -> str:
@@ -145,6 +153,8 @@ class HeadingParser:
                     body=preamble_body,
                     ordinal=0,
                     parent_anchor=None,
+                    start_line=0,
+                    is_preamble=True,
                 )
             )
             # Deliberately not pushed onto `stack`: the preamble is a sibling of
@@ -195,6 +205,7 @@ class HeadingParser:
                 body=body,
                 ordinal=ordinal,
                 parent_anchor=parent_anchor,
+                start_line=line,
             )
             sections.append(section)
             stack.append(section)

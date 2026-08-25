@@ -308,7 +308,9 @@ def _build_pipeline_deps(
     ``corpus_toml_path`` is used to resolve relative ``[ontology] overrides``
     paths — relative paths resolve relative to the TOML file's parent directory.
     """
+    from contextd.chunking.strategies import ChunkingConfigError
     from contextd.indexer.candidates import GraphCandidateRetriever
+    from contextd.indexer.chunk_deps import build_chunking_deps
     from contextd.indexer.hasher import FileHasher
     from contextd.indexer.lexical import LexicalRegistry
     from contextd.indexer.phases import RelateDeps
@@ -388,6 +390,16 @@ def _build_pipeline_deps(
         routes.append(PromptRoute(pattern=pattern, path=route_path))
     router = SummaryPromptRouter(routes) if routes else None
     store = build_graph_store(cfg)
+    try:
+        chunking = build_chunking_deps(
+            cfg,
+            corpus_cfg,
+            embedder=embedding_provider,
+            inference=inference_provider,
+            renderer=renderer,
+        )
+    except ChunkingConfigError as exc:
+        raise click.ClickException(f"[chunking] {exc}") from exc
     res = corpus_cfg.resolution
     settings = ResolutionSettings(
         case_insensitive_labels=frozenset(res.case_insensitive_labels),
@@ -421,7 +433,40 @@ def _build_pipeline_deps(
         hasher=FileHasher(state_path=contextd_home() / "state" / f"{corpus_name}-index-state.json"),
         embedder=embedding_provider,
         store=store,
+        chunking=chunking,
     )
+
+
+def _print_chunk_estimate(cfg: Config, corpus_cfg: CorpusConfig, files: list[Path]) -> None:
+    """Dry-run the chunkers and print per-profile chunk / embedding-token counts."""
+    from contextd.chunking.strategies import ChunkingConfigError
+    from contextd.indexer.chunk_deps import build_chunking_deps
+    from contextd.indexer.phases_chunks import estimate_chunks
+
+    if not corpus_cfg.chunking.enabled:
+        console.print("chunking disabled for this corpus")
+        return
+    try:
+        deps = build_chunking_deps(
+            cfg, corpus_cfg, embedder=None, inference=None, renderer=None, validate=False
+        )
+    except ChunkingConfigError as exc:
+        console.print(f"[yellow]chunk estimate unavailable:[/] {exc}")
+        return
+    assert deps is not None
+    for name, stats in estimate_chunks(corpus_cfg, deps, files).items():
+        if name.startswith("_"):
+            console.print(
+                f"  prefix/questions: ~{stats['llm_calls']} LLM calls (one per parent unit)"
+            )
+            continue
+        line = (
+            f"  profile {name!r}: ~{stats['chunks']} chunks, "
+            f"~{stats['embed_tokens']} embedding tokens"
+        )
+        if stats["llm_calls"]:
+            line += f", ~{stats['llm_calls']} LLM calls"
+        console.print(line)
 
 
 @cli.command()
@@ -431,14 +476,16 @@ def _build_pipeline_deps(
 @click.option("--estimate-only", is_flag=True)
 @click.option(
     "--refresh",
-    type=click.Choice(["inferred", "summaries", "llm", "all"]),
+    type=click.Choice(["inferred", "summaries", "llm", "chunks", "topics", "all"]),
     default=None,
     help=(
         "Wipe a dependency layer before bootstrap and re-fill it. "
         "'inferred': origin='inferred' edges + inferred_at markers. "
         "'summaries': summary/key_points/entities_mentioned/summary_generated_at. "
         "'llm': both of the above. "
-        "'all': DETACH DELETE every Section/File/Corpus node for this corpus. "
+        "'chunks': retrieval Chunk nodes + chunk_fingerprint markers (embedding cost only). "
+        "'topics': Topic nodes + their input fingerprint. "
+        "'all': DETACH DELETE every Section/File/Chunk/Topic/Corpus node for this corpus. "
         "Default (no --refresh): idempotent resume skipping already-processed nodes."
     ),
 )
@@ -478,6 +525,7 @@ def index(
                 continue
         est_tokens = total_chars // 4  # rough: 4 chars per token
         console.print(f"~{est_tokens} input tokens projected (2 call types per file)")
+        _print_chunk_estimate(cfg, corpus_cfg, files)
         return
 
     if not (bootstrap or incremental):
@@ -496,6 +544,8 @@ def index(
                 hasher=deps.hasher,
                 inference_concurrency=cfg.indexer.inference_concurrency,
                 refresh=cast("RefreshScope | None", refresh),
+                chunking=deps.chunking,
+                chunk_workers=cfg.indexer.incremental_workers,
             )
             for phase in result.phases:
                 console.print(
@@ -523,6 +573,7 @@ def index(
                         summariser=deps.summariser,
                         relate=deps.relate,
                         inference_concurrency=cfg.indexer.inference_concurrency,
+                        chunking=deps.chunking,
                     )
                 except Exception as exc:
                     console.print(f"  [red]✗[/] {file_path.name}: {exc}")

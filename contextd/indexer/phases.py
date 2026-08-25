@@ -462,6 +462,8 @@ def phase_close(
     corpus: str,
     store: GraphStore,
     results: list[PhaseResult],
+    *,
+    chunk_config_fingerprint: str | None = None,
 ) -> PhaseResult:
     # SD #70: Corpus.node_count + Corpus.edge_count are persisted. Both
     # backends are schema-free at the Corpus level; the fields land directly
@@ -470,15 +472,21 @@ def phase_close(
         "MATCH (n:File {corpus: $c}) RETURN count(n) AS c", {"c": corpus}
     )[0]["c"]
     count_edges = store.exec_read("MATCH ()-[r]->() RETURN count(r) AS c")[0]["c"]
-    store.upsert_node(
-        "Corpus",
-        {
-            "name": corpus,
-            "registered_at": dt.datetime.now(dt.UTC),
-            "node_count": count_files,
-            "edge_count": count_edges,
-        },
-    )
+    props: dict[str, Any] = {
+        "name": corpus,
+        "registered_at": dt.datetime.now(dt.UTC),
+        "node_count": count_files,
+        "edge_count": count_edges,
+    }
+    if chunk_config_fingerprint is not None:
+        # Chunk accounting: the config fingerprint lets `contextd status` and
+        # the daemon detect chunking-config drift without re-deriving it.
+        chunk_rows = store.exec_read(
+            "MATCH (n:Chunk {corpus: $c}) RETURN count(n) AS c", {"c": corpus}
+        )
+        props["chunk_count"] = chunk_rows[0]["c"] if chunk_rows else 0
+        props["chunk_config_fingerprint"] = chunk_config_fingerprint
+    store.upsert_node("Corpus", props)
     return PhaseResult(name="close", processed=1, skipped=0)
 
 
