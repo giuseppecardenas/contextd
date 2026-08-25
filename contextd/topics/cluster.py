@@ -35,7 +35,7 @@ class Cluster:
 def _normalise(x: FloatArray) -> FloatArray:
     norms = np.linalg.norm(x, axis=1, keepdims=True)
     norms[norms == 0.0] = 1.0
-    return x / norms
+    return np.asarray(x / norms, dtype=np.float64)
 
 
 def pca(x: FloatArray, dims: int) -> FloatArray:
