@@ -7,6 +7,7 @@ import os
 from contextd.config import Config, openai_compat_profile
 from contextd.providers.base import EmbeddingProvider, InferenceProvider
 from contextd.providers.gemini import GeminiProvider
+from contextd.providers.local_hf import LocalHFEmbedder
 from contextd.providers.openai_compat import OpenAICompatProvider
 from contextd.providers.openai_compat_embedding import OpenAICompatEmbeddingProvider
 from contextd.providers.router import RoutingInferenceProvider
@@ -91,4 +92,9 @@ def build_embedding_provider(cfg: Config) -> EmbeddingProvider:
                     "it or remove api_key_env to run against a keyless local server."
                 )
         return OpenAICompatEmbeddingProvider(ecfg, api_key=api_key)
+    if name == "local_hf":
+        # No key and no network at construction: the model loads lazily on
+        # the first embed (raising a clear RuntimeError when contextd[late]
+        # is not installed).
+        return LocalHFEmbedder(cfg.providers.local_hf)
     raise ProviderFactoryError(f"Unknown embedding provider: {name!r}")

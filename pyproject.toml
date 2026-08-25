@@ -49,6 +49,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Late chunking: in-process token-level embeddings (providers.embedding = "local_hf").
+late = ["sentence-transformers>=3.0"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
