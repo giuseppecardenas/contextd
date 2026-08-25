@@ -51,6 +51,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Syntax-aware chunking (`strategy = "code"`); pure wheels, kept out of the
+# core install so the default footprint stays small.
+code = ["tree-sitter>=0.23", "tree-sitter-language-pack>=0.7"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
