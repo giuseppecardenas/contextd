@@ -70,7 +70,7 @@ For per-corpus tools, the guard runs **twice**: once at server startup when the 
 
 ---
 
-## Generic tools (19)
+## Generic tools (21)
 
 These are always present regardless of which corpora are registered.
 
@@ -89,20 +89,66 @@ Returns: array of `{path, name, summary, key_points, inbound}` objects ordered b
 
 ### `search`
 
-Hybrid search over node summaries: vector (embedding) similarity and full-text (BM25) results fused by reciprocal rank fusion (RRF). RRF combines the two rankers by rank position rather than by raw score, which sidesteps the fact that cosine similarity and BM25 are not comparable as numbers.
+Hybrid search: vector (embedding) similarity and full-text (BM25) results fused by reciprocal rank fusion (RRF). RRF combines rankers by rank position rather than by raw score, which sidesteps the fact that cosine similarity and BM25 are not comparable as numbers.
+
+The default `kind` is **`Chunk`** — the retrieval chunks the indexer derives beneath every Section/File (see the README's *Chunking* section). One vector and one full-text ranker run per requested chunk profile (weighted by the profile's configured `weight`), the fused hits are collapsed *small-to-big* to the best enclosing unit, and every returned row carries an `evidence` block with the matched chunk's text, line range and neighbour context. Any other `kind` (`File`, `Section`, `Topic`, `Artifact`, `Ticket`, `Pattern`, `Risk`) returns flat node rows as before.
 
 | Input | Type | Required | Default |
 |---|---|---|---|
 | `query` | string | yes | — |
-| `kind` | string | no | `"File"` |
+| `kind` | string | no | `"Chunk"` |
+| `corpus` | string | no | all corpora |
 | `limit` | integer | no | 20 |
 | `mode` | string | no | server config (`hybrid`) |
+| `profiles` | string[] | no | server `[search] chunk_profiles`, else every profile present |
+| `return_unit` | string | no | server config (`auto`) |
+| `window` | integer 0–10 | no | server config (1) |
 
-`mode` is one of `hybrid`, `fulltext`, or `vector`. The server degrades to full-text automatically when no embedder is configured, the `kind` has no vector index (only `File` and `Section` do), or the embedding call fails; `mode = "vector"` on a non-vector-capable kind returns an empty result rather than a silent lexical fallback. The RRF constant, candidate depth, and per-modality weights are set server-side via the `[search]` config block.
+`mode` is one of `hybrid`, `fulltext`, or `vector`. The server degrades to full-text automatically when no embedder is configured, the `kind` has no vector index (`File`, `Section`, `Chunk` and `Topic` do), or the embedding call fails; `mode = "vector"` on a non-vector-capable kind returns an empty result rather than a silent lexical fallback. The RRF constant, candidate depth, per-modality weights, `auto_merge_threshold` and `max_evidence_chars` are set server-side via the `[search]` config block.
 
-The full-text property searched is resolved per label: `File` and `Section` are searched on `summary`, while the entity kinds `Artifact`, `Pattern`, and `Risk` are searched on `description` and `Ticket` on `title` (the content fields the indexer populates and migrations `_0001` / `_0006` index). Entity kinds have no vector index, so they always run full-text only.
+`return_unit` decides what a chunk hit becomes: `chunk` (the hit itself), `section` / `file` (always the enclosing unit; Section parents roll up to their File for `file`), or `auto` — the parent when at least `auto_merge_threshold` (default 0.5) of its chunks in the best-covered profile were retrieved, otherwise the chunk. This is the LlamaIndex / Haystack auto-merging rule; a parent's `score` is the mean of its member chunks' fused scores.
 
-Returns: array of matching node objects (the raw embedding vector is stripped). In `hybrid` / `vector` mode `score` is an RRF fused score; in `fulltext` mode it is the backend's raw relevance score — the two are not comparable across modes.
+The full-text property searched is resolved per label: `Chunk` on its raw `text` (the index also covers the `prefix` and `keywords` fields), `File`, `Section` and `Topic` on `summary`, and the entity kinds `Artifact`, `Pattern`, `Risk` on `description`, `Ticket` on `title`.
+
+Returns (chunk kind): rows of the shape
+
+```json
+{"unit": "section", "id": "docs/a.md#retry-policy", "path": "docs/a.md", "title": "Retry policy",
+ "summary": "...", "corpus": "notes", "score": 0.031, "matched_chunks": 2, "profile": "fine",
+ "evidence": {"chunk_id": "docs/a.md#retry-policy~fine~3", "profile": "fine", "kind": "prose",
+              "start_line": 120, "end_line": 141, "text": "...",
+              "context_before": "...", "context_after": "..."}}
+```
+
+`unit` is `chunk`, `section` or `file`; chunk rows carry `parent_id` / `parent_label` instead of the parent's fields. Line numbers are 0-based, `end_line` exclusive. Other kinds return the node's properties (the raw embedding vector is stripped) plus `score`. In `hybrid` / `vector` mode `score` is an RRF fused score; in single-ranker `fulltext` mode it is the backend's raw relevance score — the two are not comparable across modes.
+
+---
+
+### `expand_chunk`
+
+A retrieval chunk with its neighbouring chunks (same parent and profile, by ordinal) and the parent Section/File summary — "show me more around this hit".
+
+| Input | Type | Required | Default |
+|---|---|---|---|
+| `chunk_id` | string | yes | — |
+| `window` | integer 0–10 | no | 2 |
+
+Returns: `{id, path, parent_id, parent_label, profile, ordinal, kind, text, prefix, start_line, end_line, parent_summary, parent_title, context_before: string[], context_after: string[]}` or `null` when the chunk does not exist.
+
+---
+
+### `topics`
+
+Cross-document topics: RAPTOR-style cluster summaries computed over a corpus's Sections (or Files), each a `Topic` node with `BELONGS_TO` membership edges carrying a soft-assignment `probability`. Empty unless the corpus has `[topics] enabled = true`.
+
+| Input | Type | Required | Default |
+|---|---|---|---|
+| `corpus` | string | no | all corpora |
+| `query` | string | no | — |
+| `layer` | integer | no | all layers |
+| `limit` | integer | no | 20 |
+
+With `query` the topics are ranked by hybrid search over their summaries; without it they are listed by layer then member count. Returns: `{id, corpus, layer, title, summary, member_count, members: [{id, labels, title, probability}]}` rows.
 
 ---
 
@@ -175,7 +221,7 @@ Hierarchical outline of a file — section-granular corpora only.
 |---|---|---|
 | `file_path` | string | yes |
 
-Returns: array of `{id, title, level, ordinal, summary}` ordered by level then ordinal.
+Returns: array of `{id, title, level, ordinal, summary, chunk_count}` ordered by level then ordinal (`chunk_count` is the number of retrieval chunks beneath the section, summed over profiles).
 
 ---
 

@@ -91,6 +91,28 @@ def reciprocal_rank_fusion(
     :return: fused rows in the flattened ``flatten_row`` shape, ordered by
         descending fused score and truncated to ``limit``.
     """
+    return fuse_rankers(
+        [(vector_rows, vector_weight), (fulltext_rows, fulltext_weight)],
+        label=label,
+        limit=limit,
+        rrf_k=rrf_k,
+    )
+
+
+def fuse_rankers(
+    rankers: list[tuple[list[dict[str, Any]], float]],
+    *,
+    label: str,
+    limit: int,
+    rrf_k: int = 60,
+) -> list[dict[str, Any]]:
+    """RRF over any number of ``(rows, weight)`` rankers.
+
+    Generalises :func:`reciprocal_rank_fusion` to the multi-profile case
+    (one vector + one full-text ranker per chunk profile). Rankers are folded
+    in list order, which fixes tie-breaking exactly as the two-ranker form
+    does.
+    """
     key_prop = primary_key_for(label)
     scores: dict[Any, float] = {}
     nodes: dict[Any, dict[str, Any]] = {}
@@ -109,8 +131,8 @@ def reciprocal_rank_fusion(
                 nodes[key] = node
                 first_seen[key] = len(first_seen)
 
-    _fold(vector_rows, vector_weight)
-    _fold(fulltext_rows, fulltext_weight)
+    for rows, weight in rankers:
+        _fold(rows, weight)
 
     ranked = sorted(scores, key=lambda k: (-scores[k], first_seen[k]))
     return [flatten_row(nodes[k], scores[k]) for k in ranked[:limit]]

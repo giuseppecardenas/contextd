@@ -8,6 +8,7 @@ surface that doesn't need a backend.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -104,11 +105,11 @@ def test_search_strips_embedding_and_flattens_node() -> None:
     assert rows[1]["score"] == 2.71
 
 
-def test_search_defaults_to_file_label() -> None:
+def test_search_defaults_to_chunk_label() -> None:
     store = MagicMock()
     store.full_text_search.return_value = []
     tools.search(store, "query text")
-    store.full_text_search.assert_called_once_with("File", "summary", "query text", k=50)
+    store.full_text_search.assert_called_once_with("Chunk", "text", "query text", k=50)
 
 
 def test_search_handles_rows_without_embedding() -> None:
@@ -539,3 +540,128 @@ def test_grep_corpus_respects_limit(tmp_path: Path) -> None:
 
     matches = tools.grep_corpus(tmp_path, "hit", corpus="c", limit=2)
     assert len(matches) == 2
+
+
+# ---------------------------------------------------------------------------
+# search: chunk path, expand_chunk, topics
+# ---------------------------------------------------------------------------
+
+
+def _chunk_hit(cid: str, parent: str, score: float, profile: str = "fine") -> dict[str, Any]:
+    return {
+        "node": {
+            "id": cid,
+            "parent_id": parent,
+            "parent_label": "Section",
+            "path": "a.md",
+            "profile": profile,
+            "ordinal": 0,
+            "kind": "prose",
+            "text": f"text {cid}",
+            "start_line": 0,
+            "end_line": 1,
+            "embedding": [0.1] * 4,
+        },
+        "score": score,
+    }
+
+
+def test_search_chunk_path_collapses_to_sections_with_evidence() -> None:
+    store = MagicMock()
+    store.full_text_search.return_value = [_chunk_hit("c1", "a.md#s", 2.0)]
+    store.vector_search.return_value = [_chunk_hit("c1", "a.md#s", 0.9)]
+
+    def _read(cypher: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+        if "count(c) AS n" in cypher:
+            return [{"pid": "a.md#s", "profile": "fine", "n": 1}]
+        if "MATCH (s:Section)" in cypher:
+            return [
+                {
+                    "id": "a.md#s",
+                    "path": "a.md",
+                    "title": "S",
+                    "level": 2,
+                    "summary": "sum",
+                    "corpus": "c",
+                }
+            ]
+        return []
+
+    store.exec_read.side_effect = _read
+    emb = MagicMock()
+    emb.embed.return_value = [[0.1] * 4]
+    rows = tools.search(
+        store,
+        "q",
+        embedder=emb,
+        profiles=["fine"],
+        profile_weights={"fine": 2.0},
+        corpus="c",
+        window=0,
+    )
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["unit"] == "section" and row["id"] == "a.md#s" and row["title"] == "S"
+    assert row["evidence"]["chunk_id"] == "c1" and row["evidence"]["text"] == "text c1"
+    assert "embedding" not in row and "embedding" not in row["evidence"]
+    kwargs = store.vector_search.call_args.kwargs
+    assert kwargs["filters"] == {"corpus": "c", "profile": "fine"}
+
+
+def test_search_chunk_return_unit_chunk_keeps_backend_score_in_fulltext_mode() -> None:
+    store = MagicMock()
+    store.full_text_search.return_value = [_chunk_hit("c1", "a.md#s", 3.5)]
+    rows = tools.search(store, "q", mode="fulltext", return_unit="chunk", window=0)
+    assert rows[0]["unit"] == "chunk" and rows[0]["score"] == 3.5
+
+
+def test_search_non_chunk_kind_keeps_flat_rows() -> None:
+    store = MagicMock()
+    store.full_text_search.return_value = [
+        {"node": {"path": "a.md", "summary": "s", "embedding": [0.0]}, "score": 1.0}
+    ]
+    rows = tools.search(store, "q", kind="File", corpus="c")
+    assert rows == [{"path": "a.md", "summary": "s", "score": 1.0}]
+    assert store.full_text_search.call_args.kwargs["filters"] == {"corpus": "c"}
+
+
+def test_expand_chunk_clamps_window() -> None:
+    store = MagicMock()
+    store.exec_read.side_effect = [
+        [{"id": "c", "parent_id": "p", "profile": "fine", "ordinal": 0}],
+        [],
+    ]
+    tools.expand_chunk(store, "c", window=99)
+    assert store.exec_read.call_args.args[1]["hi"] == 10
+
+
+def test_topics_lists_and_attaches_members() -> None:
+    store = MagicMock()
+    store.exec_read.side_effect = [
+        [
+            {
+                "id": "c/topic/0/1",
+                "corpus": "c",
+                "layer": 0,
+                "title": "T",
+                "summary": "s",
+                "member_count": 2,
+            }
+        ],
+        [{"id": "a.md#s", "labels": ["Section"], "title": "S", "probability": 0.9}],
+    ]
+    rows = tools.topics(store, corpus="c", layer=0, limit=5)
+    assert rows[0]["members"][0]["id"] == "a.md#s"
+    first_cypher = store.exec_read.call_args_list[0].args[0]
+    assert "t.corpus = $corpus" in first_cypher and "t.layer = $layer" in first_cypher
+
+
+def test_topics_with_query_uses_hybrid_rankers() -> None:
+    store = MagicMock()
+    store.full_text_search.return_value = [
+        {"node": {"id": "c/topic/0/1", "summary": "s", "embedding": [0.0]}, "score": 1.0}
+    ]
+    store.exec_read.return_value = []
+    rows = tools.topics(store, query="apples", corpus="c")
+    assert rows[0]["id"] == "c/topic/0/1" and rows[0]["members"] == []
+    assert store.full_text_search.call_args.args[:2] == ("Topic", "summary")

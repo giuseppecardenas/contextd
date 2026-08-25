@@ -10,7 +10,10 @@ from typing import TYPE_CHECKING, Any, Final, Literal
 from contextd.mcp.readonly_guard import assert_read_only
 from contextd.ontology.schema import Ontology
 from contextd.providers.base import EmbeddingProvider
-from contextd.search.fusion import flatten_row, reciprocal_rank_fusion
+from contextd.search.collapse import ReturnUnit, collapse
+from contextd.search.expand import expand_chunk as _expand_chunk
+from contextd.search.fusion import flatten_row, fuse_rankers
+from contextd.search.retrieve import ProfileSpec, run_rankers
 from contextd.storage.base import GraphStore
 
 if TYPE_CHECKING:
@@ -74,12 +77,13 @@ def describe_project(store: GraphStore, *, corpus: str | None = None, n: int = 4
     return Overview(nodes=rows)
 
 
-_VECTOR_CAPABLE_LABELS: Final[frozenset[str]] = frozenset({"File", "Section"})
+_VECTOR_CAPABLE_LABELS: Final[frozenset[str]] = frozenset({"File", "Section", "Chunk", "Topic"})
 """Labels that carry BOTH a vector index and a full-text index and can
 therefore be searched hybridly. File and Section get both indexes from the
-Neo4j baseline + section-fulltext migrations; every other label is full-text
-only (Artifact/Ticket/Pattern/Risk via the entity-content migrations) or
-neither (Technology, Client, …) and degrades to full-text.
+Neo4j baseline + section-fulltext migrations, Chunk and Topic from _0008;
+every other label is full-text only (Artifact/Ticket/Pattern/Risk via the
+entity-content migrations) or neither (Technology, Client, …) and degrades
+to full-text.
 
 This is the third place index coverage is encoded — the migration DDL and
 ``contextd/storage/_keys.py`` are the others — and must change in lock-step
@@ -88,15 +92,19 @@ with any future vector-index migration."""
 _SEARCH_PROPERTY_BY_LABEL: Final[dict[str, str]] = {
     "File": "summary",
     "Section": "summary",
+    "Chunk": "text",
+    "Topic": "summary",
     "Artifact": "description",
     "Ticket": "title",
     "Pattern": "description",
     "Risk": "description",
 }
 """Full-text property searched per label. File/Section carry AI summaries;
-entity types carry their declared content field (populated by the indexer and
-indexed by the baseline/_0006 full-text migrations). Labels absent here fall
-back to ``summary`` — which only matches if such an index exists for them."""
+Chunk is searched on its raw ``text`` (the ``Chunk_text_ft`` index also
+covers ``prefix`` and ``keywords``); entity types carry their declared
+content field (populated by the indexer and indexed by the baseline/_0006
+full-text migrations). Labels absent here fall back to ``summary`` — which
+only matches if such an index exists for them."""
 
 
 def _search_property(label: str) -> str:
@@ -119,8 +127,23 @@ def search(
     fetch_k: int | None = None,
     vector_weight: float = 1.0,
     fulltext_weight: float = 1.0,
+    corpus: str | None = None,
+    profiles: list[str] | None = None,
+    profile_weights: dict[str, float] | None = None,
+    return_unit: ReturnUnit = "auto",
+    auto_merge_threshold: float = 0.5,
+    window: int = 1,
+    max_evidence_chars: int = 1200,
 ) -> list[dict[str, Any]]:
-    """Hybrid search over node summaries, fusing vector + full-text via RRF.
+    """Hybrid search, fusing vector + full-text rankers via RRF.
+
+    The default ``kind`` is ``Chunk``: retrieval chunks are ranked (one
+    vector + one full-text ranker per requested profile, weighted by the
+    profile's configured weight) and the fused hits are collapsed
+    small-to-big to the best enclosing unit per ``return_unit`` (see
+    :func:`contextd.search.collapse.collapse`), each row carrying an
+    ``evidence`` block with the best chunk's text, line range and neighbour
+    context. Any other ``kind`` keeps the flat node-row shape.
 
     In ``hybrid`` mode (the default) the query string is embedded once, both
     the vector and full-text rankers are queried at ``fetch_k`` depth, and the
@@ -153,45 +176,128 @@ def search(
         least ``limit``. Defaults to 50 when ``None``.
     :param vector_weight: RRF weight on the vector ranker.
     :param fulltext_weight: RRF weight on the full-text ranker.
-    :return: fused result rows, best-first, at most ``limit`` of them.
+    :param corpus: restrict every ranker to one corpus.
+    :param profiles: chunk profiles to query (``Chunk`` only); ``None`` queries
+        every profile present through one unfiltered ranker pair.
+    :param profile_weights: per-profile RRF scale (from the corpus config).
+    :param return_unit: ``chunk`` | ``section`` | ``file`` | ``auto``.
+    :param auto_merge_threshold: hit ratio at which ``auto`` returns the parent.
+    :param window: neighbour chunks attached as evidence context per side.
+    :param max_evidence_chars: evidence text truncation.
+    :return: result rows, best-first, at most ``limit`` of them.
     """
-    label = kind or "File"
+    label = kind or "Chunk"
     fetch = max(fetch_k or _DEFAULT_FETCH_K, limit)
+    filters: dict[str, Any] = {"corpus": corpus} if corpus else {}
+    specs: list[ProfileSpec] | None = None
+    if label == "Chunk" and profiles:
+        weights = profile_weights or {}
+        specs = [ProfileSpec(name, weights.get(name, 1.0)) for name in profiles]
 
-    want_vector = (
-        mode in ("hybrid", "vector") and embedder is not None and label in _VECTOR_CAPABLE_LABELS
-    )
-
-    ft_rows: list[dict[str, Any]] = []
-    if mode != "vector":
-        ft_rows = store.full_text_search(label, _search_property(label), query, k=fetch)
-
-    vec_rows: list[dict[str, Any]] = []
-    if want_vector:
-        assert embedder is not None  # narrowed by want_vector; restated for mypy
-        try:
-            query_vec = embedder.embed([query])[0]
-            vec_rows = store.vector_search(label, "embedding", query_vec, k=fetch)
-        except Exception:
-            # The vector leg crosses an external boundary (embedding API +
-            # vector-index query). Any failure there must degrade search to
-            # full-text rather than erroring the whole tool — broad catch is
-            # deliberate isolation of that dependency, not bug-swallowing.
-            want_vector = False
-
-    if mode == "fulltext" or (mode == "hybrid" and not want_vector):
-        return [flatten_row(r["node"], r["score"]) for r in ft_rows[:limit]]
-    if mode == "vector" and not want_vector:
-        return []
-    return reciprocal_rank_fusion(
-        vec_rows,
-        ft_rows,
+    run = run_rankers(
+        store,
+        query,
         label=label,
-        limit=limit,
-        rrf_k=rrf_k,
+        search_prop=_search_property(label),
+        mode=mode,
+        fetch_k=fetch,
+        embedder=embedder,
+        vector_capable=label in _VECTOR_CAPABLE_LABELS,
+        filters=filters,
+        profiles=specs,
         vector_weight=vector_weight,
         fulltext_weight=fulltext_weight,
     )
+    if mode == "vector" and not run.used_vector:
+        # The caller explicitly asked for vectors and got none: say so rather
+        # than silently handing back lexical results.
+        return []
+    if not run.rankers:
+        return []
+    # The fused depth for chunks is the fetch depth: collapse decides the
+    # final ``limit`` after grouping hits by parent.
+    depth = fetch if label == "Chunk" else limit
+    if len(run.rankers) == 1 and not run.used_vector:
+        # Single full-text ranker: keep the backend's raw relevance score, as
+        # the fulltext-mode contract documents.
+        rows_only, _ = run.rankers[0]
+        fused = [flatten_row(r["node"], r["score"]) for r in rows_only[:depth]]
+    else:
+        fused = fuse_rankers(run.rankers, label=label, limit=depth, rrf_k=rrf_k)
+    if label != "Chunk":
+        return fused[:limit]
+    return collapse(
+        store,
+        fused,
+        return_unit=return_unit,
+        auto_merge_threshold=auto_merge_threshold,
+        limit=limit,
+        max_evidence_chars=max_evidence_chars,
+        window=window,
+    )
+
+
+def expand_chunk(store: GraphStore, chunk_id: str, *, window: int = 2) -> dict[str, Any] | None:
+    """A chunk with its ``window`` neighbours on each side and the parent's summary."""
+    return _expand_chunk(store, chunk_id, window=max(0, min(int(window), 10)))
+
+
+def topics(
+    store: GraphStore,
+    *,
+    corpus: str | None = None,
+    query: str | None = None,
+    layer: int | None = None,
+    limit: int = 20,
+    embedder: EmbeddingProvider | None = None,
+    mode: Literal["hybrid", "fulltext", "vector"] = "hybrid",
+    rrf_k: int = 60,
+    fetch_k: int | None = None,
+    members_per_topic: int = 25,
+) -> list[dict[str, Any]]:
+    """List cross-document topics (RAPTOR-style cluster summaries) with members.
+
+    With ``query`` the topics are ranked by hybrid search over their
+    summaries; without it they are listed by layer then member count.
+    """
+    filters: dict[str, Any] = {}
+    if corpus:
+        filters["corpus"] = corpus
+    if layer is not None:
+        filters["layer"] = int(layer)
+    if query:
+        run = run_rankers(
+            store,
+            query,
+            label="Topic",
+            search_prop="summary",
+            mode=mode,
+            fetch_k=max(fetch_k or _DEFAULT_FETCH_K, limit),
+            embedder=embedder,
+            vector_capable=True,
+            filters=filters,
+        )
+        rows = fuse_rankers(run.rankers, label="Topic", limit=limit, rrf_k=rrf_k)
+    else:
+        conditions = [f"t.{k} = ${k}" for k in filters]
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        rows = store.exec_read(
+            f"MATCH (t:Topic) {where} "
+            "RETURN t.id AS id, t.corpus AS corpus, t.layer AS layer, t.title AS title, "
+            "t.summary AS summary, t.member_count AS member_count "
+            f"ORDER BY t.layer, t.member_count DESC LIMIT {int(limit)}",
+            filters,
+        )
+    for row in rows:
+        members = store.exec_read(
+            "MATCH (m)-[r:BELONGS_TO]->(t:Topic {id: $id}) "
+            "RETURN coalesce(m.id, m.path) AS id, labels(m) AS labels, "
+            "coalesce(m.title, m.name) AS title, r.probability AS probability "
+            f"ORDER BY r.probability DESC LIMIT {int(members_per_topic)}",
+            {"id": row.get("id")},
+        )
+        row["members"] = members
+    return rows
 
 
 _RELATED_MAX_DEPTH = 5
@@ -253,8 +359,9 @@ def section_tree(store: GraphStore, file_path: str) -> list[dict[str, Any]]:
     """Hierarchical outline of a file — section-granular corpora only."""
     cypher = """
     MATCH (f:File {path: $path})-[:CONTAINS]->(s:Section)
+    OPTIONAL MATCH (s)-[:CONTAINS]->(c:Chunk)
     RETURN s.id AS id, s.title AS title, s.level AS level,
-           s.ordinal AS ordinal, s.summary AS summary
+           s.ordinal AS ordinal, s.summary AS summary, count(c) AS chunk_count
     ORDER BY s.level, s.ordinal
     """
     return store.exec_read(cypher, {"path": file_path})

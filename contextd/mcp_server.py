@@ -61,9 +61,13 @@ _GENERIC_TOOL_DESCRIPTORS: list[Tool] = [
     Tool(
         name="search",
         description=(
-            "Hybrid search (vector + full-text, RRF-fused) over summaries for the "
-            "given node kind (default: File). Falls back to full-text when no "
-            "embedder is configured or the kind has no vector index."
+            "Hybrid search (vector + full-text, RRF-fused) over retrieval chunks "
+            "(default kind: Chunk), collapsed small-to-big to the best enclosing "
+            "Section/File with an `evidence` block (matched text, line range, "
+            "neighbour context). Other kinds (File, Section, Topic, Artifact, "
+            "Ticket, Pattern, Risk) return flat node rows. Falls back to "
+            "full-text when no embedder is configured or the kind has no vector "
+            "index."
         ),
         inputSchema={
             "type": "object",
@@ -71,7 +75,11 @@ _GENERIC_TOOL_DESCRIPTORS: list[Tool] = [
                 "query": {"type": "string"},
                 "kind": {
                     "type": "string",
-                    "description": "Node label to search (default: File).",
+                    "description": "Node label to search (default: Chunk).",
+                },
+                "corpus": {
+                    "type": "string",
+                    "description": "Restrict to one corpus (default: all).",
                 },
                 "limit": {
                     "type": "integer",
@@ -83,8 +91,70 @@ _GENERIC_TOOL_DESCRIPTORS: list[Tool] = [
                     "enum": ["hybrid", "fulltext", "vector"],
                     "description": "Override ranking mode (default from server config: hybrid).",
                 },
+                "profiles": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        'Chunk profiles to query, e.g. ["fine", "coarse"] '
+                        "(default: server config, else every profile present)."
+                    ),
+                },
+                "return_unit": {
+                    "type": "string",
+                    "enum": ["chunk", "section", "file", "auto"],
+                    "description": (
+                        "Unit to collapse chunk hits to (default from server config: auto "
+                        "= the Section when at least auto_merge_threshold of its chunks hit, "
+                        "else the chunk)."
+                    ),
+                },
+                "window": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 10,
+                    "description": "Neighbour chunks attached as evidence context per side.",
+                },
             },
             "required": ["query"],
+        },
+    ),
+    Tool(
+        name="expand_chunk",
+        description=(
+            "A retrieval chunk with its neighbouring chunks (same parent and "
+            "profile, by ordinal) and the parent Section/File summary — show me "
+            "more around this search hit."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "chunk_id": {"type": "string"},
+                "window": {
+                    "type": "integer",
+                    "default": 2,
+                    "minimum": 0,
+                    "maximum": 10,
+                },
+            },
+            "required": ["chunk_id"],
+        },
+    ),
+    Tool(
+        name="topics",
+        description=(
+            "Cross-document topics (RAPTOR-style cluster summaries over Sections/"
+            "Files) with their members. Ranked by hybrid search when `query` is "
+            "given, else listed by layer and size. Empty unless the corpus has "
+            "[topics] enabled."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "corpus": {"type": "string"},
+                "query": {"type": "string"},
+                "layer": {"type": "integer", "minimum": 0},
+                "limit": {"type": "integer", "default": 20},
+            },
         },
     ),
     Tool(
@@ -341,6 +411,7 @@ def _dispatch_tool(
     search_cfg: SearchConfig | None = None,
     translator: QueryTranslator | None = None,
     home: Path | None = None,
+    profile_weights: dict[str, float] | None = None,
 ) -> Any:
     """Route a tool-call to the right tools.X body.
 
@@ -386,6 +457,32 @@ def _dispatch_tool(
                     fetch_k=cfg_s.fetch_k,
                     vector_weight=cfg_s.vector_weight,
                     fulltext_weight=cfg_s.fulltext_weight,
+                    corpus=arguments.get("corpus"),
+                    profiles=arguments.get("profiles") or cfg_s.chunk_profiles,
+                    profile_weights=profile_weights,
+                    return_unit=arguments.get("return_unit", cfg_s.return_unit),
+                    auto_merge_threshold=cfg_s.auto_merge_threshold,
+                    window=arguments.get("window", cfg_s.window),
+                    max_evidence_chars=cfg_s.max_evidence_chars,
+                )
+            )
+        case "expand_chunk":
+            return _text(
+                tools.expand_chunk(store, arguments["chunk_id"], window=arguments.get("window", 2))
+            )
+        case "topics":
+            cfg_s = search_cfg or SearchConfig()
+            return _text(
+                tools.topics(
+                    store,
+                    corpus=arguments.get("corpus"),
+                    query=arguments.get("query"),
+                    layer=arguments.get("layer"),
+                    limit=arguments.get("limit", 20),
+                    embedder=embedder,
+                    mode=cfg_s.mode,
+                    rrf_k=cfg_s.rrf_k,
+                    fetch_k=cfg_s.fetch_k,
                 )
             )
         case "related":
@@ -485,6 +582,7 @@ async def run() -> None:
         # parse failures are surfaced before the server loop starts.
         corpus_descriptors, corpus_registry = build_tool_descriptors(home)
         all_descriptors: list[Tool] = _GENERIC_TOOL_DESCRIPTORS + corpus_descriptors
+        profile_weights = _load_profile_weights(home)
 
         @server.list_tools()  # type: ignore[no-untyped-call,untyped-decorator]
         async def _list() -> list[Tool]:
@@ -502,6 +600,7 @@ async def run() -> None:
                     search_cfg=cfg.search,
                     translator=translator,
                     home=home,
+                    profile_weights=profile_weights,
                 )
             except Exception as exc:
                 # Render the error as the tool's text payload so the MCP
@@ -514,6 +613,29 @@ async def run() -> None:
             await server.run(reader, writer, server.create_initialization_options())
     finally:
         store.close()
+
+
+def _load_profile_weights(home: Path) -> dict[str, float]:
+    """Chunk-profile RRF weights from every registered corpus (last wins).
+
+    The server does not otherwise load corpus configs; a corpus whose TOML
+    fails to parse is skipped (it would have failed indexing too) rather than
+    blocking startup.
+    """
+    from contextd.corpus_config import CorpusConfig
+
+    weights: dict[str, float] = {}
+    corpora_dir = home / "corpora"
+    if not corpora_dir.is_dir():
+        return weights
+    for toml_path in sorted(corpora_dir.glob("*.toml")):
+        try:
+            cfg = CorpusConfig.load(toml_path)
+        except Exception:
+            continue
+        for profile in cfg.chunking.profiles:
+            weights[profile.name] = profile.weight
+    return weights
 
 
 def main() -> None:

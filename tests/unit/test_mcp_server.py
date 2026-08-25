@@ -64,6 +64,8 @@ def test_generic_tool_descriptors_registers_expected_set() -> None:
         "timeline",
         "ask",
         "grep_corpus",
+        "expand_chunk",
+        "topics",
     }
 
 
@@ -142,9 +144,11 @@ def test_dispatch_search_threads_embedder_and_config() -> None:
 def test_dispatch_search_defaults_to_fulltext_without_embedder() -> None:
     store = MagicMock()
     store.full_text_search.return_value = []
+    store.exec_read.return_value = []
     payload = _dispatch_tool("search", {"query": "q"}, store)
     assert payload[0]["type"] == "text"
-    store.full_text_search.assert_called_once_with("File", "summary", "q", k=50)
+    # Default kind is now Chunk, searched on its raw text.
+    store.full_text_search.assert_called_once_with("Chunk", "text", "q", k=50)
     store.vector_search.assert_not_called()
 
 
@@ -242,3 +246,56 @@ find_file = "{cypher_file.as_posix()}"
     assert "my-corpus.find_file" in names
     assert len(all_descs) == len(_GENERIC_TOOL_DESCRIPTORS) + 1
     assert "my-corpus.find_file" in registry
+
+
+def test_dispatch_search_threads_chunk_args_and_profile_weights() -> None:
+    from unittest.mock import patch
+
+    from contextd.config import SearchConfig
+
+    store = MagicMock()
+    with patch("contextd.mcp_server.tools.search", return_value=[]) as search:
+        _dispatch_tool(
+            "search",
+            {
+                "query": "q",
+                "profiles": ["fine"],
+                "return_unit": "chunk",
+                "window": 3,
+                "corpus": "c",
+            },
+            store,
+            search_cfg=SearchConfig(auto_merge_threshold=0.7, max_evidence_chars=300),
+            profile_weights={"fine": 2.0},
+        )
+    kwargs = search.call_args.kwargs
+    assert kwargs["profiles"] == ["fine"] and kwargs["profile_weights"] == {"fine": 2.0}
+    assert kwargs["return_unit"] == "chunk" and kwargs["window"] == 3 and kwargs["corpus"] == "c"
+    assert kwargs["auto_merge_threshold"] == 0.7 and kwargs["max_evidence_chars"] == 300
+
+
+def test_dispatch_expand_chunk_and_topics() -> None:
+    from unittest.mock import patch
+
+    store = MagicMock()
+    with patch("contextd.mcp_server.tools.expand_chunk", return_value={"id": "c"}) as ex:
+        payload = _dispatch_tool("expand_chunk", {"chunk_id": "c", "window": 1}, store)
+        ex.assert_called_once_with(store, "c", window=1)
+        assert payload[0]["type"] == "text"
+    with patch("contextd.mcp_server.tools.topics", return_value=[]) as tp:
+        _dispatch_tool("topics", {"corpus": "c", "query": "x"}, store)
+        assert tp.call_args.kwargs["corpus"] == "c" and tp.call_args.kwargs["query"] == "x"
+
+
+def test_load_profile_weights_reads_corpora(tmp_path: Path) -> None:
+    from contextd.mcp_server import _load_profile_weights
+
+    assert _load_profile_weights(tmp_path) == {}
+    corpora = tmp_path / "corpora"
+    corpora.mkdir()
+    (corpora / "a.toml").write_text(
+        '[corpus]\nname = "a"\nroot = "/x"\n[[chunking.profiles]]\nname = "fine"\nweight = 2.0\n',
+        encoding="utf-8",
+    )
+    (corpora / "broken.toml").write_text("not toml [[", encoding="utf-8")
+    assert _load_profile_weights(tmp_path) == {"fine": 2.0}
