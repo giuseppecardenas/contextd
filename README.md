@@ -7,6 +7,7 @@ Contextd is a locally-hosted knowledge layer for your project files. It indexes 
 - **Input:** markdown (`.md`) files only. Markdown is the one format contextd is built and tested for today; the default corpus include pattern is `**/*.md`, the section-granular mode parses markdown headings, and the summarisation prompts assume prose-style documents. Pointing contextd at source code or structured data (JSON, CSV, and similar) is untested and unsupported at present, and although the section-granular pipeline contains a fallback path that routes non-markdown files through file-granular indexing, that path has not been exercised against real non-markdown corpora and should not be relied upon.
 - **Storage:** Neo4j Community 5.x — runs in Docker, binds port 7687 over Bolt.
 - **Inference:** Google Gemma (`gemma-4-31b-it` default) via the Gemini API for summarisation, relationship inference, and NL→Cypher translation; Voyage AI `voyage-4-large` (1024-dim, 32k-token context) for vector embeddings. Both inference and embeddings can instead run against a local OpenAI-compatible server (llama.cpp, Ollama, vLLM, LM Studio), so the whole pipeline can run fully offline.
+- **Retrieval:** every Section/File is split into configurable retrieval chunks (multiple size profiles, eight strategies, heading-breadcrumb context) that hybrid search ranks and collapses back to the enclosing unit with line-level evidence — see [docs/chunking.md](docs/chunking.md).
 - **Interface:** stdio MCP server (`contextd-mcp`) and CLI (`contextd`).
 - **Platforms:** runs natively on Linux, macOS, and Windows 11. The daemon, IPC, file-watching, and Docker invocation are platform-agnostic — Windows is not a WSL-only afterthought. WSL2 is still a fine host on Windows if you prefer it, but a native Python install on Windows is equally supported.
 - **Privacy:** all state lives under `~/.contextd/` (`%USERPROFILE%\.contextd` on Windows); no data is stored outside your machine beyond the per-file API calls.
@@ -54,6 +55,12 @@ By default, each file in a corpus is indexed as a single `File` node with an AI-
 
 For heavily structured markdown corpora (long PRDs, specs, design docs), **section-granular** mode promotes each heading to a first-class `Section` node. Structural edges — `CONTAINS`, `PARENT_OF`, `NEXT_SIBLING` — model the document tree; AI infers semantic edges (`REFERENCES`, `DOCUMENTS`, `SUPERSEDES`, etc.) across section boundaries. Enable it with `--granularity section` in `add-corpus`.
 
+### Retrieval chunks
+
+Sections (and whole files in file-granular corpora) are the units the LLM summarises and relates; they are the wrong size for search. Beneath each of them the indexer derives **`Chunk` nodes** — retrieval-only slices produced by configurable *profiles* (by default `fine` ≈ 256 tokens and `coarse` ≈ 1024 tokens, both using the `structural` strategy that packs markdown blocks without splitting code fences or table rows). Chunks are embedded and full-text indexed with their heading breadcrumb prepended, never summarised or related, and are what the `search` tool ranks before collapsing hits back to the enclosing Section/File with an `evidence` block. Eight strategies (`structural`, `window`, `recursive`, `sentence_window`, `semantic`, `late`, `propositions`, `code`), prefix modes, augmentation and the fingerprint-gated re-chunking rules are documented in [docs/chunking.md](docs/chunking.md).
+
+Optionally, `[topics]` builds a RAPTOR-style tree of **`Topic` nodes** — cross-document cluster summaries — for "what does this corpus say about X" questions that no chunk size answers.
+
 ### Edge origins
 
 Every edge carries one of three `origin` values:
@@ -81,7 +88,7 @@ The ABC and the factory seam are deliberately retained so a second backend could
 
 The base ontology (`contextd/ontology/base.json`) defines the node types and edge types the AI is allowed to infer. Unrecognised types are silently discarded at index time. Per-corpus aliases let you map domain-specific vocabulary to canonical types — see [Ontology customisation](#ontology-customisation) below.
 
-Node types: `File`, `Section`, `Artifact`, `Ticket`, `Pattern`, `Technology`, `Client`, `Repo`, `Service`, `Integration`, `Risk`, `WorkSession`, `Corpus`, `Meta`.
+Node types: `File`, `Section`, `Chunk`, `Topic`, `Artifact`, `Ticket`, `Pattern`, `Technology`, `Client`, `Repo`, `Service`, `Integration`, `Risk`, `WorkSession`, `Corpus`, `Meta`. (`Chunk` and `Topic` are derived retrieval nodes: the inferrer may never target them.)
 
 Edge types: `CONTAINS`, `PARENT_OF`, `NEXT_SIBLING`, `BELONGS_TO`, `CREATED_BY`, `DOCUMENTS`, `DOCUMENTED_IN`, `APPLIES_TO`, `PART_OF`, `SIMILAR_TO`, `RELATED_TO`, `REFERENCES`, `SUPERSEDES`, `CONTRADICTS`, `USES`, `MODIFIES`, `DEPENDS_ON`, `IDENTIFIES_RISK`, `RECOMMENDS`, `EDITED_DURING`, `VERIFIED_ON`, `NEEDS_UPDATE`.
 
@@ -119,6 +126,16 @@ $env:VOYAGE_API_KEY = "<your-key>"
 Requirements (both platforms): Python 3.11+, Docker (Docker Desktop on Windows/macOS or any Docker engine with Compose v2 on Linux). Docker Desktop on Windows is supported — `contextd up` calls `docker compose` against the same daemon that `docker` does from PowerShell. On Windows, Docker Desktop must be set to Linux containers (the default) for the Neo4j image.
 
 The remaining steps in this README are written with `bash` syntax. The equivalent PowerShell forms differ only in shell-specific surface (`export` ↔ `$env:`, `~/.contextd/` ↔ `$env:USERPROFILE\.contextd\`); the `contextd` CLI invocations themselves are identical on both platforms.
+
+### Optional extras
+
+| Extra | Enables | Install |
+|---|---|---|
+| `tiktoken` | token-accurate chunk sizing for OpenAI-compatible embedders (`[chunking] tokenizer = "tiktoken"`) | `uv pip install -e ".[dev,tiktoken]"` |
+| `code` | the `code` chunk strategy (tree-sitter grammars for ~20 languages) | `uv pip install -e ".[dev,code]"` |
+| `late` | in-process `local_hf` embedder and the `late` chunk strategy (`sentence-transformers`) | `uv pip install -e ".[dev,late]"` |
+
+A profile that names a strategy whose extra is missing fails when the pipeline is built (`contextd index` reports it), not mid-bootstrap.
 
 ### Global command without venv activation (optional)
 
@@ -228,8 +245,12 @@ found 11 files in corpus 'notes'
   ✓ embed: processed=11 skipped=0
   ✓ summarise: processed=11 skipped=0
   ✓ relate: processed=11 skipped=0
+  ✓ chunk_units: processed=11 skipped=0
+  ✓ gc_chunks: processed=0 skipped=0
   ✓ close: processed=1 skipped=0
 ```
+
+`chunk_units` derives the retrieval chunks beneath every file/section (embedding cost only; see [docs/chunking.md](docs/chunking.md)); on re-runs it skips every parent whose chunk fingerprint is current.
 
 To preview token cost without indexing:
 
@@ -246,7 +267,11 @@ contextd index notes --estimate-only
 | `inferred` | `origin='inferred'` edges + `inferred_at` markers | summaries, structural, embeddings | Gemini relate only |
 | `summaries` | `summary`/`key_points`/`entities_mentioned`/`summary_generated_at` | inferred edges, structural, embeddings | Gemini summarise only |
 | `llm` | both of the above | structural, embeddings | all Gemini work |
-| `all` | DETACH DELETE every `Section`/`File`/`Corpus` node for this corpus | nothing (structural + inferred edges cascade-deleted) | Voyage + Gemini from zero |
+| `chunks` | every `Chunk` node + the `chunk_fingerprint` markers | summaries, inferred edges, structural, Section/File embeddings | chunk embeddings only (plus LLM calls if `prefix = "llm"` / `questions` / `propositions` are configured) |
+| `topics` | every `Topic` node + the topic input fingerprint | everything else | one summary call per topic + topic embeddings |
+| `all` | DETACH DELETE every `Chunk`/`Topic`/`Section`/`File`/`Corpus` node for this corpus | nothing (structural + inferred edges cascade-deleted) | Voyage + Gemini from zero |
+
+`--estimate-only` also dry-runs the chunkers and prints per-profile chunk and embedding-token counts without calling any provider.
 
 ```bash
 contextd index notes --bootstrap --refresh llm       # e.g. after a prompt change
@@ -390,7 +415,9 @@ If `contextd-mcp` is not on your PATH (e.g., when using a venv), use the absolut
 | Tool | What it does |
 |---|---|
 | `describe_project` | Top-N File nodes by inbound-citation count with summaries. Accepts `corpus` and `n` (default 40). |
-| `search` | Hybrid search: vector (embedding) similarity and full-text (BM25) fused by reciprocal rank fusion. Accepts `query`, optional `kind` (default `File`; `Section`, and the entity kinds `Artifact` / `Ticket` / `Pattern` / `Risk`, are searched against their content field), optional `limit` (default 20), and optional `mode` (`hybrid` / `fulltext` / `vector`). Degrades to full-text when no embedder is configured or the `kind` has no vector index. |
+| `search` | Hybrid search: vector (embedding) similarity and full-text (BM25) fused by reciprocal rank fusion. Default `kind` is `Chunk`: one ranker pair per chunk `profiles` entry, hits collapsed small-to-big to the enclosing Section/File per `return_unit` (`chunk` / `section` / `file` / `auto`), every row carrying an `evidence` block (matched text, `start_line`/`end_line`, neighbour context per `window`). Other kinds (`File`, `Section`, `Topic`, and the entity kinds `Artifact` / `Ticket` / `Pattern` / `Risk` on their content field) return flat rows. Also accepts `corpus`, `limit` (default 20) and `mode` (`hybrid` / `fulltext` / `vector`). Degrades to full-text when no embedder is configured or the `kind` has no vector index. |
+| `expand_chunk` | A chunk with its neighbouring chunks (same parent and profile) and the parent summary — "show me more around this hit". Accepts `chunk_id` and `window` (default 2). |
+| `topics` | Cross-document `Topic` nodes (RAPTOR-style cluster summaries) with members; ranked by hybrid search when `query` is given. Accepts optional `corpus`, `query`, `layer`, `limit`. Empty unless `[topics]` is enabled for the corpus. |
 | `related` | Outbound + inbound traversal within N hops (1–5). Accepts `node_id` and `depth` (default 2). |
 | `inbound` | What cites this node? Accepts `node_id`. |
 | `outbound` | What does this node cite? Accepts `node_id`. |
@@ -661,6 +688,7 @@ incremental_workers            = 4    # concurrent file workers per incremental 
 allowed_branches               = []   # whitelist; empty = allow all branches
 sweep_interval_seconds         = 900  # 0 disables; how often to check for missed changes
 sweep_rate_sections_per_second = 0.017 # budget rate; default ≈ 1 section/minute
+topics_recluster_interval_seconds = 3600 # daemon re-clusters dirty [topics] corpora; 0 = bootstrap only
 
 [search]
 mode           = "hybrid"   # "hybrid" (vector+full-text RRF) | "fulltext" | "vector"
@@ -668,6 +696,12 @@ rrf_k          = 60         # RRF damping constant
 fetch_k        = 50         # per-ranker candidate depth before fusion (raised to >= limit)
 vector_weight  = 1.0        # bias toward semantic matches
 fulltext_weight = 1.0       # bias toward lexical matches
+# chunk_profiles = ["fine", "coarse"]  # profiles `search` queries; unset = every profile present
+return_unit    = "auto"     # "chunk" | "section" | "file" | "auto" (parent when >= threshold of its chunks hit)
+auto_merge_threshold = 0.5  # hit ratio at which `auto` returns the parent
+window         = 1          # neighbour chunks attached as evidence context per side
+max_evidence_chars = 1200   # evidence text truncation per row
+over_fetch_factor = 4       # k multiplier for post-filtered vector/full-text queries
 
 [logging]
 level          = "info"
@@ -711,6 +745,16 @@ name = "coarse"                 # ≈1024-token chunks for context
 max_tokens = 1024
 min_tokens = 200
 overlap = 0.1
+
+[chunking.blocks]               # structural strategy: fences never split mid-fence,
+table_mode = "rows_with_header" # tables split by row with the header repeated
+
+[chunking.suffix_overrides]     # per file type (e.g. tree-sitter chunking for code)
+".py" = { strategy = "code" }
+
+[topics]                        # optional RAPTOR-style cross-document cluster summaries
+enabled = false
+max_layers = 3
 
 [ontology]
 base = "default"                # base ontology name
@@ -934,7 +978,7 @@ Items that are designed and partially built but not yet wired or shipped:
 
 | Gap | Detail |
 |---|---|
-| **Per-corpus search tuning** | The `[search]` knobs (mode, `rrf_k`, weights) are global; the MCP server resolves one config at startup and `search` has no corpus argument. Per-corpus overrides are deferred. |
+| **Per-corpus search tuning** | The `[search]` knobs (mode, `rrf_k`, weights, `return_unit`, `auto_merge_threshold`) are global; `search` accepts a `corpus` filter and per-corpus chunk-profile weights, but per-corpus ranking overrides are deferred. |
 | **`CONTEXTD_INFERENCE_DAILY_BUDGET`** | The design specifies an env var cap on daily Gemini calls. Not implemented; manual cost monitoring via `contextd costs` is the current guard. |
 | **Per-corpus MCP tool `$` false positives** | `extract_placeholders` uses a simple regex and will match `$` inside Cypher string literals as spurious parameters. Proper Cypher tokenisation is deferred. |
 | **Stale `CheckpointStore` entries on section refresh** | The per-file checkpoint records phase-level completion (summarise, relate) but not per-section granularity. After a differential re-index updates only some sections, the checkpoint still reflects the prior full-file state. Reporting via `contextd status` will show the old completion time until the next full bootstrap. |

@@ -129,14 +129,17 @@ contextd list-corpora
 
 ## `contextd index`
 
-**Synopsis:** `contextd index CORPUS_NAME [--bootstrap] [--incremental] [--estimate-only]`
+**Synopsis:** `contextd index CORPUS_NAME [--bootstrap] [--incremental] [--estimate-only] [--refresh SCOPE]`
 
 | Argument / Flag | Default | Description |
 |---|---|---|
 | `CORPUS_NAME` | required | Name of a registered corpus |
-| `--bootstrap` | off | Full re-index from scratch |
-| `--incremental` | off | Re-index only changed files (not yet implemented — reports a warning) |
-| `--estimate-only` | off | Count files and estimate token spend without calling any provider |
+| `--bootstrap` | off | Full (idempotent, resumable) index |
+| `--incremental` | off | Re-index only changed files/sections (hash-gated), then re-chunk their parents |
+| `--estimate-only` | off | Count files, estimate token spend, and dry-run the chunkers (per-profile chunk / embedding-token counts) without calling any provider |
+| `--refresh SCOPE` | none | Wipe one layer before bootstrap: `inferred`, `summaries`, `llm`, `chunks` (retrieval chunks + fingerprints, embedding cost only), `topics`, or `all` |
+
+The `[chunking]` / `[topics]` corpus-config blocks that drive the chunk and topic phases are documented in [chunking.md](chunking.md).
 
 Exactly one of `--bootstrap` or `--incremental` is required (unless `--estimate-only` is passed alone).
 

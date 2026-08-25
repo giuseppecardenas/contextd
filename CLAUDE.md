@@ -4,8 +4,9 @@
 indexes markdown, code, and structured-data corpora into a Neo4j graph + vector
 store, generates per-file summaries and AI-inferred typed relationships
 (Gemini, or any OpenAI-compatible provider profile such as Ollama Cloud or
-DeepSeek; embeddings via Voyage), and serves the result to AI assistants over
-the Model Context Protocol.
+DeepSeek; embeddings via Voyage), derives configurable retrieval chunks
+beneath every unit for hybrid search, and serves the result to AI assistants
+over the Model Context Protocol.
 
 ## Prerequisites
 
@@ -120,6 +121,16 @@ directories (docs, examples, scripts) and the break only surfaces after a push.
 - **Every edge carries `origin` in {inferred, structural, manual}.**
   Re-index wipe-and-replace touches only `origin="inferred"` edges; structural
   and manual edges are preserved.
+- **`Chunk` and `Topic` nodes are derived, retrieval-only data.** Chunks
+  (`contextd/chunking/`, `indexer/phases_chunks.py`) are never routed to
+  summarise/relate and the inferrer may never target them; they are a pure
+  function of (chunking config, tokenizer, parent content) gated by the
+  `chunk_fingerprint` stored on the parent Section/File — change the config
+  and the fingerprint re-chunks, never a hand-written invalidation. Strategy
+  code stays synchronous and provider-free except through injected
+  protocols; a strategy whose provider/extra is missing must fail at
+  pipeline construction (`ChunkingConfigError`), never mid-bootstrap. See
+  `docs/chunking.md`.
 - **AI-inferred edges are ontology-validated at write time**, which is the
   primary defense against hallucinated relationship types.
 
