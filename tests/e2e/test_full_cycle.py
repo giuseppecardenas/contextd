@@ -48,11 +48,16 @@ def test_full_bootstrap_then_mcp_query(backend, tmp_path: Path) -> None:
     fake_embedder.embed.side_effect = lambda texts: [[0.1] * 1024 for _ in texts]
     fake_summariser = MagicMock()
     fake_summariser.roll_up.return_value = "rolled"
-    fake_summariser.summarise.side_effect = [
-        FileSummary(summary="alpha file", key_points=["k1"], entities_mentioned=[]),
-        FileSummary(summary="beta file", key_points=["k2"], entities_mentioned=[]),
-        FileSummary(summary="gamma file", key_points=["k3"], entities_mentioned=[]),
-    ]
+
+    # Content-keyed, not call-ordered: phase_summarise visits files in
+    # filesystem enumeration order, which differs between Windows and the
+    # Linux CI runner, so a positional side_effect assigned "beta file" to
+    # c.md on CI and the parent_summary assertion below failed there.
+    def _summarise(content: str, *, context: object = None) -> FileSummary:
+        word = content.split()[0]
+        return FileSummary(summary=f"{word} file", key_points=[f"k-{word}"], entities_mentioned=[])
+
+    fake_summariser.summarise.side_effect = _summarise
     fake_inferrer = MagicMock()
     fake_inferrer.infer.return_value = []
 
