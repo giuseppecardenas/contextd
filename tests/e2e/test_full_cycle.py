@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -11,14 +12,17 @@ pytestmark = pytest.mark.e2e
 
 
 def test_full_bootstrap_then_mcp_query(backend, tmp_path: Path) -> None:
-    """Exercise: files → bootstrap → describe_project."""
+    """Exercise: files → bootstrap → describe_project → search evidence → expand_chunk."""
+    from contextd.config import Config
     from contextd.corpus_config import CorpusConfig
+    from contextd.indexer.chunk_deps import build_chunking_deps
     from contextd.indexer.hasher import FileHasher
     from contextd.indexer.phases import RelateDeps
     from contextd.indexer.pipeline import run_bootstrap
     from contextd.inference.context import EmptyRetriever
     from contextd.inference.summarise import FileSummary
     from contextd.mcp import tools
+    from contextd.mcp_server import _dispatch_tool
 
     root = tmp_path / "corpus"
     root.mkdir()
@@ -34,11 +38,14 @@ def test_full_bootstrap_then_mcp_query(backend, tmp_path: Path) -> None:
                 "include": ["*.md"],
                 "granularity": "file",
             },
+            # The word tokenizer keeps the chunk phase offline and deterministic.
+            "chunking": {"tokenizer": "words"},
         }
     )
 
+    # One vector per input: the chunk phase embeds in batches of its own size.
     fake_embedder = MagicMock()
-    fake_embedder.embed.return_value = [[0.1] * 1024, [0.2] * 1024, [0.3] * 1024]
+    fake_embedder.embed.side_effect = lambda texts: [[0.1] * 1024 for _ in texts]
     fake_summariser = MagicMock()
     fake_summariser.roll_up.return_value = "rolled"
     fake_summariser.summarise.side_effect = [
@@ -56,6 +63,9 @@ def test_full_bootstrap_then_mcp_query(backend, tmp_path: Path) -> None:
         summariser=fake_summariser,
         relate=RelateDeps(inferrer=fake_inferrer, retriever=EmptyRetriever()),
         hasher=FileHasher(),
+        chunking=build_chunking_deps(
+            Config(), cfg, embedder=fake_embedder, inference=None, renderer=None
+        ),
     )
 
     overview = tools.describe_project(backend, corpus="e2e")
@@ -66,3 +76,20 @@ def test_full_bootstrap_then_mcp_query(backend, tmp_path: Path) -> None:
 
     # Summary is present on every node.
     assert all(s is not None for s in summaries)
+
+    # Chunk search through the MCP dispatcher returns evidence rows, and the
+    # evidence chunk id round-trips through expand_chunk.
+    hits = json.loads(
+        _dispatch_tool(
+            "search", {"query": "gamma", "return_unit": "chunk"}, backend, embedder=fake_embedder
+        )[0]["text"]
+    )
+    assert hits and all("evidence" in h for h in hits)
+    assert hits[0]["evidence"]["text"].startswith("gamma")
+    expanded = json.loads(
+        _dispatch_tool("expand_chunk", {"chunk_id": hits[0]["evidence"]["chunk_id"]}, backend)[0][
+            "text"
+        ]
+    )
+    assert expanded["id"] == hits[0]["evidence"]["chunk_id"]
+    assert expanded["parent_summary"] == "gamma file"
