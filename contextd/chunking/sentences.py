@@ -47,11 +47,13 @@ def _is_abbreviation(text: str, end: int) -> bool:
     start = end - 1
     while start > 0 and not text[start - 1].isspace():
         start -= 1
-    word = text[start:end].rstrip(".!?").lower()
-    if word in _ABBREVIATIONS:
+    raw = text[start:end].rstrip(".!?")
+    if raw.lower() in _ABBREVIATIONS:
         return True
-    # Single capital letter initials ("J. Smith") and enumerators ("1.").
-    return len(word) == 1
+    # A lone capital letter is an initial ("J. Smith"); a lone digit or
+    # lowercase letter at the end of a sentence ("version 2.", "option a.")
+    # is a real terminator.
+    return len(raw) == 1 and raw.isupper()
 
 
 def sentence_spans(text: str) -> list[tuple[int, int]]:

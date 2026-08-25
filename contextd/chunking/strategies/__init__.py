@@ -22,6 +22,7 @@ from contextd.chunking.tokenizer import Tokenizer
 from contextd.corpus_config import ChunkProfile
 
 if TYPE_CHECKING:
+    from contextd.inference.prompts import PromptRenderer
     from contextd.providers.base import EmbeddingProvider, InferenceProvider
 
 
@@ -35,10 +36,18 @@ class StrategyDeps:
 
     embedder: EmbeddingProvider | None = None
     inference: InferenceProvider | None = None
+    renderer: PromptRenderer | None = None
     token_embedder: object | None = None  # TokenEmbedder; typed loosely until WS9 lands
 
 
 _Factory = Callable[[ChunkProfile, Tokenizer, StrategyDeps], ChunkStrategy]
+
+
+def _require(profile: ChunkProfile, value: object | None, what: str) -> None:
+    if value is None:
+        raise ChunkingConfigError(
+            f"profile {profile.name!r}: strategy {profile.strategy!r} requires {what}"
+        )
 
 
 def _structural(_p: ChunkProfile, tok: Tokenizer, _d: StrategyDeps) -> ChunkStrategy:
@@ -57,11 +66,30 @@ def _sentence_window(_p: ChunkProfile, tok: Tokenizer, _d: StrategyDeps) -> Chun
     return SentenceWindowStrategy(tok)
 
 
+def _semantic(p: ChunkProfile, tok: Tokenizer, d: StrategyDeps) -> ChunkStrategy:
+    from contextd.chunking.strategies.semantic import SemanticStrategy
+
+    _require(p, d.embedder, "an embedding provider (providers.embedding)")
+    assert d.embedder is not None
+    return SemanticStrategy(tok, d.embedder)
+
+
+def _propositions(p: ChunkProfile, tok: Tokenizer, d: StrategyDeps) -> ChunkStrategy:
+    from contextd.chunking.strategies.propositions import PropositionsStrategy
+
+    _require(p, d.inference, "an inference provider (providers.summary)")
+    _require(p, d.renderer, "a prompt renderer")
+    assert d.inference is not None and d.renderer is not None
+    return PropositionsStrategy(tok, d.inference, d.renderer)
+
+
 STRATEGY_REGISTRY: dict[str, _Factory] = {
     "structural": _structural,
     "window": _window,
     "recursive": _recursive,
     "sentence_window": _sentence_window,
+    "semantic": _semantic,
+    "propositions": _propositions,
 }
 
 

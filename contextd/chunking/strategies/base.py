@@ -130,14 +130,19 @@ def pack(
     tokenizer: Tokenizer,
     *,
     overlap_tokens: int | None = None,
+    merge_adjacent: bool = True,
 ) -> list[Chunk]:
-    """Group pieces into chunks honouring the profile's size knobs."""
+    """Group pieces into chunks honouring the profile's size knobs.
+
+    ``merge_adjacent=False`` keeps every piece its own chunk unless it is
+    under ``min_tokens`` — for strategies whose pieces already *are* the
+    intended chunks (semantic groups) and must not be greedily re-packed.
+    """
     if not pieces:
         return []
     profile = req.profile
-    groups = _merge_small(
-        _greedy(pieces, profile.max_tokens), profile.max_tokens, profile.min_tokens
-    )
+    initial = _greedy(pieces, profile.max_tokens) if merge_adjacent else [[p] for p in pieces]
+    groups = _merge_small(initial, profile.max_tokens, profile.min_tokens)
     index = LineIndex(req.text)
     overlap = profile.overlap_tokens if overlap_tokens is None else overlap_tokens
     chunks: list[Chunk] = []
