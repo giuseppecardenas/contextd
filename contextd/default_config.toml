@@ -117,6 +117,7 @@ allowed_branches = []
 incremental_workers = 4
 sweep_interval_seconds = 900
 sweep_rate_sections_per_second = 0.017
+topics_recluster_interval_seconds = 3600  # re-cluster dirty [topics] corpora; 0 = only on bootstrap
 
 [mcp]
 transport = "stdio"

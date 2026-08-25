@@ -66,6 +66,7 @@ class DaemonConfig:
     allowed_branches: list[str] = field(default_factory=list)
     sweep_interval_seconds: int = 900
     sweep_rate_sections_per_second: float = 0.017
+    topics_recluster_interval_seconds: int = 3600
 
 
 @dataclass
@@ -468,6 +469,22 @@ def _rechunk_if_config_drifted(entry: CorpusDaemonEntry, *, incremental_workers:
         _log.error("corpus %s: re-chunk after config drift failed: %s", name, exc)
 
 
+def _recluster_topics_if_dirty(entry: CorpusDaemonEntry) -> None:
+    """Rebuild a corpus's topic tree when an incremental pass flagged it dirty."""
+    from contextd.indexer.phases_topics import phase_cluster_topics, topics_dirty
+
+    if entry.chunking is None or not entry.corpus_cfg.topics.enabled:
+        return
+    name = entry.corpus_cfg.corpus.name
+    try:
+        if not topics_dirty(entry.store, name):
+            return
+        result = phase_cluster_topics(entry.corpus_cfg, entry.chunking, entry.store)
+        _log.info("corpus %s: topics re-clustered (%d topics)", name, result.processed)
+    except Exception as exc:
+        _log.error("corpus %s: topic re-clustering failed: %s", name, exc)
+
+
 def _write_pid(pid_path: Path, pid: int) -> None:
     pid_path.write_text(str(pid), encoding="utf-8")
 
@@ -525,6 +542,11 @@ def run_daemon(
     # cost only) rather than waiting for the sweep, which keys on content.
     for entry in config.corpora:
         _rechunk_if_config_drifted(entry, incremental_workers=config.incremental_workers)
+
+    # Topic re-clustering runs on its own cadence: incremental passes only
+    # flag the corpus dirty (Corpus.topics_dirty) because clustering is a
+    # whole-corpus operation.
+    next_recluster_at = time.monotonic() + config.topics_recluster_interval_seconds
 
     # Phase 2: crash-recovery — re-queue files that were in-flight on last shutdown
     if checkpoint_store is not None:
@@ -657,6 +679,14 @@ def run_daemon(
                                 )
                 except Exception:
                     _log.exception("corpus %s: unhandled error in main loop; skipping batch", name)
+            if (
+                config.topics_recluster_interval_seconds > 0
+                and time.monotonic() >= next_recluster_at
+            ):
+                next_recluster_at = time.monotonic() + config.topics_recluster_interval_seconds
+                for entry in config.corpora:
+                    _recluster_topics_if_dirty(entry)
+
             time.sleep(config.poll_interval_seconds)
     except BaseException as exc:
         # Catch everything (incl. SystemExit, KeyboardInterrupt, signals, thread
@@ -743,6 +773,7 @@ def main() -> None:
         allowed_branches=cfg.indexer.allowed_branches,
         sweep_interval_seconds=cfg.indexer.sweep_interval_seconds,
         sweep_rate_sections_per_second=cfg.indexer.sweep_rate_sections_per_second,
+        topics_recluster_interval_seconds=cfg.indexer.topics_recluster_interval_seconds,
     )
 
     ipc_socket_path = contextd_home() / ipc_file_name()

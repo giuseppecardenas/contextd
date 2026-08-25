@@ -9,7 +9,7 @@ from typing import Literal
 
 from contextd._paths import canonical_path
 from contextd.corpus_config import CorpusConfig
-from contextd.indexer import phases, phases_chunks
+from contextd.indexer import phases, phases_chunks, phases_topics
 from contextd.indexer.chunk_deps import ChunkingDeps
 from contextd.indexer.hasher import FileHasher
 from contextd.indexer.heading_parser import section_hash
@@ -423,6 +423,8 @@ def run_bootstrap(
             )
         )
         results.append(phases_chunks.phase_gc_chunks(corpus, store))
+        if corpus.topics.enabled:
+            results.append(phases_topics.phase_cluster_topics(corpus, chunking, store))
 
     config_fp = chunking.config_fp if chunking is not None else None
     if corpus.corpus.granularity == "section":

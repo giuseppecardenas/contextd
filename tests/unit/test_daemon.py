@@ -1066,3 +1066,45 @@ def test_rechunk_if_config_drifted(tmp_path: Path) -> None:
     with patch("contextd.indexer.phases_chunks.config_drifted") as drifted:
         _rechunk_if_config_drifted(entry, incremental_workers=2)
         drifted.assert_not_called()
+
+
+def test_recluster_topics_if_dirty(tmp_path: Path) -> None:
+    from unittest.mock import patch
+
+    from contextd.daemon import CorpusDaemonEntry, _recluster_topics_if_dirty
+
+    corpus_cfg = MagicMock()
+    corpus_cfg.corpus.name = "notes"
+    corpus_cfg.topics.enabled = True
+    entry = CorpusDaemonEntry(
+        corpus_cfg=corpus_cfg,
+        store=MagicMock(),
+        hasher=MagicMock(),
+        embedder=MagicMock(),
+        summariser=MagicMock(),
+        relate=MagicMock(),
+        chunking=MagicMock(),
+    )
+    with (
+        patch("contextd.indexer.phases_topics.topics_dirty", return_value=True),
+        patch("contextd.indexer.phases_topics.phase_cluster_topics") as cluster,
+    ):
+        cluster.return_value = MagicMock(processed=2)
+        _recluster_topics_if_dirty(entry)
+        cluster.assert_called_once_with(corpus_cfg, entry.chunking, entry.store)
+    with (
+        patch("contextd.indexer.phases_topics.topics_dirty", return_value=False),
+        patch("contextd.indexer.phases_topics.phase_cluster_topics") as cluster,
+    ):
+        _recluster_topics_if_dirty(entry)
+        cluster.assert_not_called()
+    corpus_cfg.topics.enabled = False
+    with patch("contextd.indexer.phases_topics.topics_dirty") as dirty:
+        _recluster_topics_if_dirty(entry)
+        dirty.assert_not_called()
+
+
+def test_daemon_config_recluster_interval_default() -> None:
+    from contextd.daemon import DaemonConfig
+
+    assert DaemonConfig(corpora=[]).topics_recluster_interval_seconds == 3600

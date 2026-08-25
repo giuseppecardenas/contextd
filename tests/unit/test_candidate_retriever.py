@@ -164,3 +164,63 @@ def test_source_failures_never_raise() -> None:
     assert bundle.entities_by_label == {}
     assert bundle.sections == ()
     assert bundle.files == ()
+
+
+def test_chunk_leg_adds_sections_reached_through_chunk_vectors() -> None:
+    """Body-level similarity (Chunk vectors) surfaces sections whose summaries
+    differ but whose text overlaps; they are mapped back to their parent."""
+    store = MagicMock()
+
+    def _exec_read(query: str, params: dict[str, Any] | None) -> list[dict[str, Any]]:
+        if "n.embedding AS embedding" in query:
+            return [{"embedding": [0.1, 0.2]}]
+        if "ORDER BY s.ordinal" in query:
+            return []
+        if "MATCH (s:Section) WHERE s.id IN $ids" in query:
+            return [{"id": "C:/x/docs/b.md#body", "title": "Body"}]
+        return []
+
+    store.exec_read.side_effect = _exec_read
+
+    def _vector_search(
+        label: str, property_name: str, query: list[float], k: int, **kw: Any
+    ) -> list[dict[str, Any]]:
+        if label == "Chunk":
+            assert kw["filters"] == {"corpus": "c", "parent_label": "Section"}
+            return [
+                {
+                    "node": {
+                        "id": "C:/x/docs/b.md#body~fine~0",
+                        "parent_id": "C:/x/docs/b.md#body",
+                    },
+                    "score": 0.9,
+                },
+                {
+                    "node": {
+                        "id": "C:/x/docs/b.md#body~fine~1",
+                        "parent_id": "C:/x/docs/b.md#body",
+                    },
+                    "score": 0.8,
+                },
+                {"node": {"id": SRC_ID + "~fine~0", "parent_id": SRC_ID}, "score": 0.7},
+            ]
+        return []
+
+    store.vector_search.side_effect = _vector_search
+    store.full_text_search.return_value = []
+
+    retriever = GraphCandidateRetriever(Ontology.load_base())
+    sections = retriever._sections(store, _identity())
+    assert [s.id for s in sections] == ["C:/x/docs/b.md#body"]
+    assert sections[0].title == "Body"
+
+
+def test_chunk_leg_failure_is_isolated() -> None:
+    store = MagicMock()
+    store.exec_read.side_effect = lambda q, p: (
+        [{"embedding": [0.1]}] if "n.embedding AS embedding" in q else []
+    )
+    store.vector_search.side_effect = RuntimeError("no chunk index")
+    store.full_text_search.return_value = []
+    retriever = GraphCandidateRetriever(Ontology.load_base())
+    assert retriever._sections(store, _identity()) == ()

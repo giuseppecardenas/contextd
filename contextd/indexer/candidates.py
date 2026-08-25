@@ -136,7 +136,52 @@ class GraphCandidateRetriever:
                 seen[sid] = SectionCandidate(id=sid, title=str(row.get("title") or ""))
             if len(seen) >= self._section_cap:
                 break
+        # Chunk leg: body-level similarity finds neighbours whose *summaries*
+        # differ but whose text overlaps (an identifier, a quoted config key),
+        # which the summary-only legs above miss.
+        if len(seen) < self._section_cap:
+            for sid, title in self._chunk_neighbour_sections(store, identity):
+                if sid != identity.src_id and sid not in seen:
+                    seen[sid] = SectionCandidate(id=sid, title=title)
+                if len(seen) >= self._section_cap:
+                    break
         return tuple(list(seen.values())[: self._section_cap])
+
+    def _chunk_neighbour_sections(
+        self, store: GraphStore, identity: UnitIdentity
+    ) -> list[tuple[str, str]]:
+        """Sections whose chunks are vector-near this unit's stored embedding."""
+        vec = self._stored_embedding(store, identity)
+        if vec is None:
+            return []
+        try:
+            rows = store.vector_search(
+                label="Chunk",
+                property_name="embedding",
+                query=vec,
+                k=self._vector_k,
+                filters={"corpus": identity.corpus, "parent_label": "Section"},
+            )
+        except Exception as exc:
+            _log.warning("candidates: chunk leg failed: %s", exc)
+            return []
+        parent_ids: list[str] = []
+        for r in rows:
+            pid = r["node"].get("parent_id")
+            if isinstance(pid, str) and pid not in parent_ids:
+                parent_ids.append(pid)
+        if not parent_ids:
+            return []
+        try:
+            titles = store.exec_read(
+                "MATCH (s:Section) WHERE s.id IN $ids RETURN s.id AS id, s.title AS title",
+                {"ids": parent_ids},
+            )
+        except Exception as exc:
+            _log.warning("candidates: chunk parent lookup failed: %s", exc)
+            return []
+        by_id = {str(t["id"]): str(t.get("title") or "") for t in titles}
+        return [(pid, by_id[pid]) for pid in parent_ids if pid in by_id]
 
     # -- source 4: files -------------------------------------------------------
 
