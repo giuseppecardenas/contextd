@@ -151,7 +151,6 @@ def test_embedding_match_reuses_supplied_vector_and_corpus_filters() -> None:
     store = MagicMock()
     store.exec_read.return_value = []  # empty norm cache
     store.vector_search.return_value = [
-        {"node": {"name": "other-corpus twin", "corpus": "other"}, "score": 0.99},
         {"node": {"name": "spatial hashing", "corpus": "c"}, "score": 0.95},
     ]
     embed = MagicMock(return_value=[[0.1] * 4])
@@ -162,6 +161,9 @@ def test_embedding_match_reuses_supplied_vector_and_corpus_filters() -> None:
     assert r.rule.startswith("embedding:")
     embed.assert_called_once_with(["spatial hash grid layout"])
     assert store.vector_search.call_args.kwargs["query"] == [0.1] * 4
+    # The corpus scope is pushed down to the backend as a server-side filter
+    # (an other-corpus twin never reaches the resolver).
+    assert store.vector_search.call_args.kwargs["filters"] == {"corpus": "c"}
 
 
 def test_embedding_miss_mints_with_vector() -> None:

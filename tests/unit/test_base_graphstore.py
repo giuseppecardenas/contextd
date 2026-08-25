@@ -23,6 +23,8 @@ def test_graphstore_required_abstracts() -> None:
         "exec_write",
         "vector_search",
         "full_text_search",
+        "upsert_nodes",
+        "delete_nodes",
         "capabilities",
     }
     abstract_names = getattr(GraphStore, "__abstractmethods__", frozenset())

@@ -110,15 +110,17 @@ def test_vector_similarity_uses_stored_embedding_and_corpus_filter() -> None:
     store.exec_read.side_effect = _exec_read
     store.vector_search.return_value = [
         {"node": {"id": "C:/x/docs/b.md#s", "title": "S", "corpus": "c"}, "score": 0.9},
-        {"node": {"id": "other-corpus#s", "title": "T", "corpus": "other"}, "score": 0.8},
     ]
     store.full_text_search.return_value = []
     bundle = GraphCandidateRetriever(Ontology.load_base()).for_unit(store, identity=_identity())
     ids = [s.id for s in bundle.sections]
     assert "C:/x/docs/b.md#s" in ids
-    assert "other-corpus#s" not in ids
     # Stored embedding, not a fresh embed call, fed vector_search.
     assert store.vector_search.call_args.kwargs["query"] == [0.5] * 4
+    # Corpus scoping is pushed down to the backend (server-side over-fetch +
+    # filter), not applied client-side on the returned rows.
+    assert store.vector_search.call_args.kwargs["filters"] == {"corpus": "c"}
+    assert store.full_text_search.call_args.kwargs["filters"] == {"corpus": "c"}
 
 
 def test_missing_embedding_degrades_gracefully() -> None:

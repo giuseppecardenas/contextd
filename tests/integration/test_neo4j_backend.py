@@ -193,3 +193,158 @@ def test_full_text_search_roundtrip(neo4j_backend) -> None:
     assert len(results) == 1
     assert results[0]["node"]["path"] == "/a.md"
     assert results[0]["score"] > 0
+
+
+# --- filtered search ----------------------------------------------------------
+
+
+def _seed_two_corpora(neo4j_backend) -> None:
+    from contextd.migrations.neo4j._0001_baseline import migration
+
+    neo4j_backend.apply_migrations([migration])
+    vec = [1.0] + [0.0] * 1023
+    for i in range(3):
+        neo4j_backend.upsert_node(
+            "File",
+            {
+                "path": f"/a{i}.md",
+                "corpus": "alpha",
+                "summary": "shared marker token",
+                "embedding": vec,
+            },
+        )
+    neo4j_backend.upsert_node(
+        "File",
+        {"path": "/b.md", "corpus": "beta", "summary": "shared marker token", "embedding": vec},
+    )
+
+
+def test_vector_search_filters_by_corpus(neo4j_backend) -> None:
+    _seed_two_corpora(neo4j_backend)
+    vec = [1.0] + [0.0] * 1023
+    # Without the filter, k=1 on identical vectors could return any corpus;
+    # with it, only the single beta node qualifies even though alpha nodes
+    # outnumber it in the index's top-k.
+    hits = neo4j_backend.vector_search("File", "embedding", vec, k=1, filters={"corpus": "beta"})
+    assert [r["node"]["path"] for r in hits] == ["/b.md"]
+    hits = neo4j_backend.vector_search("File", "embedding", vec, k=10, filters={"corpus": "alpha"})
+    assert {r["node"]["corpus"] for r in hits} == {"alpha"}
+    assert len(hits) == 3
+    assert (
+        neo4j_backend.vector_search("File", "embedding", vec, k=10, filters={"corpus": "nope"})
+        == []
+    )
+
+
+def test_full_text_search_filters_by_corpus(neo4j_backend) -> None:
+    _seed_two_corpora(neo4j_backend)
+    hits = neo4j_backend.full_text_search(
+        "File", "summary", "marker", k=1, filters={"corpus": "beta"}
+    )
+    assert [r["node"]["path"] for r in hits] == ["/b.md"]
+    hits = neo4j_backend.full_text_search(
+        "File", "summary", "marker", k=10, filters={"corpus": "alpha"}
+    )
+    assert len(hits) == 3
+    assert {r["node"]["corpus"] for r in hits} == {"alpha"}
+
+
+def test_filtered_search_limit_is_callers_k(neo4j_backend) -> None:
+    _seed_two_corpora(neo4j_backend)
+    vec = [1.0] + [0.0] * 1023
+    hits = neo4j_backend.vector_search("File", "embedding", vec, k=2, filters={"corpus": "alpha"})
+    assert len(hits) == 2
+    hits = neo4j_backend.full_text_search(
+        "File", "summary", "marker", k=2, filters={"corpus": "alpha"}
+    )
+    assert len(hits) == 2
+
+
+# --- upsert_nodes / delete_nodes ----------------------------------------------
+
+
+def _apply_chunk_schema(neo4j_backend) -> None:
+    from contextd.migrations.neo4j._0001_baseline import migration as m1
+    from contextd.migrations.neo4j._0008_chunks_and_topics import migration as m8
+
+    neo4j_backend.apply_migrations([m1, m8])
+
+
+def test_upsert_nodes_roundtrip_and_update(neo4j_backend) -> None:
+    _apply_chunk_schema(neo4j_backend)
+    rows = [
+        {"id": f"a.md#s~fine~{i}", "corpus": "t", "parent_id": "a.md#s", "ordinal": i, "text": "v1"}
+        for i in range(3)
+    ]
+    assert neo4j_backend.upsert_nodes("Chunk", rows) == 3
+    got = neo4j_backend.exec_read(
+        "MATCH (c:Chunk {corpus: 't'}) RETURN c.id AS id, c.text AS text ORDER BY c.ordinal"
+    )
+    assert [r["id"] for r in got] == [r["id"] for r in rows]
+    assert {r["text"] for r in got} == {"v1"}
+
+    # Re-upsert MERGEs on id: same node count, properties updated in place.
+    for r in rows:
+        r["text"] = "v2"
+    assert neo4j_backend.upsert_nodes("Chunk", rows) == 3
+    got = neo4j_backend.exec_read(
+        "MATCH (c:Chunk {corpus: 't'}) RETURN count(c) AS n, collect(c.text) AS t"
+    )
+    assert got[0]["n"] == 3
+    assert set(got[0]["t"]) == {"v2"}
+
+
+def test_upsert_nodes_batches_beyond_500(neo4j_backend) -> None:
+    _apply_chunk_schema(neo4j_backend)
+    rows = [{"id": f"big~fine~{i}", "corpus": "big", "ordinal": i} for i in range(1203)]
+    assert neo4j_backend.upsert_nodes("Chunk", rows) == 1203
+    got = neo4j_backend.exec_read("MATCH (c:Chunk {corpus: 'big'}) RETURN count(c) AS n")
+    assert got[0]["n"] == 1203
+
+
+def test_upsert_nodes_empty_is_noop(neo4j_backend) -> None:
+    _apply_chunk_schema(neo4j_backend)
+    assert neo4j_backend.upsert_nodes("Chunk", []) == 0
+
+
+def test_delete_nodes_counts_and_detaches(neo4j_backend) -> None:
+    _apply_chunk_schema(neo4j_backend)
+    neo4j_backend.upsert_node("File", {"path": "p.md", "corpus": "d"})
+    neo4j_backend.upsert_nodes(
+        "Chunk",
+        [
+            {"id": "p.md~fine~0", "corpus": "d", "parent_id": "p.md", "profile": "fine"},
+            {"id": "p.md~fine~1", "corpus": "d", "parent_id": "p.md", "profile": "fine"},
+            {"id": "p.md~coarse~0", "corpus": "d", "parent_id": "p.md", "profile": "coarse"},
+            {"id": "q.md~fine~0", "corpus": "other", "parent_id": "q.md", "profile": "fine"},
+        ],
+    )
+    for cid in ("p.md~fine~0", "p.md~fine~1", "p.md~coarse~0"):
+        neo4j_backend.upsert_edge(
+            "p.md", cid, "CONTAINS", origin="structural", src_label="File", dst_label="Chunk"
+        )
+    neo4j_backend.upsert_edge(
+        "p.md~fine~0",
+        "p.md~fine~1",
+        "NEXT_SIBLING",
+        origin="structural",
+        src_label="Chunk",
+        dst_label="Chunk",
+    )
+
+    # Two predicates AND together; structural edges go with the nodes.
+    assert neo4j_backend.delete_nodes("Chunk", where={"corpus": "d", "profile": "fine"}) == 2
+    remaining = neo4j_backend.exec_read("MATCH (c:Chunk) RETURN c.id AS id ORDER BY id")
+    assert [r["id"] for r in remaining] == ["p.md~coarse~0", "q.md~fine~0"]
+    edges = neo4j_backend.exec_read("MATCH ()-[r]->() RETURN count(r) AS n")
+    assert edges[0]["n"] == 1  # only File-CONTAINS->coarse chunk survives
+
+    # No match: zero, not an error.
+    assert neo4j_backend.delete_nodes("Chunk", where={"corpus": "missing"}) == 0
+    # The parent File is untouched by a Chunk-scoped delete.
+    assert neo4j_backend.exec_read("MATCH (f:File) RETURN count(f) AS n")[0]["n"] == 1
+
+
+def test_delete_nodes_requires_where(neo4j_backend) -> None:
+    with pytest.raises(ValueError, match="non-empty where"):
+        neo4j_backend.delete_nodes("Chunk", where={})

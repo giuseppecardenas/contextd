@@ -184,32 +184,35 @@ class GraphCandidateRetriever:
 
         Uses the unit's stored embedding — no embedder needed in the relate
         phases — and the unit's title (or filename) as the full-text query.
-        Either leg failing degrades to the other; both failing yields [].
+        Both legs are scoped to the unit's corpus server-side via ``filters``
+        (the backend over-fetches before applying the predicate, so ``k``
+        rows of the *right* corpus can come back). Either leg failing
+        degrades to the other; both failing yields [].
         """
         vector_rows: list[dict[str, object]] = []
         fulltext_rows: list[dict[str, object]] = []
         vec = self._stored_embedding(store, identity)
         if vec is not None:
             try:
-                vector_rows = [
-                    r
-                    for r in store.vector_search(
-                        label=label, property_name="embedding", query=vec, k=self._vector_k
-                    )
-                    if r["node"].get("corpus") == identity.corpus
-                ]
+                vector_rows = store.vector_search(
+                    label=label,
+                    property_name="embedding",
+                    query=vec,
+                    k=self._vector_k,
+                    filters={"corpus": identity.corpus},
+                )
             except Exception as exc:
                 _log.warning("candidates: vector leg failed for %s: %s", label, exc)
         query_text = _lucene_escape(identity.title or identity.rel_path.rsplit("/", 1)[-1])
         if query_text:
             try:
-                fulltext_rows = [
-                    r
-                    for r in store.full_text_search(
-                        label=label, property_name=search_prop, query=query_text, k=self._vector_k
-                    )
-                    if r["node"].get("corpus") == identity.corpus
-                ]
+                fulltext_rows = store.full_text_search(
+                    label=label,
+                    property_name=search_prop,
+                    query=query_text,
+                    k=self._vector_k,
+                    filters={"corpus": identity.corpus},
+                )
             except Exception as exc:
                 _log.warning("candidates: full-text leg failed for %s: %s", label, exc)
         if not vector_rows and not fulltext_rows:

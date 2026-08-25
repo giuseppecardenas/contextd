@@ -39,6 +39,9 @@ PRIMARY_KEY_BY_LABEL: Final[dict[str, str]] = {
     "WorkSession": "id",
     "Corpus": "name",
     "Meta": "schema_version",
+    # Retrieval-only labels (migration _0008); never LLM inference targets.
+    "Chunk": "id",
+    "Topic": "id",
 }
 
 

@@ -8,8 +8,10 @@ for strong match; corpus config can tune per-corpus.
 Wired as rung (d) of ``EntityCascadeResolver``: the cascade embeds the
 candidate name once, delegates the search here with ``vector=``, and
 reuses the same vector at mint time when nothing matches — one embed
-call serves both the check and the mint. ``corpus=`` post-filters
-results because ``GraphStore.vector_search`` has no corpus parameter.
+call serves both the check and the mint. ``corpus=`` is pushed down to
+``GraphStore.vector_search`` as ``filters={"corpus": ...}`` so the backend
+over-fetches and filters server-side rather than spending the top-``k`` on
+other corpora's neighbours.
 """
 
 from __future__ import annotations
@@ -39,8 +41,9 @@ class EntityResolver:
         """Return ``(canonical_pk, score)`` of a matching node, or ``None``.
 
         ``vector`` skips the embed call (the caller already computed it);
-        ``corpus`` post-filters hits to one corpus. ``k=5`` leaves headroom
-        for the post-filter to discard other-corpus neighbours.
+        ``corpus`` restricts hits to one corpus (applied server-side by the
+        backend, which over-fetches before filtering). ``k=5`` leaves
+        headroom for the threshold and PK checks below.
         """
         vec = vector if vector is not None else self._embed([name])[0]
         results = self._store.vector_search(
@@ -49,6 +52,7 @@ class EntityResolver:
             query=vec,
             k=5,
             threshold=self._threshold,
+            filters={"corpus": corpus} if corpus is not None else None,
         )
         key = primary_key_for(label)
         for top in results:
@@ -56,8 +60,6 @@ class EntityResolver:
             if score < self._threshold:
                 continue
             node = top["node"]
-            if corpus is not None and node.get("corpus") != corpus:
-                continue
             if key in node:
                 return str(node[key]), score
         return None
