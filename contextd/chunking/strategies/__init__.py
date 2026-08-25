@@ -83,6 +83,12 @@ def _propositions(p: ChunkProfile, tok: Tokenizer, d: StrategyDeps) -> ChunkStra
     return PropositionsStrategy(tok, d.inference, d.renderer)
 
 
+def _code(p: ChunkProfile, tok: Tokenizer, d: StrategyDeps) -> ChunkStrategy:
+    from contextd.chunking.strategies.code import make_code
+
+    return make_code(p, tok, d)
+
+
 STRATEGY_REGISTRY: dict[str, _Factory] = {
     "structural": _structural,
     "window": _window,
@@ -90,6 +96,7 @@ STRATEGY_REGISTRY: dict[str, _Factory] = {
     "sentence_window": _sentence_window,
     "semantic": _semantic,
     "propositions": _propositions,
+    "code": _code,
 }
 
 
