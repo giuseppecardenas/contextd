@@ -70,6 +70,39 @@ def test_inference_target_labels_adds_file_and_section_only() -> None:
     assert "Meta" not in targets
 
 
+def test_chunk_and_topic_are_declared_but_retrieval_only() -> None:
+    """Chunk/Topic (migration _0008) are ontology node types — the structural
+    edges that touch them must validate — but the LLM may neither mint them
+    nor name them as a relationship target."""
+    onto = Ontology.load_base()
+    assert "Chunk" in onto.node_types
+    assert "Topic" in onto.node_types
+    assert "embedding" in onto.node_types["Chunk"]
+    assert "parent_id" in onto.node_types["Chunk"]
+    assert "member_count" in onto.node_types["Topic"]
+    assert "Chunk" not in onto.mintable_labels()
+    assert "Topic" not in onto.mintable_labels()
+    assert "Chunk" not in onto.inference_target_labels()
+    assert "Topic" not in onto.inference_target_labels()
+
+
+def test_structural_edges_accept_chunk_and_topic_endpoints() -> None:
+    onto = Ontology.load_base()
+    # Chunks hang off their parent Section (section corpora) or File.
+    assert onto.validate_triple("Section", "CONTAINS", "Chunk")
+    assert onto.validate_triple("File", "CONTAINS", "Chunk")
+    assert onto.validate_triple("File", "CONTAINS", "Section")
+    assert not onto.validate_triple("Chunk", "CONTAINS", "Section")
+    # Sibling order among chunks and among sections; never mixed.
+    assert onto.validate_triple("Chunk", "NEXT_SIBLING", "Chunk")
+    assert onto.validate_triple("Section", "NEXT_SIBLING", "Section")
+    assert not onto.validate_triple("File", "NEXT_SIBLING", "Chunk")
+    # Topic membership.
+    assert onto.validate_triple("Section", "BELONGS_TO", "Topic")
+    assert onto.validate_triple("File", "BELONGS_TO", "Topic")
+    assert not onto.validate_triple("Section", "BELONGS_TO", "Chunk")
+
+
 def test_load_base_parses_edge_constraints() -> None:
     onto = Ontology.load_base()
     assert "REFERENCES" in onto.edge_types

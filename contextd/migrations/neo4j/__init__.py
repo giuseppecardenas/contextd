@@ -7,6 +7,7 @@ from contextd.migrations.neo4j._0004_backfill_inferred_at import migration as _0
 from contextd.migrations.neo4j._0005_purge_phantom_stubs import migration as _0005
 from contextd.migrations.neo4j._0006_entity_content_indexes import migration as _0006
 from contextd.migrations.neo4j._0007_entity_resolution_indexes import migration as _0007
+from contextd.migrations.neo4j._0008_chunks_and_topics import migration as _0008
 from contextd.storage.migration import Migration
 
-ALL_MIGRATIONS: list[Migration] = [_0001, _0002, _0003, _0004, _0005, _0006, _0007]
+ALL_MIGRATIONS: list[Migration] = [_0001, _0002, _0003, _0004, _0005, _0006, _0007, _0008]

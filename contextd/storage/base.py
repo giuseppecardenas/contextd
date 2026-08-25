@@ -118,6 +118,8 @@ class GraphStore(ABC):
         query: list[float],
         k: int,
         threshold: float | None = None,
+        *,
+        filters: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Return nearest neighbours of ``query`` by cosine similarity.
 
@@ -128,6 +130,17 @@ class GraphStore(ABC):
         similar). Neo4j normalises via ``(1 + dot) / 2`` so orthogonal vectors
         score 0.5 (not 0.0) and identical-direction vectors score 1.0;
         callers that pick thresholds must account for this normalisation.
+
+        ``filters`` is an equality map ``{property: value}``; a returned node
+        must satisfy every entry (``node.corpus = "docs"`` and so on). The
+        native index procedures cannot pre-filter, so implementations apply
+        the predicates *after* the index lookup and over-fetch from the index
+        (``k`` times a backend-specific factor, capped) so that a filtered
+        result set can still reach ``k`` rows. A result shorter than ``k`` is
+        therefore possible when the matching nodes are rare among the index's
+        nearest neighbours. Filter keys are validated as safe identifiers
+        (they are interpolated into the query); values are always bound as
+        parameters. ``None`` or ``{}`` applies no filter.
         """
 
     @abstractmethod
@@ -137,7 +150,53 @@ class GraphStore(ABC):
         property_name: str,
         query: str,
         k: int,
-    ) -> list[dict[str, Any]]: ...
+        *,
+        filters: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return the top-``k`` lexical matches for ``query`` on one index.
+
+        ``property_name`` selects the index by the ``{Label}_{property}_ft``
+        naming convention; a multi-property index (``Chunk_text_ft`` covers
+        ``text``, ``prefix`` and ``keywords``) is addressed by its lead
+        property. ``score`` is the backend's raw relevance score (Lucene BM25
+        on Neo4j — unbounded, not comparable with ``vector_search`` scores).
+
+        ``filters`` has the same contract as on :meth:`vector_search`: an
+        equality map applied after the index procedure, with the index
+        over-fetched so the filtered set can still fill ``k`` rows.
+        """
+
+    @abstractmethod
+    def upsert_nodes(self, label: str, rows: list[dict[str, Any]]) -> int:
+        """Batch insert-or-update nodes of one label; return the rows written.
+
+        Each row is MERGEd on the label's primary key (``PRIMARY_KEY_BY_LABEL``)
+        and the remaining properties are set additively, exactly as
+        :meth:`upsert_node` does for a single node — but in bulk, so callers
+        that write thousands of nodes (chunk generation writes roughly ten
+        chunks per section) avoid one round trip per node. Implementations
+        may split ``rows`` into transaction-sized batches.
+
+        Every row MUST carry the primary key: a row without it raises
+        ``ValueError`` naming the missing key and the row's index, before
+        anything is written. An empty ``rows`` list returns ``0`` without
+        touching the store.
+        """
+
+    @abstractmethod
+    def delete_nodes(self, label: str, *, where: dict[str, Any]) -> int:
+        """Delete every ``label`` node matching all of ``where``; return the count.
+
+        ``where`` is an equality map ``{property: value}`` and MUST be
+        non-empty — implementations raise ``ValueError`` otherwise, because
+        an unfiltered delete of a whole label is never a legitimate
+        operation (corpus deletion and refresh both scope by ``corpus`` at
+        minimum). Deletion detaches the nodes first, so every edge touching
+        them — whatever its ``origin`` — goes with them; callers rely on this
+        to drop a parent's structural ``CONTAINS`` / ``NEXT_SIBLING`` edges
+        together with its chunks. Keys are validated as safe identifiers;
+        values are bound as parameters.
+        """
 
     @property
     @abstractmethod

@@ -97,6 +97,10 @@ def test_reason_truncated() -> None:
         (_row(target_type="Wormhole"), "not an inference target"),
         (_row(target_type="Corpus"), "not an inference target"),
         (_row(target_type="Meta"), "not an inference target"),
+        # Retrieval-only labels (migration _0008): declared in the ontology so
+        # structural edges can be validated, but never an LLM target.
+        (_row(target_type="Chunk"), "not an inference target"),
+        (_row(target_type="Topic"), "not an inference target"),
         (_row(target_name=""), "empty or non-string target name"),
     ],
 )
@@ -239,17 +243,21 @@ def test_prompt_advertises_aliases_and_withholds_system_labels() -> None:
     assert "File" in advertised and "Section" in advertised
     assert "Corpus" not in advertised
     assert "Meta" not in advertised
+    assert "Chunk" not in advertised
+    assert "Topic" not in advertised
 
 
-def test_apply_rejects_system_label_backstop(caplog: pytest.LogCaptureFixture) -> None:
+@pytest.mark.parametrize("label", ["Corpus", "Meta", "Chunk", "Topic"])
+def test_apply_rejects_system_label_backstop(label: str, caplog: pytest.LogCaptureFixture) -> None:
     store = MagicMock()
     with caplog.at_level(logging.INFO, logger="contextd.indexer.phases"):
         written = _apply_inferred_edge(
-            store, "src.md", "File", _rel(target_type="Corpus", target_name="junk"), "c"
+            store, "src.md", "File", _rel(target_type=label, target_name="junk"), "c"
         )
     assert written is False
     assert "not an inference target" in caplog.text
     store.upsert_node.assert_not_called()
+    store.upsert_edge.assert_not_called()
 
 
 def test_disallowed_triple_dropped(caplog: pytest.LogCaptureFixture) -> None:

@@ -34,9 +34,23 @@ _CAPABILITIES = BackendCapabilities(
 )
 
 
+# Neo4j's vector/full-text procedures cannot pre-filter, so a filtered search
+# over-fetches ``k * over_fetch_factor`` rows from the index before the WHERE
+# clause; the cap bounds the procedure's work on very large ``k``.
+_MAX_PROCEDURE_K = 1000
+# UNWIND batch size for ``upsert_nodes``: bounds the transaction (and the
+# parameter payload — chunk rows carry a 1024-float embedding each).
+_UPSERT_BATCH_SIZE = 500
+
+
 class Neo4jBackend(GraphStore):
-    def __init__(self, config: Neo4jConfig) -> None:
+    def __init__(self, config: Neo4jConfig, *, over_fetch_factor: int = 4) -> None:
+        if isinstance(over_fetch_factor, bool) or not isinstance(over_fetch_factor, int):
+            raise ValueError(f"over_fetch_factor must be a non-bool int; got {over_fetch_factor!r}")
+        if over_fetch_factor < 1:
+            raise ValueError(f"over_fetch_factor must be >= 1; got {over_fetch_factor!r}")
         self._cfg = config
+        self._over_fetch_factor = over_fetch_factor
         self._driver: Driver | None = None
 
     @property
@@ -158,6 +172,30 @@ class Neo4jBackend(GraphStore):
         with self._driver.session() as session:
             session.run(cypher, params or {})
 
+    @staticmethod
+    def _equality_predicates(
+        values: dict[str, Any], *, alias: str, prefix: str, kind: str
+    ) -> tuple[str, dict[str, Any]]:
+        """Render ``{k: v}`` as ``alias.k = $prefix_k AND ...`` plus its params.
+
+        Keys are interpolated (Neo4j cannot parameterise property names) and
+        therefore go through ``validate_identifier``; values are always bound
+        as ``$prefix_key`` parameters so they can carry any type or content.
+        """
+        clauses: list[str] = []
+        params: dict[str, Any] = {}
+        for key, value in values.items():
+            validate_identifier(key, kind=kind)
+            clauses.append(f"{alias}.{key} = ${prefix}_{key}")
+            params[f"{prefix}_{key}"] = value
+        return " AND ".join(clauses), params
+
+    def _procedure_k(self, k: int, *, filtered: bool) -> int:
+        """Rows to request from the index procedure before post-filtering."""
+        if not filtered:
+            return k
+        return min(k * self._over_fetch_factor, _MAX_PROCEDURE_K)
+
     def vector_search(
         self,
         label: str,
@@ -165,6 +203,8 @@ class Neo4jBackend(GraphStore):
         query: list[float],
         k: int,
         threshold: float | None = None,
+        *,
+        filters: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Call Neo4j's db.index.vector.queryNodes procedure.
 
@@ -175,8 +215,12 @@ class Neo4jBackend(GraphStore):
         Note: Neo4j normalises similarity via ``(1 + dot) / 2``, so
         orthogonal vectors score 0.5 (not 0.0); identical direction scores
         1.0; anti-parallel scores 0.0. Threshold filtering is applied
-        client-side (a server-side WHERE after the CALL would require a WITH
-        re-projection).
+        client-side.
+
+        ``filters`` render as ``WITH node, score WHERE node.k = $f_k AND …``
+        after the CALL; because the procedure has no pre-filter the index is
+        asked for ``min(k * over_fetch_factor, 1000)`` rows and the caller's
+        ``k`` becomes the trailing ``LIMIT``.
         """
         assert self._driver is not None
         validate_identifier(label, kind="label")
@@ -184,14 +228,27 @@ class Neo4jBackend(GraphStore):
         validate_search_k(k)
         validated_threshold = validate_threshold(threshold)
         index_name = f"{label}_{property_name}_idx"
+        where, filter_params = self._equality_predicates(
+            filters or {}, alias="node", prefix="f", kind="property_name"
+        )
+        where_clause = f"WITH node, score WHERE {where} " if where else ""
         cypher = (
             "CALL db.index.vector.queryNodes($idx, $k, $q) "
             "YIELD node, score "
+            f"{where_clause}"
             "RETURN node, score "
-            "ORDER BY score DESC"
+            "ORDER BY score DESC "
+            "LIMIT $limit"
         )
+        params: dict[str, Any] = {
+            "idx": index_name,
+            "k": self._procedure_k(k, filtered=bool(where)),
+            "q": query,
+            "limit": k,
+            **filter_params,
+        }
         with self._driver.session() as session:
-            result = session.run(cypher, idx=index_name, k=k, q=query)
+            result = session.run(cypher, params)
             rows: list[dict[str, Any]] = [
                 {"node": dict(r["node"]), "score": float(r["score"])} for r in result
             ]
@@ -205,6 +262,8 @@ class Neo4jBackend(GraphStore):
         property_name: str,
         query: str,
         k: int,
+        *,
+        filters: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Call Neo4j's db.index.fulltext.queryNodes procedure.
 
@@ -212,19 +271,93 @@ class Neo4jBackend(GraphStore):
         higher is more relevant), NOT normalised like vector_search's
         similarity. Do not compare scores directly across the two search
         types.
+
+        ``filters`` follow the same shape as ``vector_search``. The full-text
+        procedure takes no positional ``k``, so the over-fetch is passed as
+        its ``{limit: $k}`` option and the caller's ``k`` becomes the trailing
+        ``LIMIT``.
         """
         assert self._driver is not None
         validate_identifier(label, kind="label")
         validate_identifier(property_name, kind="property_name")
         validate_search_k(k)
         index_name = f"{label}_{property_name}_ft"
+        where, filter_params = self._equality_predicates(
+            filters or {}, alias="node", prefix="f", kind="property_name"
+        )
+        where_clause = f"WITH node, score WHERE {where} " if where else ""
         cypher = (
-            "CALL db.index.fulltext.queryNodes($idx, $q) "
+            "CALL db.index.fulltext.queryNodes($idx, $q, {limit: $k}) "
             "YIELD node, score "
+            f"{where_clause}"
             "RETURN node, score "
             "ORDER BY score DESC "
-            f"LIMIT {k}"
+            "LIMIT $limit"
+        )
+        params: dict[str, Any] = {
+            "idx": index_name,
+            "q": query,
+            "k": self._procedure_k(k, filtered=bool(where)),
+            "limit": k,
+            **filter_params,
+        }
+        with self._driver.session() as session:
+            result = session.run(cypher, params)
+            return [{"node": dict(r["node"]), "score": float(r["score"])} for r in result]
+
+    def upsert_nodes(self, label: str, rows: list[dict[str, Any]]) -> int:
+        """Batch MERGE ``rows`` on the label's primary key via UNWIND.
+
+        Rows are written in batches of ``_UPSERT_BATCH_SIZE`` inside one
+        session so a large chunk set neither becomes one giant transaction
+        nor one round trip per node. Every row is validated before the first
+        write so a malformed row cannot leave a partial batch behind.
+        """
+        assert self._driver is not None
+        validate_identifier(label, kind="label")
+        key = primary_key_for(label)
+        for index, row in enumerate(rows):
+            if key not in row:
+                raise ValueError(
+                    f"upsert_nodes({label!r}, ...) row {index} missing required primary key "
+                    f"{key!r}; properties were {sorted(row)}"
+                )
+        if not rows:
+            return 0
+        cypher = (
+            f"UNWIND $rows AS r MERGE (n:{label} {{{key}: r.{key}}}) SET n += r "
+            "RETURN count(n) AS c"
+        )
+        written = 0
+        with self._driver.session() as session:
+            for offset in range(0, len(rows), _UPSERT_BATCH_SIZE):
+                batch = rows[offset : offset + _UPSERT_BATCH_SIZE]
+                record = session.run(cypher, rows=batch).single()
+                assert record is not None
+                written += int(record["c"])
+        return written
+
+    def delete_nodes(self, label: str, *, where: dict[str, Any]) -> int:
+        """DETACH DELETE the ``label`` nodes matching every ``where`` predicate."""
+        if not where:
+            raise ValueError(
+                f"delete_nodes({label!r}) requires a non-empty where map — "
+                "an unfiltered delete would wipe every node of the label."
+            )
+        assert self._driver is not None
+        validate_identifier(label, kind="label")
+        predicates, params = self._equality_predicates(
+            where, alias="n", prefix="w", kind="property_name"
+        )
+        cypher = (
+            f"MATCH (n:{label}) WHERE {predicates} "
+            "WITH collect(n) AS ns "
+            "UNWIND ns AS n "
+            "DETACH DELETE n "
+            "RETURN count(*) AS c"
         )
         with self._driver.session() as session:
-            result = session.run(cypher, idx=index_name, q=query)
-            return [{"node": dict(r["node"]), "score": float(r["score"])} for r in result]
+            record = session.run(cypher, params).single()
+            # ``count(*)`` over zero rows still yields one row carrying 0.
+            assert record is not None
+            return int(record["c"])

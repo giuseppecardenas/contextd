@@ -45,6 +45,8 @@ Markdown files are routed through the section-level pipeline; non-markdown files
 
 The storage layer is a graph + vector store running on **Neo4j Community** in Docker, bound to port 7687 over the Bolt protocol. The layer is structured behind an abstract base class so a second backend could be added without touching consumers, but Neo4j is the only backend that ships today.
 
+The stored model has two bands. `File` and `Section` are the LLM units — summarised, embedded, and the sources of inferred edges — alongside the mintable entity labels (`Pattern`, `Ticket`, `Risk`, …). Below them sit two **retrieval-only** labels added by migration `_0008`: `Chunk` (sub-section retrieval units hung off their parent `Section` or `File` via `CONTAINS {origin: "structural"}`, ordered by `NEXT_SIBLING`) and `Topic` (corpus-level clusters that `Section`/`File` join via `BELONGS_TO`). Both carry a 1024-dim cosine vector index and a full-text index (`Chunk_text_ft` spans `text`/`prefix`/`keywords` and is addressed by `property_name="text"`), but neither is ever an inference target: `Ontology.mintable_labels()` and `inference_target_labels()` exclude them, and the relate phase drops any inferred edge that names them.
+
 #### GraphStore ABC
 
 `contextd/storage/base.py` defines the `GraphStore` abstract base class. All higher layers (indexer, MCP server, CLI) depend exclusively on this ABC. The backend-specific module (`neo4j.py`) is confined to `contextd/storage/`; a CI grep step in `.github/workflows/ci.yml` enforces the separation, keeping the seam open for a future second backend.
@@ -56,15 +58,19 @@ The ABC surface:
 | `connect() / close()` | Lifecycle management |
 | `apply_migrations(migrations)` | Forward-only schema migrations |
 | `upsert_node(label, props) → id` | Insert or update a node |
+| `upsert_nodes(label, rows) → int` | Batch `UNWIND … MERGE` on the label's primary key; every row must carry the PK (`ValueError` names the key and row index); `[]` returns 0 without a round trip. Neo4j writes in batches of 500 |
 | `upsert_edge(src, dst, edge_type, origin, props, *, src_label, dst_label)` | Insert or update an edge |
 | `delete_edges(src, *, origin, edge_type, src_label)` | Scoped delete; raises `ValueError` when both `origin` and `edge_type` are `None` |
+| `delete_nodes(label, *, where) → int` | `DETACH DELETE` every node matching all equality predicates in `where`; returns the count. `where` must be non-empty — an unfiltered whole-label delete is never allowed |
 | `exec_read(cypher, params)` | Read-only Cypher |
 | `exec_write(cypher, params)` | Write Cypher |
-| `vector_search(label, prop, query, k, threshold)` | Cosine-similarity nearest-neighbour lookup |
-| `full_text_search(label, prop, query, k)` | Full-text index query |
+| `vector_search(label, prop, query, k, threshold, *, filters)` | Cosine-similarity nearest-neighbour lookup; `filters` is an equality map applied server-side after the index procedure |
+| `full_text_search(label, prop, query, k, *, filters)` | Full-text index query; same `filters` contract |
 | `capabilities` | `BackendCapabilities` frozen dataclass |
 
 `src_label` and `dst_label` are advisory on both backends but are required for correct edge MERGE semantics on Neo4j.
+
+`filters` on the two search methods render as `WITH node, score WHERE node.k = $f_k AND …` between the `CALL` and the `RETURN`. Neo4j's index procedures cannot pre-filter, so the backend over-fetches — it asks the index for `min(k × over_fetch_factor, 1000)` rows (`over_fetch_factor` is a `Neo4jBackend` constructor kwarg, default 4) and applies the caller's `k` as the trailing `LIMIT`. A filtered result can therefore come back shorter than `k` when the matching nodes are rare among the index's nearest neighbours. Filter keys pass `validate_identifier`; values are always bound as parameters. The candidate retriever and the entity resolver use `filters={"corpus": …}` rather than discarding other-corpus rows client-side.
 
 #### BackendCapabilities
 
@@ -84,7 +90,7 @@ The `unlimited_writers` property returns `True` when `concurrent_writers == -1`.
 
 #### Primary-key map
 
-`contextd/storage/_keys.py` contains `PRIMARY_KEY_BY_LABEL` — the canonical label-to-PK-property mapping that mirrors the migration DDL for both backends. Both `upsert_node` and `delete_edges` implementations delegate PK lookups here. When a migration adds a new node label with a PK, this map must be updated in lock-step.
+`contextd/storage/_keys.py` contains `PRIMARY_KEY_BY_LABEL` — the canonical label-to-PK-property mapping that mirrors the migration DDL for both backends. The `upsert_node`, `upsert_nodes` and `delete_edges` implementations delegate PK lookups here. When a migration adds a new node label with a PK, this map must be updated in lock-step.
 
 ```python
 # abbreviated extract

@@ -14,13 +14,15 @@
     "Risk":        ["description", "severity", "corpus"],
     "WorkSession": ["id", "start", "end", "focus_area", "description"],
     "Corpus":      ["name", "root", "registered_at", "content_profile"],
-    "Meta":        ["schema_version", "contextd_version", "backend_name", "initialised_at"]
+    "Meta":        ["schema_version", "contextd_version", "backend_name", "initialised_at"],
+    "Chunk":       ["id", "corpus", "path", "parent_id", "parent_label", "profile", "strategy", "ordinal", "kind", "part", "text", "prefix", "keywords", "token_count", "start_line", "end_line", "hash", "embedding", "updated"],
+    "Topic":       ["id", "corpus", "layer", "title", "summary", "embedding", "member_count", "updated"]
   },
   "edge_types": {
-    "CONTAINS":        {"src": ["File"],    "dst": ["Section"]},
+    "CONTAINS":        {"src": ["File", "Section"], "dst": ["Section", "Chunk"]},
     "PARENT_OF":       {"src": ["Section"], "dst": ["Section"]},
-    "NEXT_SIBLING":    {"src": ["Section"], "dst": ["Section"]},
-    "BELONGS_TO":      {"src": ["File", "Section", "Artifact", "Ticket", "Pattern", "Service"], "dst": ["Client", "Service", "Repo", "Ticket"]},
+    "NEXT_SIBLING":    {"src": ["Section", "Chunk"], "dst": ["Section", "Chunk"]},
+    "BELONGS_TO":      {"src": ["File", "Section", "Artifact", "Ticket", "Pattern", "Service"], "dst": ["Client", "Service", "Repo", "Ticket", "Topic"]},
     "CREATED_BY":      {"src": ["File", "Section", "Artifact", "Ticket", "Repo"], "dst": ["Client", "WorkSession"]},
     "DOCUMENTS":       {"src": ["File", "Section", "Artifact"], "dst": []},
     "DOCUMENTED_IN":   {"src": [], "dst": ["File", "Section", "Artifact"]},

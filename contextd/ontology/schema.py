@@ -26,20 +26,31 @@ from types import MappingProxyType
 # to the existing node or are dropped) but must never mint them.
 ENUMERATION_OWNED_LABELS: frozenset[str] = frozenset({"File", "Section"})
 
+# Node labels that exist purely for retrieval: Chunk (sub-section retrieval
+# units hung off Section/File by the chunking phases, migration _0008) and
+# Topic (corpus-level clusters that Section/File join via BELONGS_TO). Neither
+# is summarised, related or minted by the LLM — Section and File stay the
+# inference units — so the relate phase never advertises them as targets and
+# drops any inferred edge that names them.
+RETRIEVAL_ONLY_LABELS: frozenset[str] = frozenset({"Chunk", "Topic"})
+
 # Node labels that are never AI-inferred entity targets: the enumeration-owned
-# pair above, plus Corpus/Meta which are indexer bookkeeping (inference had
-# been observed minting dozens of junk "Corpus" nodes and nameless "Meta"
-# nodes before these were withheld). Every OTHER declared node type is a
-# "mintable" entity that the relate phase may create on demand as an inference
-# target — see Ontology.mintable_labels(). Shared by the relate phase and the
-# ``prune-entities`` CLI command so the two agree on the structural/entity
-# split.
-NON_ENTITY_LABELS: frozenset[str] = ENUMERATION_OWNED_LABELS | frozenset({"Corpus", "Meta"})
+# pair above, Corpus/Meta which are indexer bookkeeping (inference had been
+# observed minting dozens of junk "Corpus" nodes and nameless "Meta" nodes
+# before these were withheld), and the retrieval-only Chunk/Topic pair. Every
+# OTHER declared node type is a "mintable" entity that the relate phase may
+# create on demand as an inference target — see Ontology.mintable_labels().
+# Shared by the relate phase and the ``prune-entities`` CLI command so the two
+# agree on the structural/entity split.
+NON_ENTITY_LABELS: frozenset[str] = (
+    ENUMERATION_OWNED_LABELS | frozenset({"Corpus", "Meta"}) | RETRIEVAL_ONLY_LABELS
+)
 
 # Edge types that describe on-disk document structure and are therefore written
-# only by the indexer's section-granular enumeration phase with
-# ``origin="structural"``: CONTAINS is File->Section, PARENT_OF is Section->
-# Section heading nesting, and NEXT_SIBLING is Section->Section document order.
+# only by the indexer's enumeration and chunking phases with
+# ``origin="structural"``: CONTAINS is File->Section and Section/File->Chunk,
+# PARENT_OF is Section->Section heading nesting, and NEXT_SIBLING is
+# Section->Section / Chunk->Chunk document order.
 # The relate phase excludes these from the allow-list it advertises to the model
 # and rejects them if the model emits one anyway, because their meaning is
 # defined entirely by the heading parser and cannot be recovered from prose. An
@@ -123,8 +134,9 @@ class Ontology:
         """Node labels inference may create on demand as entity targets.
 
         Declared node types minus :data:`NON_ENTITY_LABELS`: File/Section are
-        enumeration-owned (referenced, never minted) and Corpus/Meta are
-        system bookkeeping (neither referenced nor minted by inference).
+        enumeration-owned (referenced, never minted), Corpus/Meta are system
+        bookkeeping and Chunk/Topic are retrieval-only (none of those four is
+        referenced or minted by inference).
         """
         return frozenset(self.node_types) - NON_ENTITY_LABELS
 
@@ -133,7 +145,7 @@ class Ontology:
 
         The mintable entity labels plus the enumeration-owned File/Section
         (legal as *reference* targets — resolved to existing nodes, never
-        minted). Corpus and Meta are excluded entirely.
+        minted). Corpus, Meta, Chunk and Topic are excluded entirely.
         """
         return self.mintable_labels() | ENUMERATION_OWNED_LABELS
 

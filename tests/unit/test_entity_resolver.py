@@ -12,6 +12,22 @@ def test_finds_similar_existing_node_above_threshold() -> None:
     assert resolved == "React"
 
 
+def test_corpus_is_pushed_down_as_backend_filter() -> None:
+    """``corpus=`` becomes ``filters={"corpus": ...}`` on the store call (the
+    backend over-fetches and filters server-side); without a corpus no
+    filter is sent."""
+    mock_store = MagicMock()
+    mock_store.vector_search.return_value = [
+        {"node": {"name": "React", "corpus": "c"}, "score": 0.95}
+    ]
+    mock_embed = MagicMock(return_value=[[0.1, 0.2, 0.3]])
+    resolver = EntityResolver(store=mock_store, embedder=mock_embed, threshold=0.92)
+    assert resolver.resolve("Technology", "ReactJS", corpus="c") == "React"
+    assert mock_store.vector_search.call_args.kwargs["filters"] == {"corpus": "c"}
+    resolver.resolve("Technology", "ReactJS")
+    assert mock_store.vector_search.call_args.kwargs["filters"] is None
+
+
 def test_returns_none_when_no_similar_match() -> None:
     mock_store = MagicMock()
     mock_store.vector_search.return_value = []
