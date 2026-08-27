@@ -311,6 +311,19 @@ class SearchConfig(BaseModel):
     over_fetch_factor: int = Field(default=4, ge=1, le=20)
     """Multiplier on ``k`` when a filtered vector/full-text search must
     post-filter results (the backend procedures cannot pre-filter)."""
+    expand: Literal["none", "units"] = "none"
+    """Default graph expansion for the ``search`` tool: ``units`` appends
+    Sections/Files within two hops of the top hits (shared entities,
+    inferred/manual unit edges) and fuses them with the direct hits —
+    the relational "which modules implement this" case. Clients may
+    override per call."""
+    expand_seeds: int = Field(default=3, ge=1, le=10)
+    """Top direct hits that seed the graph walk."""
+    graph_weight: float = Field(default=2.0, ge=0.0)
+    """RRF weight of the graph rows relative to the direct rows. With
+    ``rrf_k = 60``: 0.5 ≈ graph rows trail every direct row, 1.0 ≈
+    interleave (direct wins ties), 2.0 (default) ≈ graph rows lead, behind
+    the rank-1 direct hit — a client that asked for expansion gets it."""
 
     @model_validator(mode="after")
     def _weights_not_both_zero(self) -> SearchConfig:

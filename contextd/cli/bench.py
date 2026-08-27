@@ -14,8 +14,10 @@ from contextd.cli._shared import _load_cfg, console
 if TYPE_CHECKING:
     from contextd.bench.run import BenchReport
     from contextd.search.collapse import ReturnUnit
+    from contextd.search.graph_expand import ExpandMode
 
 _RETURN_UNITS: tuple[str, ...] = ("chunk", "section", "file", "auto")
+_EXPAND_MODES: tuple[str, ...] = ("none", "units")
 
 
 def _parse_profile_sets(values: tuple[str, ...], known: list[str]) -> list[list[str] | None]:
@@ -84,6 +86,21 @@ def _compare(a_path: Path, b_path: Path) -> None:
 )
 @click.option("--k", "k", type=click.IntRange(min=1), default=5, show_default=True)
 @click.option(
+    "--expand",
+    type=click.Choice(_EXPAND_MODES),
+    default=None,
+    help=(
+        "Graph expansion: `units` fuses Sections/Files linked to the top hits through "
+        "shared entities with the direct hits. Default: [search] expand from config.toml."
+    ),
+)
+@click.option(
+    "--graph-weight",
+    type=click.FloatRange(min=0.0),
+    default=None,
+    help="RRF weight of the expanded rows (only with --expand units). Default: [search] graph_weight.",
+)
+@click.option(
     "--json",
     "json_out",
     type=click.Path(dir_okay=False, path_type=Path),
@@ -104,6 +121,8 @@ def bench(
     profile_sets: tuple[str, ...],
     return_unit: str | None,
     k: int,
+    expand: str | None,
+    graph_weight: float | None,
     json_out: Path | None,
     compare: tuple[Path, Path] | None,
 ) -> None:
@@ -171,6 +190,8 @@ def bench(
                         return_unit=unit,
                         k=k,
                         profile_weights=weights,
+                        expand=cast("ExpandMode | None", expand),
+                        graph_weight=graph_weight,
                     )
                 )
             except Exception as exc:

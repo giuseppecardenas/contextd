@@ -105,6 +105,7 @@ def fuse_rankers(
     label: str,
     limit: int,
     rrf_k: int = 60,
+    key_prop: str | None = None,
 ) -> list[dict[str, Any]]:
     """RRF over any number of ``(rows, weight)`` rankers.
 
@@ -112,8 +113,13 @@ def fuse_rankers(
     (one vector + one full-text ranker per chunk profile). Rankers are folded
     in list order, which fixes tie-breaking exactly as the two-ranker form
     does.
+
+    ``key_prop`` overrides the label's primary key as the identity used to
+    merge a node across rankers. The graph-expansion step fuses *collapsed
+    unit rows* — Sections, Files and chunks mixed in one list — which all
+    carry ``id``, so it keys on that rather than on any one label's PK.
     """
-    key_prop = primary_key_for(label)
+    key_prop = key_prop or primary_key_for(label)
     scores: dict[Any, float] = {}
     nodes: dict[Any, dict[str, Any]] = {}
     first_seen: dict[Any, int] = {}

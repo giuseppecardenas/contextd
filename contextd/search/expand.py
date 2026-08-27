@@ -54,6 +54,52 @@ def attach_context(store: GraphStore, rows: list[dict[str, Any]], *, window: int
         r["context_after"] = "\n".join(after)
 
 
+_ELLIPSIS = " [...]"
+
+
+def _clip(text: str, max_chars: int) -> str:
+    if len(text) > max_chars:
+        return text[: max(0, max_chars - len(_ELLIPSIS))].rstrip() + _ELLIPSIS
+    return text
+
+
+def attach_evidence_context(
+    store: GraphStore, rows: list[dict[str, Any]], *, window: int, max_chars: int
+) -> None:
+    """Add neighbour context to the ``evidence`` block of collapsed unit rows.
+
+    Used when collapse ran with ``window = 0`` because the rows were still
+    candidates (graph expansion fuses a deeper direct list than the caller's
+    ``limit``); once the final rows are known the neighbours are fetched for
+    just those, by ``evidence.chunk_id`` — one index-backed query per row,
+    exactly what :func:`contextd.search.collapse.collapse` would have issued,
+    clipped to the same ``max_chars``. Rows without evidence (graph-only
+    rows) or already carrying context are left alone.
+    """
+    if window <= 0:
+        return
+    for r in rows:
+        ev = r.get("evidence")
+        if not isinstance(ev, dict) or "context_before" in ev or ev.get("chunk_id") is None:
+            continue
+        try:
+            found = store.exec_read(
+                "MATCH (c:Chunk {id: $id}) "
+                "MATCH (n:Chunk {parent_id: c.parent_id, profile: c.profile}) "
+                "WHERE n.ordinal >= c.ordinal - $w AND n.ordinal <= c.ordinal + $w "
+                "AND n.ordinal <> c.ordinal "
+                "RETURN n.ordinal AS ordinal, n.text AS text, c.ordinal AS pivot "
+                "ORDER BY n.ordinal",
+                {"id": str(ev["chunk_id"]), "w": int(window)},
+            )
+        except Exception:
+            continue
+        before = [str(x["text"]) for x in found if int(x["ordinal"]) < int(x["pivot"])]
+        after = [str(x["text"]) for x in found if int(x["ordinal"]) > int(x["pivot"])]
+        ev["context_before"] = _clip("\n".join(before), max_chars)
+        ev["context_after"] = _clip("\n".join(after), max_chars)
+
+
 def expand_chunk(store: GraphStore, chunk_id: str, *, window: int = 2) -> dict[str, Any] | None:
     """One chunk with its neighbours and the parent's summary — the
     assistant's "show me more around this hit"."""

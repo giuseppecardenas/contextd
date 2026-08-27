@@ -250,7 +250,7 @@ contextd costs --since 2026-04-01
 
 ## `contextd bench`
 
-**Synopsis:** `contextd bench CORPUS [--queries PATH] [--profiles a,b]... [--return-unit UNIT] [--k N] [--json PATH]`
+**Synopsis:** `contextd bench CORPUS [--queries PATH] [--profiles a,b]... [--return-unit UNIT] [--k N] [--expand none|units] [--graph-weight W] [--json PATH]`
 **Synopsis:** `contextd bench --compare A.json B.json`
 
 | Argument / Flag | Default | Description |
@@ -260,6 +260,8 @@ contextd costs --since 2026-04-01
 | `--profiles` | every profile in the graph | Comma-separated chunk profiles to query. Repeat the option to bench several configurations in one run — each value becomes one table row |
 | `--return-unit` | `[search] return_unit` from `config.toml` | `chunk`, `section`, `file`, or `auto` (small-to-big collapse target) |
 | `--k` | `5` | Top-k depth for recall/precision/IoU; a query's own `k` overrides it |
+| `--expand` | `[search] expand` from `config.toml` | `none` or `units` — fuse Sections/Files linked to the top hits through shared entities with the direct hits (see `search` in [docs/mcp.md](mcp.md)); the table row is suffixed `+graph(W)` |
+| `--graph-weight` | `[search] graph_weight` | RRF weight of the expanded rows relative to the direct hits (only with `--expand units`) |
 | `--json` | none | Save every configuration's report (`{"reports": [...]}`) to this file |
 | `--compare` | none | Diff two saved reports (signed per-metric delta, `B - A`) and exit without touching the backend |
 

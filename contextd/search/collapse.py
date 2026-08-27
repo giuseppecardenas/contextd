@@ -48,6 +48,11 @@ def _evidence(
 ) -> dict[str, Any]:
     ev: dict[str, Any] = {
         "chunk_id": row.get("id"),
+        # The chunk's own parent, which for a File row of a section-granular
+        # file is the Section that matched — the finest unit graph expansion
+        # can seed from.
+        "parent_id": row.get("parent_id"),
+        "parent_label": row.get("parent_label"),
         "profile": row.get("profile"),
         "kind": row.get("kind"),
         "start_line": row.get("start_line"),

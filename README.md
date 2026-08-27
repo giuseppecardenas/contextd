@@ -733,6 +733,9 @@ auto_merge_threshold = 0.5  # hit ratio at which `auto` returns the parent
 window         = 1          # neighbour chunks attached as evidence context per side
 max_evidence_chars = 1200   # evidence text truncation per row
 over_fetch_factor = 4       # k multiplier for post-filtered vector/full-text queries
+expand         = "none"     # "units": fuse Sections/Files linked to the top hits via shared entities
+expand_seeds   = 3          # top direct hits that seed the graph walk (1-10)
+graph_weight   = 2.0        # RRF weight of expanded rows: 0.5 trail, 1.0 interleave, 2.0 lead
 
 [logging]
 level          = "info"

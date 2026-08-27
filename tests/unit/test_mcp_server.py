@@ -299,3 +299,25 @@ def test_load_profile_weights_reads_corpora(tmp_path: Path) -> None:
     )
     (corpora / "broken.toml").write_text("not toml [[", encoding="utf-8")
     assert _load_profile_weights(tmp_path) == {"fine": 2.0}
+
+
+def test_search_descriptor_exposes_expand_enum() -> None:
+    search = next(t for t in _GENERIC_TOOL_DESCRIPTORS if t.name == "search")
+    assert search.inputSchema["properties"]["expand"]["enum"] == ["none", "units"]
+
+
+def test_dispatch_search_threads_expand_from_args_and_walk_knobs_from_config() -> None:
+    from unittest.mock import patch
+
+    from contextd.config import SearchConfig
+
+    store = MagicMock()
+    cfg = SearchConfig(expand="none", expand_seeds=5, graph_weight=2.0)
+    with patch("contextd.mcp_server.tools.search", return_value=[]) as search:
+        _dispatch_tool("search", {"query": "q", "expand": "units"}, store, search_cfg=cfg)
+        kwargs = search.call_args.kwargs
+        assert kwargs["expand"] == "units"
+        assert kwargs["expand_seeds"] == 5 and kwargs["graph_weight"] == 2.0
+        # Without a client override the config default applies.
+        _dispatch_tool("search", {"query": "q"}, store, search_cfg=cfg)
+        assert search.call_args.kwargs["expand"] == "none"

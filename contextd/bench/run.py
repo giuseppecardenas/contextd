@@ -27,6 +27,7 @@ from contextd.config import SearchConfig
 from contextd.mcp.tools import search
 from contextd.providers.base import EmbeddingProvider
 from contextd.search.collapse import ReturnUnit
+from contextd.search.graph_expand import ExpandMode
 from contextd.storage.base import GraphStore
 
 
@@ -45,7 +46,10 @@ class BenchReport:
         """Short human name for table rows: ``fine,coarse/auto@5``."""
         profiles = self.config.get("profiles")
         names = ",".join(profiles) if profiles else "all"
-        return f"{names}/{self.config.get('return_unit', '?')}@{self.config.get('k', '?')}"
+        label = f"{names}/{self.config.get('return_unit', '?')}@{self.config.get('k', '?')}"
+        if self.config.get("expand", "none") != "none":
+            label += f"+graph({self.config.get('graph_weight', '?')})"
+        return label
 
     def to_dict(self) -> dict[str, Any]:
         rows: list[dict[str, Any]] = []
@@ -126,6 +130,8 @@ def run_bench(
     return_unit: ReturnUnit,
     k: int,
     profile_weights: dict[str, float] | None = None,
+    expand: ExpandMode | None = None,
+    graph_weight: float | None = None,
 ) -> BenchReport:
     """Score every query in ``spec`` for one configuration.
 
@@ -133,12 +139,16 @@ def run_bench(
     the query's own ``k`` when it overrides the run's. Ranking knobs
     (``mode``, ``rrf_k``, ``fetch_k``, weights, ``auto_merge_threshold``)
     come from ``search_cfg`` exactly as the MCP server passes them, so a
-    bench run measures what an assistant would get. Neighbour context
-    (``window``) is forced to 0: it never affects a score and would only
-    add per-row queries to the measured latency.
+    bench run measures what an assistant would get; ``expand`` and
+    ``graph_weight`` override the config's graph-expansion settings so one
+    run can measure the walk's effect. Neighbour context (``window``) is
+    forced to 0: it never affects a score and would only add per-row
+    queries to the measured latency.
     """
     scores: list[QueryScore] = []
     latencies: list[float] = []
+    expand_mode: ExpandMode = expand if expand is not None else search_cfg.expand
+    g_weight = graph_weight if graph_weight is not None else search_cfg.graph_weight
     for query in spec.queries:
         top_k = query.k or k
         started = time.perf_counter()
@@ -159,6 +169,9 @@ def run_bench(
             auto_merge_threshold=search_cfg.auto_merge_threshold,
             window=0,
             max_evidence_chars=search_cfg.max_evidence_chars,
+            expand=expand_mode,
+            expand_seeds=search_cfg.expand_seeds,
+            graph_weight=g_weight,
         )
         latencies.append((time.perf_counter() - started) * 1000.0)
         hits = [row_to_target(r) for r in rows]
@@ -181,5 +194,7 @@ def run_bench(
         "k": k,
         "mode": search_cfg.mode,
         "embedder": embedder is not None,
+        "expand": expand_mode,
+        "graph_weight": g_weight,
     }
     return BenchReport(config=config, scores=scores, summary=summary, latencies_ms=latencies)

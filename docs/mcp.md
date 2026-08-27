@@ -103,6 +103,7 @@ The default `kind` is **`Chunk`** — the retrieval chunks the indexer derives b
 | `profiles` | string[] | no | server `[search] chunk_profiles`, else every profile present |
 | `return_unit` | string | no | server config (`auto`) |
 | `window` | integer 0–10 | no | server config (1) |
+| `expand` | string | no | server config (`none`) |
 
 `mode` is one of `hybrid`, `fulltext`, or `vector`. The server degrades to full-text automatically when no embedder is configured, the `kind` has no vector index (`File`, `Section`, `Chunk` and `Topic` do), or the embedding call fails; `mode = "vector"` on a non-vector-capable kind returns an empty result rather than a silent lexical fallback. The RRF constant, candidate depth, per-modality weights, `auto_merge_threshold` and `max_evidence_chars` are set server-side via the `[search]` config block.
 
@@ -120,7 +121,20 @@ Returns (chunk kind): rows of the shape
               "context_before": "...", "context_after": "..."}}
 ```
 
-`unit` is `chunk`, `section` or `file`; chunk rows carry `parent_id` / `parent_label` instead of the parent's fields. Line numbers are 0-based, `end_line` exclusive. Other kinds return the node's properties (the raw embedding vector is stripped) plus `score`. In `hybrid` / `vector` mode `score` is an RRF fused score; in single-ranker `fulltext` mode it is the backend's raw relevance score — the two are not comparable across modes.
+`unit` is `chunk`, `section` or `file`; chunk rows carry `parent_id` / `parent_label` instead of the parent's fields. Line numbers are 0-based, `end_line` exclusive.
+
+`expand = "units"` is for relational questions — *which modules implement the requirement described here?* — where the passage that matches the query and the units that answer it share almost no vocabulary but do share **entities** (a requirement id, a registry function, a type). The top `expand_seeds` (server config, default 3) direct hits seed one graph walk — each from the finest unit that matched (`evidence.parent_id`, the Section containing the best chunk, even when the row is a File): every Section/File within two hops through a shared entity (`(seed)-->(entity)<--(unit)`, hub entities damped by `1 / log(2 + degree)`) or through a direct `inferred` / `manual` edge between the two units (structural `CONTAINS` / `NEXT_SIBLING` edges are excluded — `window` and `section_tree` cover those). With `return_unit = "file"` reached Sections roll up to their File. The walk's rows, headed by the seed rows themselves so a seed never loses its rank to its own neighbours, are fused with the direct hits by the same RRF, weighted by `graph_weight` (server config, default 2.0: graph rows lead, behind the rank-1 direct hit; 1.0 ≈ interleave, direct wins ties; 0.5 ≈ graph rows trail every direct row), so a unit that both the ranker and the graph point at climbs above either alone. It costs one read query and no provider call. Rows reached through the walk carry a `via` block — the explanation of why a unit that matched no query term is in the result:
+
+```json
+{"unit": "file", "id": "lua/settlements/register.lua", "path": "lua/settlements/register.lua",
+ "name": "register.lua", "summary": "...", "corpus": "runeledger", "score": 0.016,
+ "via": {"entities": ["register_settlement_type", "SettlementTypeDef", "FR-STL-001"],
+         "seeds": ["docs/prd/03e-economy-settlements.md#design-philosophy"]}}
+```
+
+A graph-only row has no `evidence` (nothing in it matched the query); a row present in both lists keeps its direct evidence and gains `via`. Chunk searches only — other `kind`s ignore `expand`.
+
+Measured on the runeledger corpus (`scripts/bench_vs_grep.py` specs): on ten *which modules implement …* questions, `expand = "units"` lifts recall@k from 0.21 to 0.65 (precision 0.19 → 0.57) at the default weight, 0.53 at 1.0, 0.44 at 0.5, for ~60 ms extra. It is not free on questions that are *not* relational: with expansion switched on, twenty paraphrased-passage questions drop from recall@5 0.95 to 0.70 (0.80 at weight ≤ 1.0) because graph rows take the slots below rank 1 — ask for `expand` when the question is about related units, not when it is about a passage. Other kinds return the node's properties (the raw embedding vector is stripped) plus `score`. In `hybrid` / `vector` mode `score` is an RRF fused score; in single-ranker `fulltext` mode it is the backend's raw relevance score — the two are not comparable across modes.
 
 ---
 

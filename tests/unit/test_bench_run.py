@@ -116,6 +116,8 @@ def test_run_bench_scores_and_per_query_k() -> None:
         "k": 5,
         "mode": "hybrid",
         "embedder": True,
+        "expand": "none",
+        "graph_weight": 2.0,
     }
     assert report.label == "fine,coarse/auto@5"
 
@@ -164,3 +166,43 @@ def test_report_to_dict_round_trips_and_is_json() -> None:
     assert back.config == report.config
     assert back.summary == report.summary
     assert back.latencies_ms == report.latencies_ms
+
+
+def test_run_bench_threads_expand_and_graph_weight_and_labels_row() -> None:
+    spec = BenchSpec(queries=[BenchQuery("q", [Target("a.md")])])
+    cfg = SearchConfig(expand="none", expand_seeds=4, graph_weight=1.0)
+    with patch("contextd.bench.run.search", return_value=[]) as search:
+        report = run_bench(
+            MagicMock(),
+            spec,
+            embedder=None,
+            search_cfg=cfg,
+            corpus="c",
+            profiles=["fine"],
+            return_unit="file",
+            k=5,
+            expand="units",
+            graph_weight=2.0,
+        )
+    kwargs = search.call_args.kwargs
+    assert kwargs["expand"] == "units" and kwargs["graph_weight"] == 2.0
+    assert kwargs["expand_seeds"] == 4
+    assert report.config["expand"] == "units" and report.config["graph_weight"] == 2.0
+    assert report.label == "fine/file@5+graph(2.0)"
+    # Round-trips through JSON with the new config keys intact.
+    again = BenchReport.from_dict(json.loads(json.dumps(report.to_dict())))
+    assert again.label == report.label
+
+    with patch("contextd.bench.run.search", return_value=[]) as search:
+        report = run_bench(
+            MagicMock(),
+            spec,
+            embedder=None,
+            search_cfg=cfg,
+            corpus="c",
+            profiles=None,
+            return_unit="auto",
+            k=5,
+        )
+    assert search.call_args.kwargs["expand"] == "none"
+    assert report.label == "all/auto@5"

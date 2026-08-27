@@ -252,3 +252,34 @@ def test_bench_help(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert result.exit_code == 0
     for flag in ("--queries", "--profiles", "--return-unit", "--k", "--json", "--compare"):
         assert flag in result.output
+
+
+def test_bench_expand_flags_thread_to_run_bench(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _setup_home(tmp_path, monkeypatch)
+    _register_corpus(home, "notes", tmp_path / "notes")
+    with (
+        patch("contextd.storage.factory.build_graph_store"),
+        patch(
+            "contextd.providers.factory.build_embedding_provider",
+            side_effect=RuntimeError("no key"),
+        ),
+        patch("contextd.bench.run.run_bench", side_effect=_fake_report) as mock_run,
+    ):
+        result = CliRunner().invoke(
+            contextd.cli.cli,
+            ["bench", "notes", "--expand", "units", "--graph-weight", "2"],
+        )
+        assert result.exit_code == 0, result.output
+        assert mock_run.call_args.kwargs["expand"] == "units"
+        assert mock_run.call_args.kwargs["graph_weight"] == 2.0
+
+        result = CliRunner().invoke(contextd.cli.cli, ["bench", "notes"])
+        assert result.exit_code == 0, result.output
+        # Unset flags defer to [search] config inside run_bench.
+        assert mock_run.call_args.kwargs["expand"] is None
+        assert mock_run.call_args.kwargs["graph_weight"] is None
+
+    result = CliRunner().invoke(contextd.cli.cli, ["bench", "notes", "--expand", "paths"])
+    assert result.exit_code != 0

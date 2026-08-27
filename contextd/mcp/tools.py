@@ -11,8 +11,10 @@ from contextd.mcp.readonly_guard import assert_read_only
 from contextd.ontology.schema import Ontology
 from contextd.providers.base import EmbeddingProvider
 from contextd.search.collapse import ReturnUnit, collapse
+from contextd.search.expand import attach_evidence_context
 from contextd.search.expand import expand_chunk as _expand_chunk
 from contextd.search.fusion import flatten_row, fuse_rankers
+from contextd.search.graph_expand import ExpandMode, expand_units, seeds_from_rows
 from contextd.search.retrieve import ProfileSpec, run_rankers
 from contextd.storage.base import GraphStore
 
@@ -134,6 +136,9 @@ def search(
     auto_merge_threshold: float = 0.5,
     window: int = 1,
     max_evidence_chars: int = 1200,
+    expand: ExpandMode = "none",
+    expand_seeds: int = 3,
+    graph_weight: float = 2.0,
 ) -> list[dict[str, Any]]:
     """Hybrid search, fusing vector + full-text rankers via RRF.
 
@@ -184,6 +189,16 @@ def search(
     :param auto_merge_threshold: hit ratio at which ``auto`` returns the parent.
     :param window: neighbour chunks attached as evidence context per side.
     :param max_evidence_chars: evidence text truncation.
+    :param expand: ``"units"`` appends Sections/Files reachable from the top
+        ``expand_seeds`` hits through shared entities or inferred/manual
+        unit-to-unit edges (see :mod:`contextd.search.graph_expand`) and
+        fuses them with the direct hits by RRF; ``"none"`` (default) is the
+        plain pipeline. Chunk searches only; other kinds ignore it.
+    :param expand_seeds: how many top direct hits seed the walk (1-10).
+    :param graph_weight: RRF weight of the graph rows relative to the direct
+        rows (2.0). With ``rrf_k = 60`` the practical scale is: ``0.5`` ≈
+        graph rows trail every direct row, ``1.0`` ≈ interleave (direct wins
+        ties), ``2.0`` ≈ graph rows lead, behind the rank-1 direct hit.
     :return: result rows, best-first, at most ``limit`` of them.
     """
     label = kind or "Chunk"
@@ -226,15 +241,68 @@ def search(
         fused = fuse_rankers(run.rankers, label=label, limit=depth, rrf_k=rrf_k)
     if label != "Chunk":
         return fused[:limit]
-    return collapse(
+    if expand == "none":
+        return collapse(
+            store,
+            fused,
+            return_unit=return_unit,
+            auto_merge_threshold=auto_merge_threshold,
+            limit=limit,
+            max_evidence_chars=max_evidence_chars,
+            window=window,
+        )
+    # Graph expansion fuses the *whole* collapsed candidate list (depth =
+    # fetch, not limit) with the walk's rows, so a unit the walk agrees with
+    # can climb from deep in the direct list. Neighbour context is deferred
+    # to the rows that survive the final cut — collapse would otherwise pay
+    # one query per candidate.
+    direct = collapse(
         store,
         fused,
         return_unit=return_unit,
         auto_merge_threshold=auto_merge_threshold,
-        limit=limit,
+        limit=depth,
         max_evidence_chars=max_evidence_chars,
-        window=window,
+        window=0,
     )
+    n_seeds = max(1, expand_seeds)
+    # Seeds come from the fused chunk order (the units holding the best
+    # passages), not from the collapsed rows, which rank by mean chunk score.
+    seeds = seeds_from_rows(fused, n=n_seeds)
+    graph_rows = expand_units(
+        store, seeds, corpus=corpus, limit=depth, to_file=return_unit == "file"
+    )
+    if graph_rows:
+        via = {str(r["id"]): r["via"] for r in graph_rows}
+        # The graph ranker is headed by the top direct row: a seed is
+        # excluded from its own walk, so without this its neighbours (which
+        # the walk *does* return) could be boosted above it — the top direct
+        # hit would lose rank 1 to a document it merely cites alongside.
+        # Only rank 1 is protected: reserving more slots costs a relational
+        # question the very rows it asked for (runeledger G3: recall 0.56
+        # with three protected vs 0.65 with one, at graph_weight 2).
+        head = direct[:1]
+        head_ids = {str(r.get("id")) for r in head}
+        graph_list = head + [r for r in graph_rows if str(r["id"]) not in head_ids]
+        # Rows fold direct-first so a unit present in both lists keeps its
+        # direct shape (real chunk evidence) and only gains the ``via`` block.
+        out = fuse_rankers(
+            [
+                ([{"node": r, "score": r.get("score")} for r in direct], 1.0),
+                ([{"node": r, "score": r.get("score")} for r in graph_list], graph_weight),
+            ],
+            label="Section",
+            limit=limit,
+            rrf_k=rrf_k,
+            key_prop="id",
+        )
+        for row in out:
+            if row.get("id") in via:
+                row["via"] = via[str(row["id"])]
+    else:
+        out = direct[:limit]
+    attach_evidence_context(store, out, window=window, max_chars=max_evidence_chars)
+    return out
 
 
 def expand_chunk(store: GraphStore, chunk_id: str, *, window: int = 2) -> dict[str, Any] | None:

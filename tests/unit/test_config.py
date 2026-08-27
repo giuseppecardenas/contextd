@@ -404,3 +404,19 @@ def test_search_config_rejects_bad_return_unit() -> None:
         SearchConfig(return_unit="paragraph")  # type: ignore[arg-type]
     with pytest.raises(ValueError):
         SearchConfig(auto_merge_threshold=0.0)
+
+
+def test_search_config_expand_defaults_and_bounds() -> None:
+    from contextd.config import SearchConfig
+
+    cfg = SearchConfig()
+    assert cfg.expand == "none" and cfg.expand_seeds == 3 and cfg.graph_weight == 2.0
+    assert SearchConfig(expand="units", expand_seeds=10, graph_weight=0.0).expand == "units"
+    with pytest.raises(ValidationError):
+        SearchConfig(expand="paths")  # type: ignore[arg-type]
+    with pytest.raises(ValidationError):
+        SearchConfig(expand_seeds=0)
+    with pytest.raises(ValidationError):
+        SearchConfig(expand_seeds=11)
+    with pytest.raises(ValidationError):
+        SearchConfig(graph_weight=-0.1)

@@ -114,6 +114,17 @@ _GENERIC_TOOL_DESCRIPTORS: list[Tool] = [
                     "maximum": 10,
                     "description": "Neighbour chunks attached as evidence context per side.",
                 },
+                "expand": {
+                    "type": "string",
+                    "enum": ["none", "units"],
+                    "description": (
+                        "`units` also returns Sections/Files linked to the top hits "
+                        "through shared entities or inferred relationships, each with a "
+                        "`via` block naming the connecting entities — use for relational "
+                        "questions ('which modules implement <requirement>'). Default "
+                        "from server config: none."
+                    ),
+                },
             },
             "required": ["query"],
         },
@@ -464,6 +475,9 @@ def _dispatch_tool(
                     auto_merge_threshold=cfg_s.auto_merge_threshold,
                     window=arguments.get("window", cfg_s.window),
                     max_evidence_chars=cfg_s.max_evidence_chars,
+                    expand=arguments.get("expand", cfg_s.expand),
+                    expand_seeds=cfg_s.expand_seeds,
+                    graph_weight=cfg_s.graph_weight,
                 )
             )
         case "expand_chunk":
