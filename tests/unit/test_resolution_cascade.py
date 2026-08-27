@@ -290,6 +290,31 @@ def test_id_like_name_still_matches_exact_norm() -> None:
     assert r.rule == "exact-norm"
 
 
+def test_code_symbols_skip_fuzzy_rung() -> None:
+    # Second runeledger regression: WRatio scores a substring 100, so
+    # register_material_class folded into register_material and
+    # register_price_tier into register_action_tier. A snake_case symbol is
+    # an identifier even without a digit.
+    resolver, _ = _resolver(
+        rows=[
+            {"name": "register_material", "name_norm": "register_material"},
+            {"name": "register_action_tier", "name_norm": "register_action_tier"},
+        ]
+    )
+    assert resolver.resolve("Pattern", "register_material_class", "c").action == "minted"
+    assert resolver.resolve("Pattern", "register_price_tier", "c").action == "minted"
+    # Exact (case-folded, Pattern is case-insensitive) still matches.
+    assert resolver.resolve("Pattern", "Register_Material", "c").pk_value == "register_material"
+
+
+def test_prose_names_still_fuzzy_match() -> None:
+    # The guard must not swallow the case the fuzzy rung exists for.
+    resolver, _ = _resolver(
+        rows=[{"name": "Steam Workshop Integrations", "name_norm": "steam workshop integrations"}]
+    )
+    assert resolver.resolve("Integration", "Steam Workshop Integration", "c").action == "matched"
+
+
 def test_exact_only_pattern_is_configurable() -> None:
     # Empty pattern disables the guard: the id fuzzes into the family node
     # again, which is the pre-fix behaviour a corpus may explicitly want.

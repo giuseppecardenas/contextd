@@ -320,10 +320,13 @@ class ResolutionSection(BaseModel):
     embedding_threshold: float = 0.92
     embedding_enabled: bool = True
     confidence_floor: float = 0.5
-    exact_only_pattern: str = r"\d"
+    exact_only_pattern: str = r"\d|^\S*[_\-./:]\S*$"
     """Regex (``re.search``) for identifier-like names that must never be
-    fuzzy- or embedding-matched — a near-miss on an id is a different id.
-    Default: any name containing a digit. Empty string disables the guard."""
+    fuzzy- or embedding-matched — a near-miss on an id or a code symbol is a
+    different thing. Default: any name containing a digit, or a single
+    whitespace-free token containing ``_``, ``-``, ``.``, ``/`` or ``:``
+    (``FR-STL-001``, ``register_material_class``, ``rl-registry``). Prose
+    names with spaces stay eligible for fuzzy matching. Empty disables."""
 
 
 class CorpusConfig(BaseModel):

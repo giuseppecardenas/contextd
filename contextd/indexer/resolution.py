@@ -66,16 +66,24 @@ class ResolutionSettings:
     embedding_threshold: float = 0.92  # normalized-cosine scale; orthogonal = 0.5
     embedding_enabled: bool = True
     confidence_floor: float = 0.5
-    exact_only_pattern: str = r"\d"
+    exact_only_pattern: str = r"\d|^\S*[_\-./:]\S*$"
     """Names matching this regex (``re.search``) resolve by exact-norm only.
 
-    Identifier-like names — anything carrying a digit by default: ``FR-STL-001``,
-    ``CVE-2024-1234``, ``PROJ-42`` — are never fuzzy- or embedding-matched.
+    Identifier-like names are never fuzzy- or embedding-matched: by default
+    anything carrying a digit (``FR-STL-001``, ``CVE-2024-1234``, ``Neo4j``)
+    or a single whitespace-free token with ``_``, ``-``, ``.``, ``/`` or ``:``
+    in it (``register_material_class``, ``rl-registry``, ``std::vec``,
+    ``mods/base``). Prose names keep their spaces and stay eligible for the
+    fuzzy rung (``Steam Workshop Integration`` → ``…Integrations``).
+
     On the runeledger corpus the fuzzy rung merged ``FR-SUP-026`` into the
-    LLM-minted family node ``FR-SUP`` (WRatio exactly 90.0) and the embedding
+    LLM-minted family node ``FR-SUP`` (WRatio exactly 90.0), the embedding
     rung merged ids into neighbouring ids and ranges (``FR-STL-001..023`` at
-    0.95), collapsing 643 distinct requirement ids into 39 nodes. For an id a
-    near-miss is a different thing, not a variant spelling. Empty disables.
+    0.95) — 643 requirement ids collapsed into 39 nodes — and code symbols
+    went the same way: ``register_price_tier`` into ``register_action_tier``,
+    ``register_material_class`` into ``register_material`` (WRatio scores a
+    substring 100). For an identifier a near-miss is a different thing, not a
+    variant spelling. Empty disables the guard.
     """
 
 
