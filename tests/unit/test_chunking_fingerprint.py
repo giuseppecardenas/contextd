@@ -40,3 +40,15 @@ def test_unit_fingerprint_binds_config_and_content() -> None:
     assert unit_fingerprint(cfg, "h1") != unit_fingerprint(cfg, "h2")
     assert unit_fingerprint(cfg, "h1") != unit_fingerprint("other", "h1")
     assert unit_fingerprint(cfg, "h1") == unit_fingerprint(cfg, "h1")
+
+
+def test_fingerprint_ignores_profile_weight() -> None:
+    # ``weight`` only changes how chunks are ranked at query time; hashing it
+    # would turn every weight tuning into a full re-chunk of the corpus.
+    a = config_fingerprint(
+        ChunkingSection(profiles=[ChunkProfile(name="fine", weight=1.0)]), "words"
+    )
+    b = config_fingerprint(
+        ChunkingSection(profiles=[ChunkProfile(name="fine", weight=0.5)]), "words"
+    )
+    assert a == b

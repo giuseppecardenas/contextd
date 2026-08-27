@@ -26,11 +26,21 @@ CHUNKING_ALGORITHM_VERSION = 1
 
 
 def config_fingerprint(chunking: ChunkingSection, tokenizer_id: str) -> str:
-    """Stable hash of everything that shapes chunk output except the content."""
+    """Stable hash of everything that shapes chunk output except the content.
+
+    A profile's ``weight`` is a query-time RRF knob — it changes how chunks
+    are *ranked*, never which chunks exist or what they contain — so it is
+    dropped from the payload. Hashing it would turn every weight tuning into
+    a full re-chunk of the corpus (the runeledger corpus is ~2.2M embedding
+    tokens), which is exactly the cost the fingerprint gate exists to avoid.
+    """
+    config = chunking.model_dump(mode="json")
+    for profile in config.get("profiles", []):
+        profile.pop("weight", None)
     payload = {
         "algorithm": CHUNKING_ALGORITHM_VERSION,
         "tokenizer": tokenizer_id,
-        "config": chunking.model_dump(mode="json"),
+        "config": config,
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
