@@ -258,6 +258,54 @@ def test_matched_entity_absorbs_edge_without_new_stub() -> None:
     assert edge_args.args[1] == "spatial hash"
 
 
+def test_id_like_name_skips_fuzzy_rung() -> None:
+    # Runeledger regression: WRatio("FR-SUP-026", "FR-SUP") is exactly 90.0,
+    # so the fuzzy rung folded every requirement id into its LLM-minted
+    # family node. An id is exact-match-only.
+    resolver, _ = _resolver(rows=[{"name": "FR-SUP", "name_norm": "FR-SUP"}])
+    r = resolver.resolve("Ticket", "FR-SUP-026", "c")
+    assert r.action == "minted"
+    assert r.pk_value == "FR-SUP-026"
+
+
+def test_id_like_name_skips_embedding_rung() -> None:
+    store = MagicMock()
+    store.exec_read.return_value = []
+    store.vector_search.return_value = [
+        {"node": {"name": "FR-STL-001..023", "corpus": "c"}, "score": 0.97},
+    ]
+    embed = MagicMock(return_value=[[0.1] * 4])
+    resolver = EntityCascadeResolver(store, ResolutionSettings(), embed=embed)
+    r = resolver.resolve("Ticket", "FR-STL-001", "c")
+    assert r.action == "minted"
+    assert r.vector is None
+    embed.assert_not_called()
+    store.vector_search.assert_not_called()
+
+
+def test_id_like_name_still_matches_exact_norm() -> None:
+    resolver, _ = _resolver(rows=[{"name": "FR-SUP-026", "name_norm": "FR-SUP-026"}])
+    r = resolver.resolve("Ticket", "FR-SUP-026", "c")
+    assert r.action == "matched"
+    assert r.rule == "exact-norm"
+
+
+def test_exact_only_pattern_is_configurable() -> None:
+    # Empty pattern disables the guard: the id fuzzes into the family node
+    # again, which is the pre-fix behaviour a corpus may explicitly want.
+    resolver, _ = _resolver(
+        rows=[{"name": "FR-SUP", "name_norm": "FR-SUP"}],
+        settings=ResolutionSettings(exact_only_pattern=""),
+    )
+    assert resolver.resolve("Ticket", "FR-SUP-026", "c").action == "matched"
+    # A narrower pattern leaves digit-carrying prose names to the fuzzy rung.
+    resolver, _ = _resolver(
+        rows=[{"name": "Phase 9 closure waves", "name_norm": "phase 9 closure waves"}],
+        settings=ResolutionSettings(exact_only_pattern=r"^[A-Z]{2,}-"),
+    )
+    assert resolver.resolve("Pattern", "Phase 9 closure wave", "c").action == "matched"
+
+
 def test_settings_confidence_floor_is_honoured() -> None:
     store = MagicMock()
     resolver, _ = _resolver(settings=ResolutionSettings(confidence_floor=0.95))

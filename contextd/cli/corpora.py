@@ -408,6 +408,7 @@ def _build_pipeline_deps(
         embedding_threshold=res.embedding_threshold,
         embedding_enabled=res.embedding_enabled,
         confidence_floor=res.confidence_floor,
+        exact_only_pattern=res.exact_only_pattern,
     )
     return PipelineDeps(
         summariser=Summariser(

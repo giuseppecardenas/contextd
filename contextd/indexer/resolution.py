@@ -66,6 +66,17 @@ class ResolutionSettings:
     embedding_threshold: float = 0.92  # normalized-cosine scale; orthogonal = 0.5
     embedding_enabled: bool = True
     confidence_floor: float = 0.5
+    exact_only_pattern: str = r"\d"
+    """Names matching this regex (``re.search``) resolve by exact-norm only.
+
+    Identifier-like names — anything carrying a digit by default: ``FR-STL-001``,
+    ``CVE-2024-1234``, ``PROJ-42`` — are never fuzzy- or embedding-matched.
+    On the runeledger corpus the fuzzy rung merged ``FR-SUP-026`` into the
+    LLM-minted family node ``FR-SUP`` (WRatio exactly 90.0) and the embedding
+    rung merged ids into neighbouring ids and ranges (``FR-STL-001..023`` at
+    0.95), collapsing 643 distinct requirement ids into 39 nodes. For an id a
+    near-miss is a different thing, not a variant spelling. Empty disables.
+    """
 
 
 @dataclass(frozen=True)
@@ -101,6 +112,9 @@ class EntityCascadeResolver:
         )
         self._maps: dict[tuple[str, str], dict[str, str | None]] = {}
         self._lock = threading.Lock()
+        self._exact_only = (
+            re.compile(settings.exact_only_pattern) if settings.exact_only_pattern else None
+        )
 
     @property
     def settings(self) -> ResolutionSettings:
@@ -123,12 +137,18 @@ class EntityCascadeResolver:
             return Resolution(action="matched", pk_value=hit, rule="exact-norm", norm=norm)
         if known:  # present but None → known-ambiguous normalized name
             _log.info("resolve: %s %.80r ambiguous by exact-norm; minting as-is", label, name)
-        fuzzy = self._fuzzy_match(label, name, norm, mapping)
-        if fuzzy is not None:
-            return fuzzy
-        embedded, vec = self._embedding_match(label, name, norm, corpus)
-        if embedded is not None:
-            return embedded
+        vec: list[float] | None = None
+        if self._exact_only is not None and self._exact_only.search(name):
+            # Identifier-like: a near-miss is a different id. Mint without a
+            # vector — the embedding was only ever computed to feed rung (d).
+            _log.debug("resolve: %s %.80r is id-like; exact-norm only; minting", label, name)
+        else:
+            fuzzy = self._fuzzy_match(label, name, norm, mapping)
+            if fuzzy is not None:
+                return fuzzy
+            embedded, vec = self._embedding_match(label, name, norm, corpus)
+            if embedded is not None:
+                return embedded
         with self._lock:
             if not known:
                 # Record the mint so intra-batch duplicates collapse; an

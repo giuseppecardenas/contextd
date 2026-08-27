@@ -320,6 +320,10 @@ class ResolutionSection(BaseModel):
     embedding_threshold: float = 0.92
     embedding_enabled: bool = True
     confidence_floor: float = 0.5
+    exact_only_pattern: str = r"\d"
+    """Regex (``re.search``) for identifier-like names that must never be
+    fuzzy- or embedding-matched — a near-miss on an id is a different id.
+    Default: any name containing a digit. Empty string disables the guard."""
 
 
 class CorpusConfig(BaseModel):
