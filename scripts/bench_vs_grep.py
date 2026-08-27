@@ -550,6 +550,42 @@ class ContextdRunner:
         return out[:k]
 
 
+class GraphLookupRunner:
+    """Exact-identifier row: units that carry a lexical/LLM edge to the entity
+    named by the query (``name`` or ``id`` primary key), ranked by edge count.
+    This is what ``grep_corpus``-free graph lookup of an id looks like; it
+    only works when entity resolution kept the id as its own node."""
+
+    def __init__(self, cfg: Config, *, corpus: str):
+        self.corpus = corpus
+        self.store: GraphStore = build_graph_store(cfg)
+        self.store.connect()
+
+    def close(self) -> None:
+        self.store.close()
+
+    def hits(self, query: str, *, k: int) -> tuple[list[Hit], float]:
+        started = time.perf_counter()
+        rows = self.store.exec_read(
+            "MATCH (e {corpus: $corpus}) "
+            "WHERE NOT (e:File OR e:Section OR e:Chunk OR e:Topic OR e:Corpus) "
+            "AND (e.name = $q OR e.id = $q OR e.name_norm = $q) "
+            "MATCH (src)-[r]->(e) WHERE (src:File OR src:Section) AND src.corpus = $corpus "
+            # A deterministic (lexical, confidence 1.0) citation outranks any
+            # number of model-inferred mentions of the same entity.
+            "WITH coalesce(src.path, src.file_id) AS path, "
+            "sum(CASE WHEN r.method = 'lexical' THEN 100 ELSE 1 END) AS w "
+            "RETURN path, w ORDER BY w DESC, path LIMIT $k",
+            {"corpus": self.corpus, "q": query, "k": k},
+        )
+        elapsed = (time.perf_counter() - started) * 1000.0
+        hits = [
+            Hit(target=Target(path=str(r["path"]).replace("\\", "/")), text=str(r["path"]))
+            for r in rows
+        ]
+        return hits, elapsed
+
+
 # ---------------------------------------------------------------------------- main
 
 
@@ -606,6 +642,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--exclude", action="append", default=None, help="grep --exclude glob")
     ap.add_argument("--context", type=int, default=3, help="grep context lines for reading budget")
     ap.add_argument("--skip-contextd", action="store_true")
+    ap.add_argument(
+        "--graph-lookup",
+        action="store_true",
+        help="add a row that resolves the query as an entity name/id and returns citing units",
+    )
     ap.add_argument("--json", type=Path, default=None)
     ap.add_argument("--label", default=None, help="label for the contextd row")
     args = ap.parse_args(argv)
@@ -649,6 +690,18 @@ def main(argv: list[str] | None = None) -> int:
                 rep.results.append(_score(q, k, hits, ms, []))
         finally:
             runner.close()
+        reports.append(rep)
+
+    if args.graph_lookup:
+        lookup = GraphLookupRunner(Config.load_default(), corpus=args.corpus)
+        rep = SystemReport(system="contextd[graph-lookup]", config={"k": args.k})
+        try:
+            for q in spec.queries:
+                k = q.k or args.k
+                hits, ms = lookup.hits(q.q, k=k)
+                rep.results.append(_score(q, k, hits, ms, []))
+        finally:
+            lookup.close()
         reports.append(rep)
 
     corpus = GrepCorpus(args.root, includes, excludes, args.context)
