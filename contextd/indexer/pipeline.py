@@ -19,7 +19,7 @@ from contextd.inference.summarise import Summariser
 from contextd.providers.base import EmbeddingProvider
 from contextd.storage.base import GraphStore
 
-RefreshScope = Literal["inferred", "summaries", "llm", "chunks", "topics", "all"]
+RefreshScope = Literal["inferred", "lexical", "summaries", "llm", "chunks", "topics", "all"]
 
 
 @dataclass
@@ -110,6 +110,10 @@ def _wipe_for_refresh(corpus: CorpusConfig, store: GraphStore, scope: RefreshSco
 
     Scopes:
       - inferred:  DELETE origin='inferred' edges + REMOVE inferred_at markers.
+      - lexical:   DELETE the origin='inferred' edges written by lexical
+                   extraction (method='lexical') only; markers stay, so the
+                   relate phases skip and ``phase_relink_lexical*`` rewrites
+                   the edges through the current resolver. No LLM cost.
       - summaries: REMOVE summary + key_points + entities_mentioned +
                    summary_generated_at (+ legacy summary_confidence) on nodes.
       - llm:       union of inferred + summaries.
@@ -138,6 +142,12 @@ def _wipe_for_refresh(corpus: CorpusConfig, store: GraphStore, scope: RefreshSco
         )
         store.exec_write(
             "MATCH (n:File {corpus: $c}) REMOVE n.inferred_at",
+            {"c": c},
+        )
+    if scope == "lexical":
+        store.exec_write(
+            "MATCH (a {corpus: $c})-[r]->() "
+            "WHERE r.origin = 'inferred' AND r.method = 'lexical' DELETE r",
             {"c": c},
         )
     if scope in ("summaries", "llm"):
@@ -480,6 +490,16 @@ def run_bootstrap(
                 parse_cache=parse_cache,
             )
         )
+        if refresh == "lexical":
+            results.append(
+                phases.phase_relink_lexical_sections(
+                    corpus,
+                    relate,
+                    store,
+                    concurrency=inference_concurrency,
+                    parse_cache=parse_cache,
+                )
+            )
         results.append(phases.phase_derive_file_level(corpus, summariser, embedder, store))
 
         # --- File-granular pipeline for non-.md files ---
@@ -506,6 +526,16 @@ def run_bootstrap(
                     concurrency=inference_concurrency,
                 )
             )
+            if refresh == "lexical":
+                results.append(
+                    phases.phase_relink_lexical(
+                        other_files,
+                        relate,
+                        store,
+                        corpus_cfg=corpus,
+                        concurrency=inference_concurrency,
+                    )
+                )
 
         results.append(phases.phase_merge_descriptions(corpus, relate, store))
         _chunk_phases(parse_cache)
@@ -535,6 +565,12 @@ def run_bootstrap(
                 concurrency=inference_concurrency,
             )
         )
+        if refresh == "lexical":
+            results.append(
+                phases.phase_relink_lexical(
+                    files, relate, store, corpus_cfg=corpus, concurrency=inference_concurrency
+                )
+            )
         results.append(phases.phase_merge_descriptions(corpus, relate, store))
         _chunk_phases(None)
         results.append(

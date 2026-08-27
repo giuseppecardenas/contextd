@@ -447,3 +447,68 @@ def test_run_bootstrap_applies_refresh_when_set() -> None:
     assert any(
         "r.origin = 'inferred' DELETE r" in c.args[0] for c in store.exec_write.call_args_list
     )
+
+
+# --- lexical refresh scope -----------------------------------------------------
+
+
+def test_wipe_lexical_scope_deletes_only_lexical_edges_and_keeps_markers() -> None:
+    store = MagicMock()
+    _wipe_for_refresh(_wipe_corpus(), store, "lexical")
+    calls = _wipe_store_calls(store)
+    assert len(calls) == 1
+    assert "r.method = 'lexical'" in calls[0] and "r.origin = 'inferred'" in calls[0]
+    assert not any("inferred_at" in c for c in calls)
+
+
+def _lexical_deps() -> tuple[RelateDeps, MagicMock]:
+    inferrer = MagicMock()
+    inferrer.infer.return_value = []
+    ref = MagicMock()
+    ref.edge_type, ref.target_type, ref.target_name, ref.rule = (
+        "REFERENCES",
+        "Ticket",
+        "FR-STL-001",
+        "pattern:fr",
+    )
+    lexical = MagicMock()
+    lexical.extract.return_value = [ref]
+    return RelateDeps(inferrer=inferrer, retriever=EmptyRetriever(), lexical=lexical), inferrer
+
+
+def test_relink_lexical_files_rewrites_edges_without_llm_or_wipe(tmp_path: Path) -> None:
+    from contextd.indexer.phases import phase_relink_lexical
+
+    f = tmp_path / "mod.lua"
+    f.write_text("-- implements FR-STL-001\n", encoding="utf-8")
+    deps, inferrer = _lexical_deps()
+    store = MagicMock()
+    result = phase_relink_lexical([f], deps, store, corpus_cfg=_corpus_cfg(tmp_path, "c"))
+    assert result.processed == 1
+    inferrer.infer.assert_not_called()
+    store.delete_edges.assert_not_called()  # the scope wipe already ran once, globally
+    edge = store.upsert_edge.call_args
+    assert edge.args[:3] == (canonical_path(f), "FR-STL-001", "REFERENCES")
+    assert edge.kwargs["properties"]["method"] == "lexical"
+    # inferred_at is never touched: the relate phases must keep skipping.
+    assert not any("inferred_at" in c.args[0] for c in store.exec_write.call_args_list)
+
+
+def test_relink_lexical_sections_reparses_and_rewrites(tmp_path: Path) -> None:
+    from contextd.indexer.phases import phase_relink_lexical_sections
+
+    md = tmp_path / "doc.md"
+    md.write_text("# Doc\n\n## Intro\n\nSee FR-STL-001.\n", encoding="utf-8")
+    deps, inferrer = _lexical_deps()
+    store = MagicMock()
+    section_id = f"{canonical_path(md)}#intro"
+    store.exec_read.return_value = [{"id": section_id, "path": str(md)}]
+    cfg = CorpusConfig.model_validate(
+        {"corpus": {"name": "c", "root": str(tmp_path), "granularity": "section"}}
+    )
+    result = phase_relink_lexical_sections(cfg, deps, store)
+    assert result.processed == 1
+    inferrer.infer.assert_not_called()
+    assert store.upsert_edge.call_args.args[:3] == (section_id, "FR-STL-001", "REFERENCES")
+    assert deps.lexical is not None
+    assert deps.lexical.extract.call_args.kwargs["identity"].src_label == "Section"

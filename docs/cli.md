@@ -137,7 +137,7 @@ contextd list-corpora
 | `--bootstrap` | off | Full (idempotent, resumable) index |
 | `--incremental` | off | Re-index only changed files/sections (hash-gated), then re-chunk their parents |
 | `--estimate-only` | off | Count files, estimate token spend, and dry-run the chunkers (per-profile chunk / embedding-token counts) without calling any provider |
-| `--refresh SCOPE` | none | Wipe one layer before bootstrap: `inferred`, `summaries`, `llm`, `chunks` (retrieval chunks + fingerprints, embedding cost only), `topics`, or `all` |
+| `--refresh SCOPE` | none | Wipe one layer before bootstrap: `inferred`, `lexical` (only the edges written by lexical extraction, rewritten through the current ontology/resolver — no LLM cost; use after a resolver, alias or `[[lexical.patterns]]` change), `summaries`, `llm`, `chunks` (retrieval chunks + fingerprints, embedding cost only), `topics`, or `all` |
 
 The `[chunking]` / `[topics]` corpus-config blocks that drive the chunk and topic phases are documented in [chunking.md](chunking.md).
 

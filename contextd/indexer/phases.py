@@ -328,6 +328,97 @@ def phase_summarise(
     return PhaseResult(name="summarise", processed=processed, skipped=skipped)
 
 
+def phase_relink_lexical_sections(
+    corpus_cfg: CorpusConfig,
+    relate: RelateDeps,
+    store: GraphStore,
+    *,
+    concurrency: int = 1,
+    parse_cache: ParseCache | None = None,
+) -> PhaseResult:
+    """Re-run lexical extraction for every Section and rewrite its lexical edges.
+
+    The ``lexical`` refresh scope: deterministic references (``[[lexical.
+    patterns]]``, markdown links, Lua requires) are re-extracted and written
+    through the current ontology and entity-resolution cascade, without a
+    single LLM call and without touching the model's edges or the
+    ``inferred_at`` markers. ``_wipe_for_refresh("lexical")`` has already
+    deleted the previous ``method = "lexical"`` edges, so this is a plain
+    rewrite. Use it after a resolver, ontology-alias or pattern change — the
+    runeledger case was a resolver fix that had folded 643 requirement ids
+    into 39 entities; a full ``--refresh inferred`` would have cost two hours
+    of inference to repair edges the extractor rebuilds in seconds.
+    """
+    rows = store.exec_read(
+        "MATCH (s:Section {corpus: $c}) WHERE s.path IS NOT NULL RETURN s.id AS id, s.path AS path",
+        {"c": corpus_cfg.corpus.name},
+    )
+    cache = parse_cache if parse_cache is not None else ParseCache(corpus_cfg)
+    for p in {Path(r["path"]) for r in rows}:
+        cache.get(p)
+    corpus_name = corpus_cfg.corpus.name
+    root = Path(corpus_cfg.corpus.root)
+
+    def _worker(r: dict[str, str]) -> tuple[int, int]:
+        anchor = r["id"].split("#", 1)[1]
+        path = Path(r["path"])
+        parsed = cache.get(path)
+        sec = parsed.by_anchor(anchor)
+        if not sec:
+            return (0, 1)
+        identity = UnitIdentity(
+            corpus=corpus_name,
+            file_path=parsed.canonical,
+            rel_path=_rel_path(path, root),
+            suffix=path.suffix,
+            src_label="Section",
+            src_id=r["id"],
+            title=sec.title,
+            anchor=sec.anchor,
+            parent_titles=parsed.parent_chain(sec.anchor),
+        )
+        lex_refs = _extract_lexical(relate, sec.body, identity)
+        skipped = _write_unit_edges(store, relate, r["id"], "Section", lex_refs, [], corpus_name)
+        return (1, skipped)
+
+    processed, skipped = _parallel_map(rows, _worker, concurrency)
+    return PhaseResult(name="relink_lexical_sections", processed=processed, skipped=skipped)
+
+
+def phase_relink_lexical(
+    files: list[Path],
+    relate: RelateDeps,
+    store: GraphStore,
+    *,
+    corpus_cfg: CorpusConfig,
+    concurrency: int = 1,
+) -> PhaseResult:
+    """File-granular twin of :func:`phase_relink_lexical_sections`."""
+    corpus = corpus_cfg.corpus.name
+    root = Path(corpus_cfg.corpus.root)
+
+    def _worker(f: Path) -> tuple[int, int]:
+        file_path = canonical_path(f)
+        identity = UnitIdentity(
+            corpus=corpus,
+            file_path=file_path,
+            rel_path=_rel_path(f, root),
+            suffix=f.suffix,
+            src_label="File",
+            src_id=file_path,
+        )
+        try:
+            body = f.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return (0, 1)
+        lex_refs = _extract_lexical(relate, body, identity)
+        skipped = _write_unit_edges(store, relate, file_path, "File", lex_refs, [], corpus)
+        return (1, skipped)
+
+    processed, skipped = _parallel_map(files, _worker, concurrency)
+    return PhaseResult(name="relink_lexical", processed=processed, skipped=skipped)
+
+
 def phase_relate(
     files: list[Path],
     relate: RelateDeps,

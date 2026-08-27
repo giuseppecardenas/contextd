@@ -477,11 +477,13 @@ def _print_chunk_estimate(cfg: Config, corpus_cfg: CorpusConfig, files: list[Pat
 @click.option("--estimate-only", is_flag=True)
 @click.option(
     "--refresh",
-    type=click.Choice(["inferred", "summaries", "llm", "chunks", "topics", "all"]),
+    type=click.Choice(["inferred", "lexical", "summaries", "llm", "chunks", "topics", "all"]),
     default=None,
     help=(
         "Wipe a dependency layer before bootstrap and re-fill it. "
         "'inferred': origin='inferred' edges + inferred_at markers. "
+        "'lexical': only the edges written by lexical extraction, rewritten through the "
+        "current ontology and resolver without any LLM call. "
         "'summaries': summary/key_points/entities_mentioned/summary_generated_at. "
         "'llm': both of the above. "
         "'chunks': retrieval Chunk nodes + chunk_fingerprint markers (embedding cost only). "
