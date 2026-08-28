@@ -101,9 +101,10 @@ entity content on the existing graph.
   is part of the Section id, a corpus indexed before the fix keeps its old
   ids until it is re-indexed; every lookup that meets stored anchors
   (`ParsedFile.by_anchor`, the link resolver's fragment and slugified-title
-  rungs) now compares modulo hyphen runs, so `contextd index <corpus>
-  --refresh lexical` recovers the missing edges on the existing graph
-  without a re-bootstrap.
+  rungs, the bench's `anchor` expectation) now compares modulo hyphen runs,
+  so `contextd index <corpus> --refresh lexical` recovers the missing edges
+  on the existing graph without a re-bootstrap and bench specs keep scoring
+  across the re-index.
 - `connect_ipc` no longer leaks a file descriptor when `connect()` fails
   (for example when the endpoint file exists but the daemon has bound without
   yet reaching `listen()`): the freshly created socket is now closed before

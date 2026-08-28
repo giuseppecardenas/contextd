@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from contextd.indexer.heading_parser import anchor_key
+
 
 @dataclass(frozen=True)
 class Target:
@@ -40,7 +42,14 @@ def _same_path(a: str, b: str) -> bool:
 def satisfies(hit: Target, expected: Target) -> bool:
     if not _same_path(hit.path, expected.path):
         return False
-    if expected.anchor is not None and hit.anchor is not None and hit.anchor != expected.anchor:
+    if (
+        expected.anchor is not None
+        and hit.anchor is not None
+        and anchor_key(hit.anchor) != anchor_key(expected.anchor)
+    ):
+        # Modulo hyphen runs: a spec written against pre-fix ``lod-1-lod-2``
+        # ids keeps scoring after the corpus re-indexes to GitHub's
+        # ``lod-1--lod-2`` form, and vice versa.
         return False
     if expected.lines is not None and hit.lines is not None:
         return bool(hit.line_set() & expected.line_set())

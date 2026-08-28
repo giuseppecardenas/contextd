@@ -18,6 +18,13 @@ def test_satisfies_path_anchor_and_lines() -> None:
     assert not satisfies(Target("b.md"), Target("a.md"))
     assert satisfies(Target("a.md", anchor="x"), Target("a.md", anchor="x"))
     assert not satisfies(Target("a.md", anchor="y"), Target("a.md", anchor="x"))
+    # Anchors compare modulo hyphen runs so a spec survives the slugifier fix
+    # (pre-fix ids squeezed ``lod-1--lod-2`` to ``lod-1-lod-2``).
+    assert satisfies(Target("a.md", anchor="lod-1--lod-2"), Target("a.md", anchor="lod-1-lod-2"))
+    assert satisfies(Target("a.md", anchor="lod-1-lod-2"), Target("a.md", anchor="lod-1--lod-2"))
+    assert not satisfies(
+        Target("a.md", anchor="lod-1--lod-3"), Target("a.md", anchor="lod-1-lod-2")
+    )
     assert satisfies(Target("a.md"), Target("a.md", anchor="x"))  # hit has no anchor → path match
     assert satisfies(Target("a.md", lines=(5, 10)), Target("a.md", lines=(9, 20)))
     assert not satisfies(Target("a.md", lines=(5, 9)), Target("a.md", lines=(9, 20)))

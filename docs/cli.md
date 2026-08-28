@@ -306,7 +306,8 @@ expect = [{ path = "note-3.md" }, { path = "note-7.md" }]
 
 `path` is required and compared as a suffix, so corpus-relative paths work.
 `anchor` is the Section's GitHub-style heading slug (the part after `#` in a
-Section id); `lines` is `[start, end)`, 0-based and end-exclusive like
+Section id), compared modulo hyphen runs so `lod-1--lod-2` and `lod-1-lod-2`
+name the same heading; `lines` is `[start, end)`, 0-based and end-exclusive like
 `ChunkSpan`. Unknown keys, empty `expect` lists, and malformed ranges are
 rejected with the file name in the error.
 
