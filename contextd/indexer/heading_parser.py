@@ -44,8 +44,12 @@ def section_hash(section: ParsedSection) -> str:
     return hashlib.md5((section.title + "\n\n" + section.body).encode("utf-8")).hexdigest()
 
 
-_NON_ALNUM = re.compile(r"[^\w\s-]")
-_WHITESPACE = re.compile(r"\s+")
+# github-slugger's character rule: keep letters, digits, ``_`` and ``-``
+# (``\w`` is Unicode-aware, as GitHub is) plus the plain space that becomes a
+# hyphen; every other character -- punctuation, symbols, tabs, NBSP -- is
+# removed outright.
+_NON_ALNUM = re.compile(r"[^\w -]")
+_HYPHEN_RUN = re.compile(r"-+")
 
 # Title for a preamble that contains no heading of its own to borrow a name
 # from — a document opening with front matter or bare prose.
@@ -76,13 +80,36 @@ def _extract_title(inline: Token) -> str:
 
 
 def _github_anchor(title: str) -> str:
+    """The heading slug GitHub renders for ``title`` (github-slugger rules).
+
+    Lower-case, drop every character that is not a letter, digit, ``_``,
+    ``-`` or space, then turn *each* space into a hyphen. Runs are **not**
+    collapsed: ``"LOD 1 → LOD 2"`` becomes ``lod-1--lod-2`` because the arrow
+    vanishes and both spaces around it survive. An earlier version squeezed
+    whitespace runs to a single hyphen, so every heading with stripped
+    punctuation between two words (``Rust + Bevy``, ``1m by 1m``, ``A: B``)
+    got an anchor no GitHub-style link could hit; :func:`anchor_key` is the
+    tolerant comparison that still matches those pre-fix anchors.
+    """
     lowered = title.lower()
     stripped = _NON_ALNUM.sub("", lowered)
-    dashed = _WHITESPACE.sub("-", stripped).strip("-")
+    dashed = stripped.strip(" ").replace(" ", "-")
     # Defect fix: punctuation-only headings produce an empty anchor;
     # fall back to "section" so PKs remain non-empty.  Anchor dedup
     # in parse() handles the resulting collision.
     return dashed if dashed else "section"
+
+
+def anchor_key(anchor: str) -> str:
+    """Comparison form of an anchor: hyphen runs squeezed, edges trimmed.
+
+    Two anchors that differ only in the number of consecutive hyphens name
+    the same heading -- one was produced by the pre-fix slugifier (or typed
+    by hand with single hyphens), the other by GitHub's rule. Every lookup
+    that meets stored anchors from before the fix compares through this key
+    instead of demanding a re-index.
+    """
+    return _HYPHEN_RUN.sub("-", anchor).strip("-")
 
 
 class HeadingParser:

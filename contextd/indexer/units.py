@@ -31,7 +31,7 @@ from typing import Protocol
 
 from contextd._paths import canonical_path
 from contextd.corpus_config import CorpusConfig
-from contextd.indexer.heading_parser import HeadingParser, ParsedSection
+from contextd.indexer.heading_parser import HeadingParser, ParsedSection, anchor_key
 
 _log = logging.getLogger(__name__)
 
@@ -87,7 +87,22 @@ class ParsedFile:
             self._children.setdefault(sec.parent_anchor, []).append(sec)
 
     def by_anchor(self, anchor: str) -> ParsedSection | None:
-        return self._by_anchor.get(anchor)
+        """The section with this anchor, or the unique one whose anchor
+        differs only by hyphen runs (:func:`anchor_key`).
+
+        Stored Section ids carry the anchor computed when the file was last
+        indexed; after the slugifier fix those may read ``lod-1-lod-2`` where
+        the parse now says ``lod-1--lod-2``. Every phase that walks stored
+        rows back to the parsed file goes through here, so a corpus indexed
+        before the fix keeps resolving until its next re-index instead of
+        silently skipping every affected section.
+        """
+        hit = self._by_anchor.get(anchor)
+        if hit is not None:
+            return hit
+        key = anchor_key(anchor)
+        loose = [sec for sec in self.sections if anchor_key(sec.anchor) == key]
+        return loose[0] if len(loose) == 1 else None
 
     def children_of(self, anchor: str) -> list[ParsedSection]:
         """Direct children of the section with this anchor, document order."""

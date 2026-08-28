@@ -39,12 +39,12 @@ from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, Final, TypeVar
 
 from contextd._paths import canonical_path
 from contextd.corpus_config import CorpusConfig
 from contextd.indexer.hasher import FileHasher
-from contextd.indexer.heading_parser import ParsedSection, _github_anchor, section_hash
+from contextd.indexer.heading_parser import ParsedSection, _github_anchor, anchor_key, section_hash
 from contextd.indexer.lexical import LexicalReference, LexicalRegistry
 from contextd.indexer.resolution import EntityCascadeResolver, Resolution, ResolutionSettings
 from contextd.indexer.units import ParseCache, extractor_for, own_prose
@@ -1318,6 +1318,15 @@ _DEFAULT_RESOLUTION_SETTINGS = ResolutionSettings()
 _DOTTED_NUMBER = re.compile(r"\d+(\.\d+)*")
 
 
+# ``anchor_key`` in Cypher: three passes of ``replace('--', '-')`` squeeze a
+# hyphen run of up to eight into one (each pass halves a run), which covers
+# every slug a heading produces in practice. Edge hyphens are not trimmed --
+# the Python side trims, so a rare ``foo-`` anchor simply stays exact-only.
+_ANCHOR_KEY_CYPHER: Final[str] = (
+    "replace(replace(replace(n.anchor, '--', '-'), '--', '-'), '--', '-')"
+)
+
+
 def _unique_section_id(
     store: GraphStore, corpus: str, predicate: str, params: dict[str, Any], rule: str
 ) -> str | None:
@@ -1355,15 +1364,34 @@ def _resolve_section_fallback(store: GraphStore, needle: str, corpus: str) -> st
     if not cleaned:
         return None
     if "#" in cleaned:
-        fragment = cleaned.rsplit("#", 1)[1]
+        path_part, fragment = cleaned.rsplit("#", 1)
         if fragment:
             hit = _unique_section_id(
                 store, corpus, "n.anchor = $a", {"a": fragment}, "anchor fragment"
             )
             if hit is not None:
                 return hit
+            # Same fragment modulo hyphen runs -- a GitHub-style ``a--b``
+            # link against an anchor stored as ``a-b`` by the pre-fix
+            # slugifier (or the reverse). Scoped to the cited file when the
+            # citation names one, so a common heading (``Overview``) in
+            # another file cannot steal the match.
+            scope = " AND n.path = $p" if path_part else ""
+            hit = _unique_section_id(
+                store,
+                corpus,
+                f"{_ANCHOR_KEY_CYPHER} = $a{scope}",
+                {"a": anchor_key(fragment), "p": path_part},
+                "anchor fragment (hyphen-run tolerant)",
+            )
+            if hit is not None:
+                return hit
     hit = _unique_section_id(
-        store, corpus, "n.anchor = $a", {"a": _github_anchor(cleaned)}, "slugified anchor"
+        store,
+        corpus,
+        f"{_ANCHOR_KEY_CYPHER} = $a",
+        {"a": anchor_key(_github_anchor(cleaned))},
+        "slugified anchor",
     )
     if hit is not None:
         return hit

@@ -1,6 +1,6 @@
 import hashlib
 
-from contextd.indexer.heading_parser import HeadingParser, ParsedSection
+from contextd.indexer.heading_parser import HeadingParser, ParsedSection, anchor_key
 
 
 def test_extracts_h2_and_h3_within_bounds() -> None:
@@ -90,11 +90,45 @@ def test_inline_code_in_heading_preserves_identifier() -> None:
 
 
 def test_punctuation_only_heading_falls_back_to_section() -> None:
-    md = "## ---"
+    md = "## ???"
     parser = HeadingParser(min_level=2, max_level=4)
     sections = parser.parse(md)
     assert sections[0].anchor  # non-empty
     assert sections[0].anchor.startswith("section")
+
+
+def test_anchor_keeps_hyphen_runs_like_github_slugger() -> None:
+    """Stripped punctuation between two words leaves *both* spaces behind.
+
+    github-slugger turns each space into a hyphen and never squeezes runs, so
+    ``(LOD 1 → LOD 2)`` renders as ``lod-1--lod-2``. The parser used to
+    collapse the run, which made every such heading unreachable from a
+    GitHub-correct link (322 of 5,217 anchored links in one real corpus).
+    """
+    md = (
+        "## 6.2.1 Aggregation algorithm (LOD 1 → LOD 2)\n\n"
+        "## 16.1 Decision: Rust + Bevy\n\n"
+        "## 3.2 Tile Scale: 1m × 1m × 3m\n\n"  # noqa: RUF001 -- real corpus heading
+        "## A - B\n\n"
+        "## ---"
+    )
+    parser = HeadingParser(min_level=2, max_level=4)
+    anchors = [s.anchor for s in parser.parse(md)]
+    assert anchors == [
+        "621-aggregation-algorithm-lod-1--lod-2",
+        "161-decision-rust--bevy",
+        "32-tile-scale-1m--1m--3m",
+        "a---b",
+        "---",
+    ]
+
+
+def test_anchor_key_equates_pre_fix_and_github_forms() -> None:
+    assert anchor_key("lod-1--lod-2") == anchor_key("lod-1-lod-2") == "lod-1-lod-2"
+    assert anchor_key("a---b") == "a-b"
+    assert anchor_key("-foo-") == "foo"
+    # Plain anchors are their own key, so the tolerant path is a no-op for them.
+    assert anchor_key("6149-pricing-tiers") == "6149-pricing-tiers"
 
 
 def test_duplicate_titles_dedupe_anchors_like_github() -> None:

@@ -92,6 +92,18 @@ entity content on the existing graph.
 
 ### Fixed
 
+- Section anchors now follow github-slugger exactly: stripped punctuation
+  between two words leaves a double hyphen (`LOD 1 → LOD 2` →
+  `lod-1--lod-2`, `Rust + Bevy` → `rust--bevy`) instead of being squeezed
+  to one. The squeeze made every such heading unreachable from a
+  GitHub-correct markdown link — 322 of 5,217 anchored links in one real
+  corpus silently failed to become `REFERENCES` edges. Because the anchor
+  is part of the Section id, a corpus indexed before the fix keeps its old
+  ids until it is re-indexed; every lookup that meets stored anchors
+  (`ParsedFile.by_anchor`, the link resolver's fragment and slugified-title
+  rungs) now compares modulo hyphen runs, so `contextd index <corpus>
+  --refresh lexical` recovers the missing edges on the existing graph
+  without a re-bootstrap.
 - `connect_ipc` no longer leaks a file descriptor when `connect()` fails
   (for example when the endpoint file exists but the daemon has bound without
   yet reaching `listen()`): the freshly created socket is now closed before
